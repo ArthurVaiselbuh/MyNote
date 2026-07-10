@@ -1,0 +1,8 @@
+node_modules/
+dist/
+target/
+output/
+src/backend/gen/
+test-results/
+playwright-report/
+/.claude/

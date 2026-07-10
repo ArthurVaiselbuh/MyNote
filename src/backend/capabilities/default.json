@@ -1,0 +1,10 @@
+{
+  "identifier": "default",
+  "description": "Main window capabilities",
+  "windows": ["main"],
+  "permissions": [
+    "core:default",
+    "dialog:default",
+    "core:webview:allow-set-webview-zoom"
+  ]
+}
