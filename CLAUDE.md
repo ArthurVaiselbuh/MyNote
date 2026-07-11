@@ -46,8 +46,9 @@ Built for a locked-down corporate environment.
   the app deleted in the current session are purged at close — unreferenced
   files it didn't delete are never touched.
 - App settings (theme colors, zoom, window geometry, scroll speed, focus
-  alpha, last notebook path) live in `%APPDATA%\MyNote\settings.json`,
-  not in the notebook.
+  alpha, last notebook path, recent-notebooks MRU) live in
+  `%APPDATA%\MyNote\settings.json`, not in the notebook. Window geometry and
+  the MRU are backend-owned: `set_settings` ignores the frontend's copies.
 
 ## Design decisions
 
@@ -56,6 +57,12 @@ Built for a locked-down corporate environment.
   asset-protocol scope juggling, no localhost server. CSP must keep allowing
   it in `img-src`, and `connect-src` must keep `ipc: http://ipc.localhost`
   or Tauri IPC degrades to the slow postMessage fallback.
+- **Open/switch notebook** (Ctrl+O) is an in-app pane, not a bare OS folder
+  picker: logo, the 5 most recent notebooks (missing ones shown but inert),
+  plus New (folder picker; refuses a folder that already has a
+  `notebook.json`) and Open (native picker selecting the `notebook.json`
+  itself, so only real notebooks can be opened — the backend maps that file
+  path to its parent folder).
 - **Backend owns all file I/O** behind Tauri commands with
   `State<Mutex<Option<Store>>>`. Frontend mutates via commands, then re-fetches
   the tree (`get_tree`) — no client-side tree bookkeeping beyond display state.

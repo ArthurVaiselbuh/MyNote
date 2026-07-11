@@ -23,6 +23,8 @@ pub fn run() {
         })
         .invoke_handler(tauri::generate_handler![
             commands::open_notebook,
+            commands::create_notebook,
+            commands::list_recent_notebooks,
             commands::get_tree,
             commands::create_section,
             commands::rename_section,
