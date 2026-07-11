@@ -11,10 +11,15 @@ export async function boot() {
   try {
     app.settings = await api.getSettings();
     await applyZoom();
+  } catch (e) {
+    app.status = String(e);
+  }
+  try {
     const info = await api.openNotebook();
     applyNotebook(info);
   } catch (e) {
     app.status = String(e);
+    await openNotebookModal();
   }
 }
 
@@ -33,14 +38,48 @@ function applyNotebook(info: NotebookInfo) {
   app.focus = "tree";
 }
 
-export async function openNotebookDialog() {
-  const dir = await openDialog({ directory: true, title: "Open notebook folder" });
-  if (typeof dir !== "string") return;
-  await editorCtl.current?.save();
+export async function openNotebookModal() {
   try {
-    const info = await api.openNotebook(dir);
-    app.currentPageId = null;
-    applyNotebook(info);
+    app.recentNotebooks = await api.listRecentNotebooks();
+  } catch {
+    app.recentNotebooks = [];
+  }
+  app.modal = "openNotebook";
+}
+
+async function switchNotebook(open: () => Promise<NotebookInfo>) {
+  await editorCtl.current?.save();
+  const info = await open();
+  closeModal();
+  app.currentPageId = null;
+  applyNotebook(info);
+}
+
+export async function openNotebookAt(path: string) {
+  try {
+    await switchNotebook(() => api.openNotebook(path));
+  } catch (e) {
+    app.status = String(e);
+  }
+}
+
+export async function browseNotebookFile() {
+  const file = await openDialog({
+    title: "Open notebook — select its notebook.json",
+    filters: [{ name: "MyNote notebook (notebook.json)", extensions: ["json"] }],
+  });
+  if (typeof file !== "string") return;
+  await openNotebookAt(file);
+}
+
+export async function createNotebookDialog() {
+  const dir = await openDialog({
+    directory: true,
+    title: "Choose an empty folder for the new notebook",
+  });
+  if (typeof dir !== "string") return;
+  try {
+    await switchNotebook(() => api.createNotebook(dir));
   } catch (e) {
     app.status = String(e);
   }

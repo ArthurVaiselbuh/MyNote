@@ -70,8 +70,15 @@ export interface WindowGeom {
   maximized: boolean;
 }
 
+export interface RecentNotebook {
+  path: string;
+  name: string;
+  exists: boolean;
+}
+
 export interface Settings {
   notebookPath: string | null;
+  recentNotebooks: string[];
   zoom: number;
   textColor: string;
   backgroundColor: string;
@@ -84,6 +91,7 @@ export interface Settings {
 
 export const defaultSettings: Settings = {
   notebookPath: null,
+  recentNotebooks: [],
   zoom: 1.0,
   textColor: "#d4d4d4",
   backgroundColor: "#1e1f22",
@@ -97,6 +105,9 @@ export const defaultSettings: Settings = {
 export const api = {
   openNotebook: (path?: string) =>
     invoke<NotebookInfo>("open_notebook", { path: path ?? null }),
+  createNotebook: (path: string) =>
+    invoke<NotebookInfo>("create_notebook", { path }),
+  listRecentNotebooks: () => invoke<RecentNotebook[]>("list_recent_notebooks"),
   getTree: () => invoke<Notebook>("get_tree"),
   createSection: (name: string) => invoke<Section>("create_section", { name }),
   renameSection: (id: string, name: string) =>

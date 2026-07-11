@@ -34,17 +34,50 @@ fn with_store<T>(
     f(store)
 }
 
-#[tauri::command]
-pub fn open_notebook(state: State<'_, AppState>, path: Option<String>) -> Result<NotebookInfo, String> {
-    let mut guard = state.store.lock().map_err(lock_err)?;
+fn close_current(guard: &mut Option<Store>) {
     if let Some(old) = guard.take() {
         old.purge_deleted_files();
         let _ = assets::prune(&old);
         let _ = old.save();
     }
+}
+
+fn adopt_store(
+    state: &State<'_, AppState>,
+    guard: &mut Option<Store>,
+    store: Store,
+) -> Result<NotebookInfo, String> {
+    let root = store.root.to_string_lossy().to_string();
+    {
+        let mut s = state.settings.lock().map_err(lock_err)?;
+        s.notebook_path = Some(root.clone());
+        s.remember_notebook(&root);
+        s.save();
+    }
+    let info = NotebookInfo {
+        root,
+        notebook: store.notebook.clone(),
+    };
+    *guard = Some(store);
+    Ok(info)
+}
+
+fn notebook_root_from(path: &str) -> Result<PathBuf, String> {
+    let p = PathBuf::from(path);
+    if p.is_file() {
+        if p.file_name().is_some_and(|n| n.eq_ignore_ascii_case("notebook.json")) {
+            return Ok(p.parent().map(Into::into).unwrap_or(p));
+        }
+        return Err("not a notebook: select its notebook.json file".to_string());
+    }
+    Ok(p)
+}
+
+#[tauri::command]
+pub fn open_notebook(state: State<'_, AppState>, path: Option<String>) -> Result<NotebookInfo, String> {
     let explicit = path.is_some();
     let root: PathBuf = match &path {
-        Some(p) => PathBuf::from(p),
+        Some(p) => notebook_root_from(p)?,
         None => {
             let s = state.settings.lock().map_err(lock_err)?;
             s.notebook_path
@@ -53,6 +86,8 @@ pub fn open_notebook(state: State<'_, AppState>, path: Option<String>) -> Result
                 .unwrap_or_else(settings::default_notebook_dir)
         }
     };
+    let mut guard = state.store.lock().map_err(lock_err)?;
+    close_current(&mut guard);
     let store = match Store::open(&root) {
         Ok(store) => store,
         Err(e) => {
@@ -63,17 +98,46 @@ pub fn open_notebook(state: State<'_, AppState>, path: Option<String>) -> Result
             Store::open(&fallback)?
         }
     };
-    {
-        let mut s = state.settings.lock().map_err(lock_err)?;
-        s.notebook_path = Some(store.root.to_string_lossy().to_string());
-        s.save();
+    adopt_store(&state, &mut guard, store)
+}
+
+#[tauri::command]
+pub fn create_notebook(state: State<'_, AppState>, path: String) -> Result<NotebookInfo, String> {
+    let root = PathBuf::from(&path);
+    if root.join("notebook.json").exists() {
+        return Err("that folder already contains a notebook — use Open instead".to_string());
     }
-    let info = NotebookInfo {
-        root: store.root.to_string_lossy().to_string(),
-        notebook: store.notebook.clone(),
-    };
-    *guard = Some(store);
-    Ok(info)
+    let mut guard = state.store.lock().map_err(lock_err)?;
+    close_current(&mut guard);
+    let store = Store::open(&root)?;
+    adopt_store(&state, &mut guard, store)
+}
+
+#[derive(Serialize, Clone)]
+#[serde(rename_all = "camelCase")]
+pub struct RecentNotebook {
+    pub path: String,
+    pub name: String,
+    pub exists: bool,
+}
+
+#[tauri::command]
+pub fn list_recent_notebooks(state: State<'_, AppState>) -> Result<Vec<RecentNotebook>, String> {
+    let s = state.settings.lock().map_err(lock_err)?;
+    Ok(s.recent_notebooks
+        .iter()
+        .map(|p| {
+            let root = PathBuf::from(p);
+            RecentNotebook {
+                path: p.clone(),
+                name: root
+                    .file_name()
+                    .map(|n| n.to_string_lossy().to_string())
+                    .unwrap_or_else(|| p.clone()),
+                exists: root.join("notebook.json").is_file(),
+            }
+        })
+        .collect())
 }
 
 #[tauri::command]
@@ -203,7 +267,10 @@ pub fn get_settings(state: State<'_, AppState>) -> Result<Settings, String> {
 pub fn set_settings(state: State<'_, AppState>, settings: Settings) -> Result<(), String> {
     let mut guard = state.settings.lock().map_err(lock_err)?;
     let window = guard.window.clone();
+    // window geometry and the recents MRU are backend-owned; ignore stale copies
+    let recents = std::mem::take(&mut guard.recent_notebooks);
     *guard = settings;
+    guard.recent_notebooks = recents;
     if guard.window.is_none() {
         guard.window = window;
     }

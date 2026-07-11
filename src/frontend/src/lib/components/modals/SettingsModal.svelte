@@ -69,11 +69,11 @@
     <div class="modal-title" style="margin-top:14px">Notebook</div>
     <div class="settings-path">{app.root || "(none open)"}</div>
     <div class="settings-row">
-      <span>Open a different notebook folder (Ctrl+O)</span>
+      <span>Open a different notebook (Ctrl+O)</span>
       <button
         onclick={() => {
           act.closeModal();
-          void act.openNotebookDialog();
+          void act.openNotebookModal();
         }}>Open…</button
       >
     </div>

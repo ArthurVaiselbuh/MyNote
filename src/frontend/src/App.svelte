@@ -12,6 +12,7 @@
   import HelpOverlay from "./lib/components/modals/HelpOverlay.svelte";
   import ImportMht from "./lib/components/modals/ImportMht.svelte";
   import InsertHelper from "./lib/components/modals/InsertHelper.svelte";
+  import OpenNotebook from "./lib/components/modals/OpenNotebook.svelte";
   import SectionPicker from "./lib/components/modals/SectionPicker.svelte";
   import SettingsModal from "./lib/components/modals/SettingsModal.svelte";
 
@@ -69,6 +70,7 @@
   {#if app.modal === "confirm"}<ConfirmDialog />{/if}
   {#if app.modal === "insert"}<InsertHelper />{/if}
   {#if app.modal === "importMht"}<ImportMht />{/if}
+  {#if app.modal === "openNotebook"}<OpenNotebook />{/if}
 
   {#if app.status}
     <div class="status-toast">{app.status}</div>

@@ -40,7 +40,7 @@
       class:selected={i === app.resultsSel}
       data-idx={i}
       onclick={() => act.openResult(i)}
-      onmouseenter={() => (app.resultsSel = i)}
+      onmousemove={() => (app.resultsSel = i)}
     >
       <div class="meta">
         {hit.sectionName} › {hit.title}{hit.lineNo > 0 ? ` — line ${hit.lineNo}` : " — title"}

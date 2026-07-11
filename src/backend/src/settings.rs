@@ -16,6 +16,7 @@ pub struct WindowGeom {
 #[serde(rename_all = "camelCase", default)]
 pub struct Settings {
     pub notebook_path: Option<String>,
+    pub recent_notebooks: Vec<String>,
     pub zoom: f64,
     pub text_color: String,
     pub background_color: String,
@@ -30,6 +31,7 @@ impl Default for Settings {
     fn default() -> Settings {
         Settings {
             notebook_path: None,
+            recent_notebooks: vec![],
             zoom: 1.0,
             text_color: "#d4d4d4".into(),
             background_color: "#1e1f22".into(),
@@ -57,7 +59,16 @@ pub fn default_notebook_dir() -> PathBuf {
     app_dir().join("notebook")
 }
 
+pub const RECENT_LIMIT: usize = 5;
+
 impl Settings {
+    pub fn remember_notebook(&mut self, path: &str) {
+        self.recent_notebooks
+            .retain(|p| !p.eq_ignore_ascii_case(path));
+        self.recent_notebooks.insert(0, path.to_string());
+        self.recent_notebooks.truncate(RECENT_LIMIT);
+    }
+
     pub fn load() -> Settings {
         fs::read_to_string(settings_path())
             .ok()
@@ -70,5 +81,29 @@ impl Settings {
         if let Ok(json) = serde_json::to_string_pretty(self) {
             let _ = fs::write(settings_path(), json);
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn remember_notebook_keeps_most_recent_first_without_duplicates() {
+        let mut s = Settings::default();
+        s.remember_notebook("C:\\a");
+        s.remember_notebook("C:\\b");
+        s.remember_notebook("C:\\A");
+        assert_eq!(s.recent_notebooks, vec!["C:\\A", "C:\\b"]);
+    }
+
+    #[test]
+    fn remember_notebook_truncates_to_limit() {
+        let mut s = Settings::default();
+        for i in 0..(RECENT_LIMIT + 3) {
+            s.remember_notebook(&format!("C:\\nb{i}"));
+        }
+        assert_eq!(s.recent_notebooks.len(), RECENT_LIMIT);
+        assert_eq!(s.recent_notebooks[0], format!("C:\\nb{}", RECENT_LIMIT + 2));
     }
 }

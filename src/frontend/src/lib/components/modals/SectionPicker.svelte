@@ -70,7 +70,7 @@
           class="picker-item"
           class:selected={i === sel}
           onclick={() => choose(item.idx)}
-          onmouseenter={() => (sel = i)}
+          onmousemove={() => (sel = i)}
         >
           <span>{item.section.name}</span>
           <span class="sub">{countPages(item.section)} pages</span>

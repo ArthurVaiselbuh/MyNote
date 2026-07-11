@@ -89,7 +89,7 @@
           class="insert-item"
           class:selected={i === sel}
           onclick={() => choose(item)}
-          onmouseenter={() => (sel = i)}
+          onmousemove={() => (sel = i)}
         >
           <span>{item.label}</span>
           <span class="preview-snippet">{item.hint}</span>

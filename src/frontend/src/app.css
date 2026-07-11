@@ -112,7 +112,7 @@ input:focus {
   border-radius: 6px;
   padding: 6px 12px;
   max-width: 40vw;
-  z-index: 50;
+  z-index: 200;
 }
 
 /* ---------- section strip ---------- */
@@ -465,6 +465,77 @@ input:focus {
   background: #b3454a;
   color: #fff;
   font-weight: 600;
+}
+
+/* ---------- open notebook ---------- */
+
+.open-nb {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  outline: none;
+}
+.open-nb-logo {
+  width: 96px;
+  height: 96px;
+  margin: 10px 0 6px;
+}
+.open-nb-name {
+  font-size: 22px;
+  font-weight: 700;
+  margin-bottom: 12px;
+}
+.open-nb-list {
+  width: 100%;
+}
+.open-nb-heading {
+  color: var(--muted);
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  margin: 8px 0 4px;
+  padding: 0 10px;
+}
+.open-nb-empty {
+  color: var(--muted);
+  font-size: 12px;
+  padding: 2px 10px 6px;
+}
+.recent-item {
+  padding: 6px 10px;
+  border-radius: 6px;
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  cursor: pointer;
+}
+.recent-item.selected {
+  background: var(--select);
+}
+.recent-item.missing {
+  opacity: 0.55;
+}
+.recent-item.action {
+  margin-top: 2px;
+}
+.recent-item .nb-name {
+  display: flex;
+  gap: 8px;
+  align-items: baseline;
+  font-weight: 600;
+}
+.recent-item .nb-path {
+  color: var(--muted);
+  font-size: 12px;
+  word-break: break-all;
+}
+.nb-badge {
+  font-size: 11px;
+  font-weight: 400;
+  color: var(--muted);
+  border: 1px solid var(--guide);
+  border-radius: 4px;
+  padding: 0 5px;
 }
 
 /* ---------- mht import ---------- */
