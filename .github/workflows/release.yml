@@ -1,0 +1,68 @@
+name: Release
+
+on:
+  push:
+    branches: [master]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: release
+  cancel-in-progress: false
+
+jobs:
+  release:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: src/backend
+
+      - name: cargo test
+        working-directory: src/backend
+        run: cargo test --locked
+
+      - name: Build release exe
+        run: build.bat
+        shell: cmd
+
+      - name: Install e2e deps
+        working-directory: src/e2e
+        run: npm ci
+
+      - name: Run Playwright e2e
+        working-directory: src/e2e
+        run: npx playwright test
+
+      - name: Upload e2e artifacts on failure
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: e2e-results
+          path: |
+            src/e2e/test-results
+            src/e2e/playwright-report
+          if-no-files-found: ignore
+
+      - name: Read app version
+        id: ver
+        shell: pwsh
+        run: |
+          $json = Get-Content src/backend/tauri.conf.json -Raw | ConvertFrom-Json
+          "version=$($json.version)" >> $env:GITHUB_OUTPUT
+
+      - name: Publish GitHub release with the exe
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: v${{ steps.ver.outputs.version }}.${{ github.run_number }}
+          name: MyNote v${{ steps.ver.outputs.version }} (build ${{ github.run_number }})
+          target_commitish: ${{ github.sha }}
+          files: output/MyNote.exe
+          fail_on_unmatched_files: true

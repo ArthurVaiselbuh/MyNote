@@ -1,0 +1,63 @@
+name: CI
+
+on:
+  pull_request:
+    branches: [master, main]
+  workflow_dispatch:
+
+jobs:
+  frontend-check:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+      - name: Install frontend deps
+        working-directory: src/frontend
+        run: npm ci
+      - name: svelte-check
+        working-directory: src/frontend
+        run: npm run check
+
+  backend-tests:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: src/backend
+      - name: cargo test
+        working-directory: src/backend
+        run: cargo test --locked
+
+  e2e:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: src/backend
+      - name: Build release exe
+        run: build.bat
+        shell: cmd
+      - name: Install e2e deps
+        working-directory: src/e2e
+        run: npm ci
+      - name: Run Playwright e2e
+        working-directory: src/e2e
+        run: npx playwright test
+      - name: Upload e2e artifacts on failure
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: e2e-results
+          path: |
+            src/e2e/test-results
+            src/e2e/playwright-report
+          if-no-files-found: ignore
