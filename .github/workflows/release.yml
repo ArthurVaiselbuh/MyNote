@@ -13,13 +13,39 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
-  release:
-    runs-on: windows-latest
+  build:
+    strategy:
+      fail-fast: true
+      matrix:
+        include:
+          - os: windows-latest
+            artifact: MyNote.exe
+            out: output/MyNote.exe
+          - os: macos-latest
+            artifact: mynote-macos
+            out: output/mynote-macos
+          - os: ubuntu-latest
+            artifact: mynote-linux
+            out: output/mynote-linux
+    runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
         with:
           node-version: 20
+
+      - name: Install Linux webview deps
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            libwebkit2gtk-4.1-dev \
+            libgtk-3-dev \
+            librsvg2-dev \
+            libsoup-3.0-dev \
+            libayatana-appindicator3-dev \
+            patchelf
+
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
         with:
@@ -29,20 +55,24 @@ jobs:
         working-directory: src/backend
         run: cargo test --locked
 
-      - name: Build release exe
+      - name: Build release (Windows)
+        if: runner.os == 'Windows'
         run: build.bat
         shell: cmd
 
-      - name: Install e2e deps
-        working-directory: src/e2e
-        run: npm ci
+      - name: Build release (Unix)
+        if: runner.os != 'Windows'
+        run: ./build.sh
 
-      - name: Run Playwright e2e
+      - name: Run Playwright e2e (Windows only)
+        if: runner.os == 'Windows'
         working-directory: src/e2e
-        run: npx playwright test
+        run: |
+          npm ci
+          npx playwright test
 
       - name: Upload e2e artifacts on failure
-        if: failure()
+        if: failure() && runner.os == 'Windows'
         uses: actions/upload-artifact@v4
         with:
           name: e2e-results
@@ -51,18 +81,34 @@ jobs:
             src/e2e/playwright-report
           if-no-files-found: ignore
 
+      - name: Upload built binary
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.artifact }}
+          path: ${{ matrix.out }}
+          if-no-files-found: error
+
+  release:
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Collect binaries
+        uses: actions/download-artifact@v4
+        with:
+          path: dist
+          merge-multiple: true
+
       - name: Read app version
         id: ver
-        shell: pwsh
-        run: |
-          $json = Get-Content src/backend/tauri.conf.json -Raw | ConvertFrom-Json
-          "version=$($json.version)" >> $env:GITHUB_OUTPUT
+        run: echo "version=$(jq -r .version src/backend/tauri.conf.json)" >> "$GITHUB_OUTPUT"
 
-      - name: Publish GitHub release with the exe
+      - name: Publish GitHub release with all platform binaries
         uses: softprops/action-gh-release@v2
         with:
           tag_name: v${{ steps.ver.outputs.version }}.${{ github.run_number }}
           name: MyNote v${{ steps.ver.outputs.version }} (build ${{ github.run_number }})
           target_commitish: ${{ github.sha }}
-          files: output/MyNote.exe
+          files: dist/*
           fail_on_unmatched_files: true

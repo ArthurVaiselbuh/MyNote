@@ -1,6 +1,7 @@
 import * as act from "../actions";
 import { editorCtl } from "../editorCtl";
 import { app } from "../state/app.svelte";
+import { modPressed } from "./platform";
 import { resultsKeys } from "./resultsKeys";
 import { treeKeys } from "./treeKeys";
 
@@ -12,7 +13,7 @@ function isTyping(target: EventTarget | null): boolean {
 }
 
 export function handleGlobal(e: KeyboardEvent) {
-  const ctrl = e.ctrlKey || e.metaKey;
+  const mod = modPressed(e);
   const target = e.target as HTMLElement | null;
 
   // 1+2. an open modal (incl. insert helper) owns the keyboard; only Esc is global
@@ -28,7 +29,7 @@ export function handleGlobal(e: KeyboardEvent) {
   const typing = isTyping(e.target);
 
   // 3. global shortcuts fire regardless of focus
-  if (ctrl && !e.altKey) {
+  if (mod && !e.altKey) {
     const handled = () => {
       e.preventDefault();
       e.stopPropagation();
@@ -73,13 +74,13 @@ export function handleGlobal(e: KeyboardEvent) {
     return;
   }
 
-  if (e.key === "?" && !typing && !ctrl) {
+  if (e.key === "?" && !typing && !mod) {
     e.preventDefault();
     act.openModal("help");
     return;
   }
 
-  if (e.key === "Tab" && !ctrl && !e.altKey) {
+  if (e.key === "Tab" && !mod && !e.altKey) {
     // typing guard, except the search box which is part of the cycle ring
     const inSearchBox = !!target?.closest("[data-search-box]");
     if (!typing || inSearchBox) {
@@ -89,7 +90,7 @@ export function handleGlobal(e: KeyboardEvent) {
     return;
   }
 
-  if ((e.key === "PageUp" || e.key === "PageDown") && !ctrl) {
+  if ((e.key === "PageUp" || e.key === "PageDown") && !mod) {
     if (typing && target?.closest(".cm-editor")) return; // CM pages natively
     e.preventDefault();
     act.scrollMain(e.key === "PageUp" ? -1 : 1);
