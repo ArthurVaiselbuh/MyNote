@@ -75,7 +75,8 @@ test("delete section undo restores its pages and jumps back", async ({ app }) =>
   await app.page.keyboard.press("Control+g");
   await expect(app.page.locator(".picker-list")).toBeVisible();
   await expect(app.page.locator(".modal input")).toBeFocused();
-  await app.page.keyboard.press("Shift+Delete"); // first item = "Notes"
+  await app.page.keyboard.press("ArrowUp"); // current New Section is preselected -> Notes
+  await app.page.keyboard.press("Shift+Delete"); // delete "Notes"
   await app.confirmDanger();
   await expect(app.page.locator(".section-strip .name")).toContainText("1/1");
   expect(app.mdExists(A) && app.mdExists(B)).toBe(true);

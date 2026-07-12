@@ -80,10 +80,40 @@ test("Ctrl+G goes to a section without moving anything", async ({ app }) => {
   await app.page.keyboard.press("Control+g");
   await expect(app.page.locator(".modal-title")).toHaveText("Go to section");
   await expect(app.page.locator(".modal input")).toBeFocused();
-  await app.page.keyboard.press("Enter"); // first item = Notes
+  await app.page.keyboard.press("ArrowUp"); // current New Section is preselected -> Notes
+  await app.page.keyboard.press("Enter");
 
   await expect(app.page.locator(".section-strip .name")).toContainText("Notes");
   await expect(app.page.locator(".tree .row .title")).toHaveText(["Stays"]);
+});
+
+test("Esc aborts creating a new section", async ({ app }) => {
+  await app.page.keyboard.press("Control+Shift+N");
+  await expect(app.page.locator(".section-strip input")).toBeFocused();
+  await app.page.keyboard.press("Escape");
+
+  await expect(app.page.locator(".section-strip input")).toHaveCount(0);
+  await expect(app.page.locator(".section-strip .name")).toContainText("Notes");
+  await expect(app.page.locator(".section-strip .name")).toContainText("1/1");
+});
+
+test("Alt+Up in the section picker reorders sections", async ({ app }) => {
+  await app.page.keyboard.press("Control+Shift+N");
+  await expect(app.page.locator(".section-strip input")).toBeFocused();
+  await app.page.keyboard.press("Enter");
+  // sections are now [Notes, New Section] with New Section current
+  await expect(app.page.locator(".section-strip .name")).toContainText("New Section");
+  await expect(app.page.locator(".section-strip .name")).toContainText("2/2");
+
+  await app.page.keyboard.press("Control+g");
+  await expect(app.page.locator(".modal input")).toBeFocused();
+  // the current section (New Section) is preselected; Alt+Up moves it to the top
+  await app.page.keyboard.press("Alt+ArrowUp");
+  await expect(app.page.locator(".picker-item").first()).toContainText("New Section");
+  await app.page.keyboard.press("Enter");
+
+  await expect(app.page.locator(".section-strip .name")).toContainText("New Section");
+  await expect(app.page.locator(".section-strip .name")).toContainText("1/2");
 });
 
 test("/ filters the tree, Esc clears it", async ({ app }) => {

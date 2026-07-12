@@ -112,6 +112,8 @@ export const api = {
   createSection: (name: string) => invoke<Section>("create_section", { name }),
   renameSection: (id: string, name: string) =>
     invoke<void>("rename_section", { id, name }),
+  moveSection: (id: string, index: number) =>
+    invoke<void>("move_section", { id, index }),
   deleteSection: (id: string) => invoke<void>("delete_section", { id }),
   createPage: (sectionId: string, parentId: string | null, afterId: string | null) =>
     invoke<PageNode>("create_page", { sectionId, parentId, afterId }),

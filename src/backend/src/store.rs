@@ -156,6 +156,19 @@ impl Store {
         self.save()
     }
 
+    pub fn move_section(&mut self, id: &str, index: usize) -> Result<(), String> {
+        let from = self
+            .notebook
+            .sections
+            .iter()
+            .position(|s| s.id == id)
+            .ok_or("section not found")?;
+        let section = self.notebook.sections.remove(from);
+        let idx = index.min(self.notebook.sections.len());
+        self.notebook.sections.insert(idx, section);
+        self.save()
+    }
+
     pub fn delete_section(&mut self, id: &str) -> Result<(), String> {
         let op = self.apply_delete_section(id)?;
         self.record_undo(op);
@@ -817,6 +830,22 @@ mod tests {
         store.move_page(&page.id, &other.id, None, 0).unwrap();
         assert!(store.notebook.sections[0].pages.is_empty());
         assert_eq!(store.notebook.sections[1].pages[0].id, page.id);
+    }
+
+    #[test]
+    fn move_section_reorders() {
+        let (_dir, mut store) = open_store();
+        let a = section_id(&store);
+        let b = store.create_section("B").unwrap();
+        let c = store.create_section("C").unwrap();
+        // move a below b: detached list is [B, C], insert at 1 -> [B, A, C]
+        store.move_section(&a, 1).unwrap();
+        let ids: Vec<_> = store.notebook.sections.iter().map(|s| s.id.clone()).collect();
+        assert_eq!(ids, vec![b.id.clone(), a, c.id.clone()]);
+        // move c to the front
+        store.move_section(&c.id, 0).unwrap();
+        let ids: Vec<_> = store.notebook.sections.iter().map(|s| s.id.clone()).collect();
+        assert_eq!(ids[0], c.id);
     }
 
     #[test]

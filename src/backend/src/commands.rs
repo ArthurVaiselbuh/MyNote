@@ -156,6 +156,11 @@ pub fn rename_section(state: State<'_, AppState>, id: String, name: String) -> R
 }
 
 #[tauri::command]
+pub fn move_section(state: State<'_, AppState>, id: String, index: usize) -> Result<(), String> {
+    with_store(&state, |s| s.move_section(&id, index))
+}
+
+#[tauri::command]
 pub fn delete_section(state: State<'_, AppState>, id: String) -> Result<(), String> {
     with_store(&state, |s| s.delete_section(&id))
 }

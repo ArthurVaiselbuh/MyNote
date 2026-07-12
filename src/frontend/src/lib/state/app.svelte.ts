@@ -34,6 +34,7 @@ export const app = $state({
   selectedId: null as string | null,
   renamingId: null as string | null,
   renamingSection: false,
+  creatingSection: false,
 
   modal: "none" as ModalName,
   sectionPickerMode: "goto" as "goto" | "move",

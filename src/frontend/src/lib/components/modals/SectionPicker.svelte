@@ -2,10 +2,24 @@
   import * as act from "../../actions";
   import { autofocusSelect } from "../../autofocus";
   import { app } from "../../state/app.svelte";
-  import { countPages } from "../../treeUtils";
+  import { countPages, sectionOfPage } from "../../treeUtils";
+  import { ALT_LABEL } from "../../keys/platform";
+
+  const moving = $derived(app.sectionPickerMode === "move");
+
+  function currentSectionIndex(): number {
+    if (!app.notebook) return 0;
+    if (moving && app.selectedId) {
+      const source = sectionOfPage(app.notebook, app.selectedId);
+      const idx = source ? app.notebook.sections.indexOf(source) : -1;
+      return idx >= 0 ? idx : 0;
+    }
+    return app.sectionIdx;
+  }
 
   let filter = $state("");
-  let sel = $state(0);
+  let sel = $state(currentSectionIndex());
+  let listEl = $state<HTMLElement>();
 
   const items = $derived.by(() => {
     const f = filter.trim().toLowerCase();
@@ -18,7 +32,19 @@
     if (sel >= items.length) sel = Math.max(0, items.length - 1);
   });
 
-  const moving = $derived(app.sectionPickerMode === "move");
+  $effect(() => {
+    (listEl?.children[sel] as HTMLElement | undefined)?.scrollIntoView({ block: "nearest" });
+  });
+
+  function reorder(dir: number) {
+    if (filter.trim()) return;
+    const cur = items[sel];
+    if (!cur) return;
+    const target = cur.idx + dir;
+    if (target < 0 || target >= (app.notebook?.sections.length ?? 0)) return;
+    void act.moveSection(cur.section.id, target);
+    sel = target;
+  }
 
   function choose(idx: number) {
     act.closeModal();
@@ -32,7 +58,10 @@
   }
 
   function keys(e: KeyboardEvent) {
-    if (e.key === "ArrowDown") {
+    if (e.altKey && (e.key === "ArrowUp" || e.key === "ArrowDown")) {
+      e.preventDefault();
+      reorder(e.key === "ArrowDown" ? 1 : -1);
+    } else if (e.key === "ArrowDown") {
       e.preventDefault();
       sel = Math.min(items.length - 1, sel + 1);
     } else if (e.key === "ArrowUp") {
@@ -63,7 +92,7 @@
       use:autofocusSelect
       onkeydown={keys}
     />
-    <div class="picker-list">
+    <div class="picker-list" bind:this={listEl}>
       {#each items as item, i (item.section.id)}
         <!-- svelte-ignore a11y_click_events_have_key_events a11y_no_static_element_interactions -->
         <div
@@ -77,6 +106,6 @@
         </div>
       {/each}
     </div>
-    <div class="hint">↑↓ select · Enter {moving ? "move here" : "open"} · Shift+Del delete section · Esc close</div>
+    <div class="hint">↑↓ select · {ALT_LABEL}+↑↓ reorder · Enter {moving ? "move here" : "open"} · Shift+Del delete section · Esc close</div>
   </div>
 </div>
