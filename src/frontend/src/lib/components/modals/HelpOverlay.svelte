@@ -27,8 +27,8 @@
   function filtered(rows: Shortcut[]): Shortcut[] {
     const f = filter.trim().toLowerCase();
     if (!f) return rows;
-    return rows.filter(({ keys, desc }) =>
-      (keys + " " + desc).toLowerCase().includes(f),
+    return rows.filter(({ keys, desc, search }) =>
+      (keys + " " + desc + " " + (search ?? "")).toLowerCase().includes(f),
     );
   }
 </script>

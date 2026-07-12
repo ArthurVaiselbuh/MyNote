@@ -4,7 +4,8 @@ import { ALT_LABEL, MOD_LABEL, SHIFT_LABEL } from "./platform";
 // help overlay and component tooltips so labels stay platform-correct in one
 // place. Intended to grow into the backing data for user-configurable
 // keybindings — keep it declarative.
-export type Shortcut = { keys: string; desc: string };
+// `search` holds extra terms matched by the help filter but not shown — synonyms
+export type Shortcut = { keys: string; desc: string; search?: string };
 
 const M = MOD_LABEL;
 const A = ALT_LABEL;
@@ -45,7 +46,7 @@ export const TREE_SHORTCUTS: Shortcut[] = [
   { keys: `${M}+Enter`, desc: "New subpage" },
   { keys: "F2", desc: "Rename" },
   { keys: `${A}+↑ / ↓`, desc: "Move up / down" },
-  { keys: `${M}+] / [`, desc: "Demote / promote" },
+  { keys: `${M}+] / [`, desc: "Demote / promote", search: "subpage indent outdent child" },
   { keys: "Del", desc: "Delete" },
   { keys: `${A}+← / →`, desc: "Move to prev / next section" },
   { keys: `${M}+${S}+G`, desc: "Move to section…" },
