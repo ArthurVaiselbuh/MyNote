@@ -5,11 +5,16 @@
   import { MOD_LABEL, SHIFT_LABEL } from "../keys/platform";
 
   const section = $derived(act.currentSection());
+  const editing = $derived(app.creatingSection || app.renamingSection);
   const position = $derived(
     app.notebook ? `${app.sectionIdx + 1}/${app.notebook.sections.length}` : "",
   );
 
   function commit(value: string) {
+    if (app.creatingSection) {
+      void act.createSectionNamed(value);
+      return;
+    }
     if (!app.renamingSection || !section) return;
     app.renamingSection = false;
     void act.renameSection(section.id, value.trim() || "Untitled Section");
@@ -19,18 +24,22 @@
     if (e.key === "Enter") (e.currentTarget as HTMLInputElement).blur();
     if (e.key === "Escape") {
       e.stopPropagation();
-      app.renamingSection = false;
-      app.focus = "tree";
+      if (app.creatingSection) act.cancelNewSection();
+      else {
+        app.renamingSection = false;
+        app.focus = "tree";
+      }
     }
   }
 </script>
 
 <div class="section-strip">
   <button class="nav" title="Previous section ({MOD_LABEL}+PgUp)" onclick={() => act.gotoSectionOffset(-1)}>◀</button>
-  {#if app.renamingSection && section}
+  {#if editing}
     <input
       data-esc-local
-      value={section.name}
+      value={app.creatingSection ? "" : (section?.name ?? "")}
+      placeholder="New Section"
       use:autofocusSelect
       onkeydown={renameKeys}
       onblur={(e) => commit(e.currentTarget.value)}

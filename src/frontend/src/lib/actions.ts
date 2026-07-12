@@ -122,23 +122,50 @@ export function gotoSectionOffset(offset: number) {
   gotoSection(app.sectionIdx + offset);
 }
 
-export async function newSection() {
+export function newSection() {
+  app.renamingSection = false;
+  app.creatingSection = true;
+}
+
+export async function createSectionNamed(name: string) {
+  if (!app.creatingSection) return;
+  app.creatingSection = false;
   try {
-    await api.createSection("New Section");
+    const section = await api.createSection(name.trim() || "New Section");
     await refreshTree();
-    app.sectionIdx = (app.notebook?.sections.length ?? 1) - 1;
+    const idx = app.notebook?.sections.findIndex((s) => s.id === section.id) ?? -1;
+    if (idx >= 0) app.sectionIdx = idx;
     app.currentPageId = null;
     app.selectedId = null;
-    app.renamingSection = true;
   } catch (e) {
     app.status = String(e);
   }
+  app.focus = "tree";
+}
+
+export function cancelNewSection() {
+  app.creatingSection = false;
+  app.focus = "tree";
 }
 
 export async function renameSection(id: string, name: string) {
   try {
     await api.renameSection(id, name);
     await refreshTree();
+  } catch (e) {
+    app.status = String(e);
+  }
+}
+
+export async function moveSection(id: string, index: number) {
+  const keepId = currentSection()?.id ?? null;
+  try {
+    await api.moveSection(id, index);
+    await refreshTree();
+    if (keepId) {
+      const idx = app.notebook?.sections.findIndex((s) => s.id === keepId) ?? -1;
+      if (idx >= 0) app.sectionIdx = idx;
+    }
   } catch (e) {
     app.status = String(e);
   }

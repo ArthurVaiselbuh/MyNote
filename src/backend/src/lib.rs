@@ -28,6 +28,7 @@ pub fn run() {
             commands::get_tree,
             commands::create_section,
             commands::rename_section,
+            commands::move_section,
             commands::delete_section,
             commands::create_page,
             commands::read_page,
