@@ -44,11 +44,32 @@ impl Default for Settings {
     }
 }
 
+fn config_root() -> PathBuf {
+    #[cfg(target_os = "windows")]
+    {
+        return std::env::var_os("APPDATA")
+            .map(PathBuf::from)
+            .unwrap_or_else(|| PathBuf::from("."));
+    }
+    #[cfg(target_os = "macos")]
+    {
+        return std::env::var_os("HOME")
+            .map(|home| PathBuf::from(home).join("Library").join("Application Support"))
+            .unwrap_or_else(|| PathBuf::from("."));
+    }
+    #[cfg(not(any(target_os = "windows", target_os = "macos")))]
+    {
+        if let Some(xdg) = std::env::var_os("XDG_CONFIG_HOME") {
+            return PathBuf::from(xdg);
+        }
+        return std::env::var_os("HOME")
+            .map(|home| PathBuf::from(home).join(".config"))
+            .unwrap_or_else(|| PathBuf::from("."));
+    }
+}
+
 pub fn app_dir() -> PathBuf {
-    std::env::var("APPDATA")
-        .map(PathBuf::from)
-        .unwrap_or_else(|_| PathBuf::from("."))
-        .join("MyNote")
+    config_root().join("MyNote")
 }
 
 pub fn settings_path() -> PathBuf {

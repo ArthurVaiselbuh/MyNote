@@ -7,6 +7,14 @@ import MarkdownIt from "markdown-it";
 hljs.registerLanguage("powershell", powershell);
 hljs.registerLanguage("dos", dos);
 
+// Custom URI schemes resolve differently per webview: Windows (WebView2) exposes
+// them as http://<scheme>.localhost/, macOS/Linux (WKWebView/webkit2gtk) as
+// <scheme>://localhost/. Match Tauri's own userAgent-based rule so images load
+// everywhere.
+const noteAssetBase = navigator.userAgent.includes("Windows")
+  ? "http://note-asset.localhost/"
+  : "note-asset://localhost/";
+
 function highlightCode(code: string, lang: string): string {
   if (!lang || !hljs.getLanguage(lang)) return "";
   return hljs.highlight(code, { language: lang, ignoreIllegals: true }).value;
@@ -27,7 +35,7 @@ md.renderer.rules.image = (tokens, idx, opts, env, self) => {
   const token = tokens[idx];
   const src = token.attrGet("src") ?? "";
   if (src.startsWith("assets/")) {
-    token.attrSet("src", "http://note-asset.localhost/" + src.slice("assets/".length));
+    token.attrSet("src", noteAssetBase + src.slice("assets/".length));
   }
   return defaultImage(tokens, idx, opts, env, self);
 };

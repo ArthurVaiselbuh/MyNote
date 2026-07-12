@@ -1,7 +1,8 @@
 import * as act from "../actions";
+import { modPressed } from "./platform";
 
 export function treeKeys(e: KeyboardEvent) {
-  const ctrl = e.ctrlKey;
+  const mod = modPressed(e);
   const handled = () => e.preventDefault();
 
   if (e.altKey) {
@@ -18,10 +19,10 @@ export function treeKeys(e: KeyboardEvent) {
     case "ArrowDown": handled(); act.selectOffset(1); return;
     case "ArrowLeft": handled(); void act.collapseOrParent(); return;
     case "ArrowRight": handled(); void act.expandOrChild(); return;
-    case "Enter": handled(); ctrl ? void act.newSubpage() : act.activateSelected(); return;
+    case "Enter": handled(); mod ? void act.newSubpage() : act.activateSelected(); return;
     case "F2": handled(); act.startRename(); return;
     case "Delete": handled(); act.deleteSelected(); return;
-    case "]": if (ctrl) { handled(); void act.demoteSelected(); } return;
-    case "[": if (ctrl) { handled(); void act.promoteSelected(); } return;
+    case "]": if (mod) { handled(); void act.demoteSelected(); } return;
+    case "[": if (mod) { handled(); void act.promoteSelected(); } return;
   }
 }

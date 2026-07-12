@@ -2,6 +2,7 @@
   import * as act from "../actions";
   import { app } from "../state/app.svelte";
   import { autofocusSelect } from "../autofocus";
+  import { MOD_LABEL, SHIFT_LABEL } from "../keys/platform";
 
   const section = $derived(act.currentSection());
   const position = $derived(
@@ -25,7 +26,7 @@
 </script>
 
 <div class="section-strip">
-  <button class="nav" title="Previous section (Ctrl+PgUp)" onclick={() => act.gotoSectionOffset(-1)}>◀</button>
+  <button class="nav" title="Previous section ({MOD_LABEL}+PgUp)" onclick={() => act.gotoSectionOffset(-1)}>◀</button>
   {#if app.renamingSection && section}
     <input
       data-esc-local
@@ -37,13 +38,13 @@
   {:else}
     <button
       class="name"
-      title="Go to section (Ctrl+G) — double-click to rename"
+      title="Go to section ({MOD_LABEL}+G) — double-click to rename"
       onclick={() => act.openSectionPicker("goto")}
       ondblclick={() => (app.renamingSection = true)}
     >
       {section?.name ?? "—"} <span style="opacity:.5">{position}</span>
     </button>
   {/if}
-  <button class="nav" title="Next section (Ctrl+PgDn)" onclick={() => act.gotoSectionOffset(1)}>▶</button>
-  <button class="nav" title="New section (Ctrl+Shift+N)" onclick={() => act.newSection()}>＋</button>
+  <button class="nav" title="Next section ({MOD_LABEL}+PgDn)" onclick={() => act.gotoSectionOffset(1)}>▶</button>
+  <button class="nav" title="New section ({MOD_LABEL}+{SHIFT_LABEL}+N)" onclick={() => act.newSection()}>＋</button>
 </div>

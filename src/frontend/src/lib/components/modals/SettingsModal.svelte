@@ -1,6 +1,7 @@
 <script lang="ts">
   import * as act from "../../actions";
   import { defaultSettings } from "../../api";
+  import { MOD_LABEL } from "../../keys/platform";
   import { app } from "../../state/app.svelte";
 
   function persist() {
@@ -69,7 +70,7 @@
     <div class="modal-title" style="margin-top:14px">Notebook</div>
     <div class="settings-path">{app.root || "(none open)"}</div>
     <div class="settings-row">
-      <span>Open a different notebook (Ctrl+O)</span>
+      <span>Open a different notebook ({MOD_LABEL}+O)</span>
       <button
         onclick={() => {
           act.closeModal();

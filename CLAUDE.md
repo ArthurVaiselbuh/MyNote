@@ -1,7 +1,8 @@
 # MyNote
 
-Local-first, keyboard-driven, OneNote-style Markdown note app for Windows.
-Built for a locked-down corporate environment.
+Local-first, keyboard-driven, OneNote-style Markdown note app. Windows is the
+primary target (built for a locked-down corporate environment); macOS and Linux
+are supported cross-platform builds off the same code.
 
 > **Maintenance rule:** this file records *requirements and design decisions*.
 > Update it **only when a decision changes** — never as part of routine code
@@ -12,8 +13,11 @@ Built for a locked-down corporate environment.
 
 - **No runtime network.** No localhost server, no ports, no CDN, no external
   requests. Build-time network (npm/cargo) is fine.
-- **Single small exe**, no installer. WebView2 (pre-installed on Win10/11) is
-  the only runtime dependency. NSIS/bundling stays disabled.
+- **Single small binary**, no installer. NSIS/bundling stays disabled on every
+  platform (`tauri build --no-bundle`). The runtime webview dependency is the
+  system one: WebView2 (pre-installed on Win10/11), WKWebView (bundled with
+  macOS), and webkit2gtk on Linux — the only platform where the user/CI must
+  install it (`libwebkit2gtk-4.1`). No app-shipped runtime otherwise.
 - Notes are **plain Markdown files on disk**, AI-agent friendly: one
   `<uuid>.md` per page, first line is the `# Title` H1.
 
@@ -22,18 +26,24 @@ Built for a locked-down corporate environment.
 - Single `src/` folder: `src/frontend` (Svelte 5 runes + Vite + CodeMirror 6),
   `src/backend` (Tauri v2 Rust crate). Wired via `src/backend/tauri.conf.json`
   (`frontendDist: ../frontend/dist`).
-- `build.bat` at the root is the only supported release build. It must go
-  through the tauri CLI (`tauri build --no-bundle`): plain
-  `cargo build --release` yields a dev-mode exe that tries to load the vite
-  devUrl and shows a blank window. `dev.bat` runs `tauri dev`.
-- Output: `build.bat` copies the release exe to `output\mynote.exe` (a
-  root-level folder alongside `src`); the raw cargo output stays at
-  `src\backend\target\release\mynote.exe`.
+- Root release scripts: `build.bat` (Windows) and `build.sh` (macOS/Linux);
+  `dev.bat`/`dev.sh` run `tauri dev`, `test.bat`/`test.sh` run the checks. They
+  must go through the tauri CLI (`tauri build --no-bundle`): plain
+  `cargo build --release` yields a dev-mode binary that tries to load the vite
+  devUrl and shows a blank window.
+- Output (a root-level `output\` folder alongside `src`): `build.bat` copies the
+  release exe to `output\MyNote.exe`; `build.sh` copies to `output\mynote-macos`
+  or `output\mynote-linux`. The raw cargo output stays at
+  `src\backend\target\release\MyNote`.
+- Config/data dir is per-platform (see On-disk format): backend derives it in
+  `settings.rs::config_root()`, so no code hardcodes `%APPDATA%`.
 
 ## On-disk format (stable contract — breaking it breaks user notebooks)
 
-- Notebook root defaults to `%APPDATA%\MyNote\notebook`; any folder can be
-  opened via Ctrl+O.
+- Notebook root defaults to `<config>\MyNote\notebook`, where `<config>` is
+  `%APPDATA%` (Windows), `~/Library/Application Support` (macOS), or
+  `$XDG_CONFIG_HOME`/`~/.config` (Linux) — see `settings.rs::config_root()`. Any
+  folder can be opened via Ctrl+O.
 - `notebook.json` — section list + nested page tree (`id`, `title`,
   `expanded`, `children`) + last view. Page titles are cached here but the
   H1 in the `.md` file wins; they are kept in sync on write/rename.
@@ -47,16 +57,22 @@ Built for a locked-down corporate environment.
   files it didn't delete are never touched.
 - App settings (theme colors, zoom, window geometry, scroll speed, focus
   alpha, last notebook path, recent-notebooks MRU) live in
-  `%APPDATA%\MyNote\settings.json`, not in the notebook. Window geometry and
-  the MRU are backend-owned: `set_settings` ignores the frontend's copies.
+  `<config>\MyNote\settings.json` (same `config_root()` as above), not in the
+  notebook. Window geometry and the MRU are backend-owned: `set_settings`
+  ignores the frontend's copies.
 
 ## Design decisions
 
-- **Images** are served through a custom `note-asset:` URI scheme
-  (`http://note-asset.localhost/<page-id>/<file>`) registered in Rust — no
-  asset-protocol scope juggling, no localhost server. CSP must keep allowing
-  it in `img-src`, and `connect-src` must keep `ipc: http://ipc.localhost`
-  or Tauri IPC degrades to the slow postMessage fallback.
+- **Images** are served through a custom `note-asset:` URI scheme registered in
+  Rust — no asset-protocol scope juggling, no localhost server. The webview
+  resolves the scheme differently per platform: `http://note-asset.localhost/`
+  on Windows, `note-asset://localhost/` on macOS/Linux. `markdown.ts` picks the
+  base by userAgent (same rule Tauri uses); the Rust handler reads only the URL
+  path so it's platform-agnostic. CSP `img-src` must keep **both**
+  `http://note-asset.localhost` and the `note-asset:` scheme, and `connect-src`
+  must keep `ipc: http://ipc.localhost` (the `ipc:` scheme covers the
+  macOS/Linux `ipc://localhost` form) or Tauri IPC degrades to the slow
+  postMessage fallback.
 - **Open/switch notebook** (Ctrl+O) is an in-app pane, not a bare OS folder
   picker: logo, the 5 most recent notebooks (missing ones shown but inert),
   plus New (folder picker; refuses a folder that already has a
@@ -106,6 +122,13 @@ Four logical focus targets: `tree | editor | search | results`. Focus is
 app-managed state (`app.focus`), not raw DOM focus; the focused pane gets an
 outline of accent color at `--focus-alpha`.
 
+"Ctrl+X" below means the **primary modifier**: Ctrl on Windows/Linux, Cmd
+(⌘) on macOS. `keys/platform.ts` owns the seam — `modPressed(e)` gates the
+dispatcher (`dispatch.ts`, `treeKeys.ts`) and `MOD_LABEL`/`ALT_LABEL` feed the
+one shortcut table in `keys/shortcuts.ts` that both the help overlay and every
+tooltip render from. Intended as the basis for future user-configurable
+keybindings: change/extend chords in those two files, not scattered literals.
+
 One capture-phase window keydown listener dispatches with strict precedence:
 
 1. Open modal (picker/help/settings/confirm/insert helper) owns the keyboard;
@@ -142,13 +165,15 @@ view, or the results ring could never cycle through the tree.
 
 - `cargo test` in `src/backend` covers store tree ops, title sync, search,
   undo/redo, and asset/file pruning — keep these green and extend them for
-  new backend logic.
-- E2e regression suite: Playwright in `src/e2e` (`npm test` there, or root
-  `test.bat` for backend + e2e). It attaches to the **real release exe**
-  (`output\mynote.exe`, so `build.bat` first) over CDP via
-  `WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS=--remote-debugging-port=9222` —
-  no browser downloads, no webdriver binary, keeps the no-runtime-network
-  rule intact. Each test gets a scratch notebook + isolated
+  new backend logic. This is the cross-platform test bar: CI runs it on
+  Windows, macOS, and Linux.
+- E2e regression suite: **Windows only** — Playwright in `src/e2e` (`npm test`
+  there, or root `test.bat` for backend + e2e). It attaches to the **real
+  release exe** (`output\MyNote.exe`, so `build.bat` first) over CDP via
+  `WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS=--remote-debugging-port=9222` — no
+  browser downloads, no webdriver binary, keeps the no-runtime-network rule
+  intact. CDP-over-WebView2 has no macOS/Linux equivalent, so `test.sh` runs
+  backend + svelte-check only and CI runs e2e on the Windows leg alone. Each test gets a scratch notebook + isolated
   `WEBVIEW2_USER_DATA_FOLDER`; the user's `settings.json` is swapped and
   restored by the fixture (`app.ts`). Serial only (one exe, one port); the
   suite refuses to run while MyNote is open. Extend it for new keyboard/UI

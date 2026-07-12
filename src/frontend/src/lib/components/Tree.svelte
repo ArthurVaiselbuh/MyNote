@@ -2,6 +2,7 @@
   import * as act from "../actions";
   import { autofocusSelect } from "../autofocus";
   import { dndCancel, dndDown, dndMove, dndUp } from "../dnd";
+  import { MOD_LABEL } from "../keys/platform";
   import { app } from "../state/app.svelte";
 
   let filterInput: HTMLInputElement | undefined = $state();
@@ -124,7 +125,7 @@
   {/each}
   {#if rows.length === 0}
     <div class="tree-empty">
-      {app.treeFilter ? "No matches" : "No pages — Ctrl+N to create one"}
+      {app.treeFilter ? "No matches" : `No pages — ${MOD_LABEL}+N to create one`}
     </div>
   {/if}
 </div>
