@@ -46,6 +46,18 @@ export class App {
     await expect(this.page.locator(".section-strip .name")).toContainText("Notes", {
       timeout: 15_000,
     });
+    await this.dismissWelcome();
+  }
+
+  /** First run pops the onboarding tour, which would eat keystrokes — mark it
+   * seen (survives relaunch in the shared data dir) and close it. */
+  private async dismissWelcome() {
+    await this.page.evaluate(() => localStorage.setItem("mynote.welcome.v1", "1"));
+    const welcome = this.page.locator(".welcome-backdrop");
+    if (await welcome.count()) {
+      await this.page.keyboard.press("Escape");
+      await expect(welcome).toHaveCount(0);
+    }
   }
 
   /** Graceful close (WM_CLOSE) so the backend runs its on-close purge. */

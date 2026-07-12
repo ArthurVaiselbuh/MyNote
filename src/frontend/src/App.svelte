@@ -15,6 +15,7 @@
   import OpenNotebook from "./lib/components/modals/OpenNotebook.svelte";
   import SectionPicker from "./lib/components/modals/SectionPicker.svelte";
   import SettingsModal from "./lib/components/modals/SettingsModal.svelte";
+  import Welcome from "./lib/components/Welcome.svelte";
 
   const s = $derived(app.settings);
 
@@ -71,6 +72,9 @@
   {#if app.modal === "insert"}<InsertHelper />{/if}
   {#if app.modal === "importMht"}<ImportMht />{/if}
   {#if app.modal === "openNotebook"}<OpenNotebook />{/if}
+
+  <!-- always mounted: owns its own first-run trigger and visibility -->
+  <Welcome />
 
   {#if app.status}
     <div class="status-toast">{app.status}</div>

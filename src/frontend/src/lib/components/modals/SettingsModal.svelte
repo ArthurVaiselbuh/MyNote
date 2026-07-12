@@ -79,6 +79,11 @@
       >
     </div>
 
+    <div class="settings-row">
+      <span>Welcome tour</span>
+      <button onclick={() => (app.modal = "welcome")}>Show again</button>
+    </div>
+
     <div class="modal-buttons">
       <button class="primary" onclick={() => act.closeModal()}>Done</button>
     </div>

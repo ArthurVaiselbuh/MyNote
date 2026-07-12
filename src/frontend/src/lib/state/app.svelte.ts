@@ -10,7 +10,8 @@ export type ModalName =
   | "confirm"
   | "insert"
   | "importMht"
-  | "openNotebook";
+  | "openNotebook"
+  | "welcome";
 
 export interface ConfirmRequest {
   message: string;
