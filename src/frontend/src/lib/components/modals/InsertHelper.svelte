@@ -3,12 +3,16 @@
   import { autofocusSelect } from "../../autofocus";
   import { editorCtl } from "../../editorCtl";
   import { MOD_LABEL } from "../../keys/platform";
+  import { COLOR_PALETTE } from "../../markdown";
 
   interface Item {
     label: string;
     before: string;
     after: string;
     hint: string;
+    swatch?: string;
+    search?: string;
+    action?: () => void;
   }
 
   function pad(n: number): string {
@@ -40,14 +44,39 @@
     { label: "Divider", before: "\n---\n", after: "", hint: "---" },
     { label: "Date", before: today(), after: "", hint: today() },
     { label: "Date + time", before: nowStamp(), after: "", hint: nowStamp() },
+    {
+      label: "Image width",
+      before: "",
+      after: "{width=420}",
+      hint: "![alt](src){width=420}",
+      search: "size resize img picture",
+    },
+    {
+      label: "Color…",
+      before: "",
+      after: "",
+      hint: "[text]{.red}",
+      swatch: `linear-gradient(90deg, ${Object.values(COLOR_PALETTE).join(",")})`,
+      search: `colour text ${Object.keys(COLOR_PALETTE).join(" ")} grey`,
+      action: () => act.openModal("colorPicker"),
+    },
   ];
 
   let filter = $state("");
   let sel = $state(0);
+  let listEl: HTMLDivElement | undefined = $state();
+
+  $effect(() => {
+    void sel;
+    listEl?.querySelector(".insert-item.selected")?.scrollIntoView({ block: "nearest" });
+  });
 
   const items = $derived.by(() => {
     const f = filter.trim().toLowerCase();
-    return ITEMS.filter((item) => !f || item.label.toLowerCase().includes(f));
+    return ITEMS.filter(
+      (item) =>
+        !f || item.label.toLowerCase().includes(f) || (item.search?.includes(f) ?? false),
+    );
   });
 
   $effect(() => {
@@ -55,6 +84,10 @@
   });
 
   function choose(item: Item) {
+    if (item.action) {
+      item.action();
+      return;
+    }
     act.closeModal();
     editorCtl.current?.insert(item.before, item.after);
   }
@@ -83,7 +116,7 @@
       use:autofocusSelect
       onkeydown={keys}
     />
-    <div class="insert-list">
+    <div class="insert-list" bind:this={listEl}>
       {#each items as item, i (item.label)}
         <!-- svelte-ignore a11y_click_events_have_key_events a11y_no_static_element_interactions -->
         <div
@@ -92,8 +125,11 @@
           onclick={() => choose(item)}
           onmousemove={() => (sel = i)}
         >
-          <span>{item.label}</span>
-          <span class="preview-snippet">{item.hint}</span>
+          <span>
+            {#if item.swatch}<span class="swatch" style:background={item.swatch}></span>{/if}
+            {item.label}
+          </span>
+          <span class="preview-snippet" style:color={item.swatch}>{item.hint}</span>
         </div>
       {/each}
     </div>

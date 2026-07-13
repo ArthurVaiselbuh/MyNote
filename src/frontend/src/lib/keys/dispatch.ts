@@ -16,12 +16,13 @@ export function handleGlobal(e: KeyboardEvent) {
   const mod = modPressed(e);
   const target = e.target as HTMLElement | null;
 
-  // 1+2. an open modal (incl. insert helper) owns the keyboard; only Esc is global
+  // 1+2. an open modal (incl. insert helper) owns the keyboard; only Esc is
+  // global (closes it, or steps a stacked modal back one layer)
   if (app.modal !== "none") {
     if (e.key === "Escape") {
       e.preventDefault();
       e.stopPropagation();
-      act.closeModal();
+      act.escapeModal();
     }
     return;
   }
