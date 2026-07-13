@@ -55,7 +55,7 @@ pub fn run() {
                     .lock()
                     .ok()
                     .and_then(|s| s.window.clone());
-                if let Some(g) = geom {
+                if let Some(g) = geom.filter(|g| g.width > 0 && g.height > 0) {
                     let _ = win.set_position(tauri::PhysicalPosition::new(g.x, g.y));
                     let _ = win.set_size(tauri::PhysicalSize::new(g.width, g.height));
                     if g.maximized {
@@ -86,15 +86,19 @@ fn persist_on_close(window: &tauri::Window) {
     }
     let settings_lock = state.settings.lock();
     if let Ok(mut s) = settings_lock {
-        let maximized = window.is_maximized().unwrap_or(false);
-        if let (Ok(pos), Ok(size)) = (window.outer_position(), window.inner_size()) {
-            s.window = Some(settings::WindowGeom {
-                x: pos.x,
-                y: pos.y,
-                width: size.width,
-                height: size.height,
-                maximized,
-            });
+        if !window.is_minimized().unwrap_or(false) {
+            let maximized = window.is_maximized().unwrap_or(false);
+            if let (Ok(pos), Ok(size)) = (window.outer_position(), window.inner_size()) {
+                if size.width > 0 && size.height > 0 {
+                    s.window = Some(settings::WindowGeom {
+                        x: pos.x,
+                        y: pos.y,
+                        width: size.width,
+                        height: size.height,
+                        maximized,
+                    });
+                }
+            }
         }
         s.save();
     }
