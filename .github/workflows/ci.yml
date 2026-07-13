@@ -61,6 +61,12 @@ jobs:
       - name: Build release exe
         run: build.bat
         shell: cmd
+      - name: Publish build artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: MyNote.exe
+          path: output/MyNote.exe
+          if-no-files-found: error
       - name: Install e2e deps
         working-directory: src/e2e
         run: npm ci
