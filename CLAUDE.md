@@ -108,6 +108,13 @@ are supported cross-platform builds off the same code.
   `assets/<page-id>/`. A preview modal warns about duplicate section/page names
   (vs the notebook and within the batch) before importing — never auto-merges.
   Markdown specials in note text are not escaped (fidelity over rendering).
+- **Inline formatting beyond CommonMark uses Pandoc attribute syntax**,
+  whitelisted (markdown-it stays `html:false`): `![alt](src){width=420}` sets
+  image width (px, 1–9999, still capped by the preview width) and
+  `[text]{.red}` / `[text]{style="color:#hex"}` colors text (8 palette names
+  in `markdown.ts::COLOR_PALETTE`; 3/4/6/8-digit hex). Anything else renders
+  literally. Chosen for on-disk consistency over Obsidian-style `|420`/HTML
+  spans; Pandoc/Quarto render both forms natively.
 - **Tree undo/redo** (Ctrl+Z/Y, backend `Store` op stack): covers delete
   page/section and move page (reorder, demote/promote, cross-section) —
   not creates/renames. Ops record their inverse (detached subtree + location),
@@ -132,7 +139,8 @@ keybindings: change/extend chords in those two files, not scattered literals.
 One capture-phase window keydown listener dispatches with strict precedence:
 
 1. Open modal (picker/help/settings/confirm/insert helper) owns the keyboard;
-   only Esc is handled globally (closes it).
+   only Esc is handled globally (closes it; a stacked sub-modal steps back one
+   layer instead — Esc in the color picker returns to the insert helper).
 2. Global shortcuts fire even while typing: Ctrl+K/F/E/S/N/Shift+N/1/2/3/
    G/Shift+G/O/I/J/, · Ctrl+PgUp/Dn · Ctrl+=/−/0 · F3/Shift+F3 (`?` only when
    not typing). Ctrl+G opens the section picker in go-to mode, Ctrl+Shift+G

@@ -20,7 +20,7 @@ export const GLOBAL_SHORTCUTS: Shortcut[] = [
   { keys: `${M}+N`, desc: "New page" },
   { keys: `${M}+${S}+N`, desc: "New section" },
   { keys: `${M}+1 / 2 / 3`, desc: "Focus tree / editor / title" },
-  { keys: `${M}+J`, desc: "Insert helper" },
+  { keys: `${M}+J`, desc: "Insert helper", search: "color colour image width size resize table date link" },
   { keys: `${M}+PgUp / PgDn`, desc: "Prev / next section" },
   { keys: `${M}+G`, desc: "Go to section" },
   { keys: `${M}+${S}+G`, desc: "Move page to section" },
@@ -55,7 +55,7 @@ export const TREE_SHORTCUTS: Shortcut[] = [
 export const EDITOR_SHORTCUTS: Shortcut[] = [
   { keys: `${M}+F`, desc: "Find in page" },
   { keys: `F3 / ${S}+F3`, desc: "Next / prev match" },
-  { keys: `${M}+J`, desc: "Insert helper" },
+  { keys: `${M}+J`, desc: "Insert helper", search: "color colour image width size resize table date link" },
   { keys: "Esc", desc: "Close find / focus tree" },
 ];
 

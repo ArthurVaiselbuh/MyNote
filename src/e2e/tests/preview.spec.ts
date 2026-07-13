@@ -68,3 +68,33 @@ test("images are served through the note-asset scheme", async ({ app }) => {
     .poll(() => img.evaluate((el) => (el as HTMLImageElement).naturalWidth))
     .toBeGreaterThan(0);
 });
+
+test("{width=N} sizes the image and is stripped from the text", async ({ app }) => {
+  await app.newTitledPage("Sized", 1);
+  const [id] = await app.treeIds();
+  const dir = path.join(app.notebookDir, "assets", id);
+  fs.mkdirSync(dir, { recursive: true });
+  fs.writeFileSync(path.join(dir, "tiny.png"), TINY_PNG);
+
+  await app.setBody(`![shot](assets/${id}/tiny.png){width=120}`);
+  await app.page.keyboard.press("Control+e");
+
+  const img = app.page.locator("#preview-scroll img");
+  await expect(img).toHaveAttribute("width", "120");
+  await expect(img).toHaveAttribute("alt", "shot");
+  await expect.poll(() => img.evaluate((el) => el.clientWidth)).toBe(120);
+  await expect(app.page.locator("#preview-scroll")).not.toContainText("{width=120}");
+});
+
+test("[text]{.name} renders a colored span, non-palette forms stay literal", async ({ app }) => {
+  await app.newPageWithBody("Colors", "[warn **hard**]{.red} and [nope]{.notacolor}", 1);
+  await app.page.keyboard.press("Control+e");
+
+  const span = app.page.locator("#preview-scroll p span");
+  await expect(span).toHaveCount(1);
+  await expect
+    .poll(() => span.evaluate((el) => getComputedStyle(el).color))
+    .toBe("rgb(224, 108, 117)"); // #e06c75
+  await expect(span.locator("strong")).toHaveText("hard");
+  await expect(app.page.locator("#preview-scroll")).toContainText("[nope]{.notacolor}");
+});

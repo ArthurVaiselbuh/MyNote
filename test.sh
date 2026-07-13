@@ -7,11 +7,14 @@ echo "=== MyNote tests ==="
 
 cd "$root/src/frontend"
 [ -d node_modules ] || npm install --no-audit --no-fund
-echo "[1/2] svelte-check"
+echo "[1/3] svelte-check"
 npm run check
 
+echo "[2/3] vitest"
+npm test
+
 cd "$root/src/backend"
-echo "[2/2] cargo test"
+echo "[3/3] cargo test"
 cargo test
 
 # e2e drives the real exe over WebView2's CDP endpoint, which only exists on

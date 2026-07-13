@@ -652,6 +652,14 @@ export function openSectionPicker(mode: "goto" | "move") {
   app.modal = "sectionPicker";
 }
 
+export function escapeModal() {
+  if (app.modal === "colorPicker") {
+    app.modal = "insert";
+    return;
+  }
+  closeModal();
+}
+
 export function closeModal() {
   app.modal = "none";
   app.confirm = null;

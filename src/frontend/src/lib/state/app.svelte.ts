@@ -9,6 +9,7 @@ export type ModalName =
   | "sectionPicker"
   | "confirm"
   | "insert"
+  | "colorPicker"
   | "importMht"
   | "openNotebook"
   | "welcome";
