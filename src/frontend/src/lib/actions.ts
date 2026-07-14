@@ -191,31 +191,65 @@ export function deleteSectionWithConfirm(id: string) {
   );
 }
 
-// ---------- mht import ----------
+// ---------- import ----------
 
-export async function importMhtDialog() {
-  log.verbose("open OneNote import dialog");
-  const picked = await openDialog({
-    multiple: true,
-    title: "Import OneNote export",
-    filters: [{ name: "OneNote single-file export", extensions: ["mht", "mhtml"] }],
-  });
+export function openImport() {
+  log.verbose("open import pane");
+  app.importPreview = null;
+  app.importSource = "";
+  app.importPaths = [];
+  app.importBusy = false;
+  app.modal = "import";
+}
+
+export function setImportMode(mode: "mht" | "md") {
+  if (app.importMode === mode) return;
+  app.importMode = mode;
+  app.importPreview = null;
+  app.importSource = "";
+  app.importPaths = [];
+}
+
+export async function chooseImportSource() {
+  const mht = app.importMode === "mht";
+  log.verbose(mht ? "choose OneNote files" : "choose markdown folder");
+  const picked = await openDialog(
+    mht
+      ? {
+          multiple: true,
+          title: "Import OneNote export",
+          filters: [{ name: "OneNote single-file export", extensions: ["mht", "mhtml"] }],
+        }
+      : { directory: true, title: "Choose a folder of Markdown files" },
+  );
   const paths = typeof picked === "string" ? [picked] : picked;
   if (!paths || paths.length === 0) return;
+  app.importPaths = paths;
+  app.importSource = mht ? sourceLabel(paths) : (paths[0] ?? "");
+  app.importBusy = true;
+  app.importPreview = null;
   try {
-    app.importPreview = await api.inspectMht(paths);
-    app.modal = "importMht";
+    app.importPreview = mht ? await api.inspectMht(paths) : await api.inspectMd(paths[0]);
   } catch (e) {
     app.status = String(e);
+  } finally {
+    app.importBusy = false;
   }
 }
 
-export async function runMhtImport() {
-  const paths = (app.importPreview ?? []).filter((f) => !f.error).map((f) => f.path);
+function sourceLabel(paths: string[]): string {
+  const names = paths.map((p) => p.replace(/^.*[\\/]/, ""));
+  return names.length <= 2 ? names.join(", ") : `${names.length} files`;
+}
+
+export async function runImport() {
+  const preview = app.importPreview;
+  if (!preview || preview.pageCount === 0) return;
+  const mht = app.importMode === "mht";
+  const paths = app.importPaths;
   closeModal();
-  if (paths.length === 0) return;
   try {
-    const outcome = await api.importMht(paths);
+    const outcome = mht ? await api.importMht(paths) : await api.importMd(paths[0]);
     await refreshTree();
     const idx =
       app.notebook?.sections.findIndex((s) => s.id === outcome.sectionIds[0]) ?? -1;

@@ -4,7 +4,8 @@ use std::sync::Mutex;
 use tauri::State;
 
 use crate::assets;
-use crate::import_mht::{self, FilePreview, ImportOutcome};
+use crate::import::{ImportOutcome, ImportPreview};
+use crate::{import_md, import_mht};
 use crate::search::{self, SearchHit};
 use crate::settings::{self, Settings};
 use crate::store::{Notebook, PageNode, Section, Store, UndoOutcome};
@@ -268,7 +269,7 @@ pub fn save_image(
 }
 
 #[tauri::command]
-pub fn inspect_mht(state: State<'_, AppState>, paths: Vec<String>) -> Result<Vec<FilePreview>, String> {
+pub fn inspect_mht(state: State<'_, AppState>, paths: Vec<String>) -> Result<ImportPreview, String> {
     with_store(&state, |s| Ok(import_mht::inspect(s, &paths)))
 }
 
@@ -276,6 +277,17 @@ pub fn inspect_mht(state: State<'_, AppState>, paths: Vec<String>) -> Result<Vec
 pub fn import_mht(state: State<'_, AppState>, paths: Vec<String>) -> Result<ImportOutcome, String> {
     log::info!("import {} OneNote file(s)", paths.len());
     with_store(&state, |s| import_mht::import(s, &paths))
+}
+
+#[tauri::command]
+pub fn inspect_md(state: State<'_, AppState>, root: String) -> Result<ImportPreview, String> {
+    with_store(&state, |s| import_md::inspect(s, &root))
+}
+
+#[tauri::command]
+pub fn import_md(state: State<'_, AppState>, root: String) -> Result<ImportOutcome, String> {
+    log::info!("import markdown folder");
+    with_store(&state, |s| import_md::import(s, &root))
 }
 
 #[tauri::command]

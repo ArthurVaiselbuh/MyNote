@@ -10,7 +10,7 @@
   import Tree from "./lib/components/Tree.svelte";
   import ConfirmDialog from "./lib/components/modals/ConfirmDialog.svelte";
   import HelpOverlay from "./lib/components/modals/HelpOverlay.svelte";
-  import ImportMht from "./lib/components/modals/ImportMht.svelte";
+  import Import from "./lib/components/modals/Import.svelte";
   import ColorPicker from "./lib/components/modals/ColorPicker.svelte";
   import InsertHelper from "./lib/components/modals/InsertHelper.svelte";
   import OpenNotebook from "./lib/components/modals/OpenNotebook.svelte";
@@ -72,7 +72,7 @@
   {#if app.modal === "confirm"}<ConfirmDialog />{/if}
   {#if app.modal === "insert"}<InsertHelper />{/if}
   {#if app.modal === "colorPicker"}<ColorPicker />{/if}
-  {#if app.modal === "importMht"}<ImportMht />{/if}
+  {#if app.modal === "import"}<Import />{/if}
   {#if app.modal === "openNotebook"}<OpenNotebook />{/if}
 
   <!-- always mounted: owns its own first-run trigger and visibility -->

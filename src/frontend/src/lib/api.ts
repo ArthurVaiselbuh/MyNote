@@ -44,20 +44,26 @@ export interface UndoOutcome {
   pageId: string | null;
 }
 
-export interface MhtPagePreview {
+export interface PagePreview {
   title: string;
   duplicate: boolean;
+  children: PagePreview[];
 }
 
-export interface MhtFilePreview {
-  path: string;
-  sectionName: string;
-  sectionExists: boolean;
-  pages: MhtPagePreview[];
+export interface SectionPreview {
+  name: string;
+  exists: boolean;
   error: string | null;
+  pages: PagePreview[];
 }
 
-export interface MhtImportOutcome {
+export interface ImportPreview {
+  sections: SectionPreview[];
+  pageCount: number;
+  duplicateCount: number;
+}
+
+export interface ImportOutcome {
   sectionIds: string[];
   pageCount: number;
 }
@@ -138,9 +144,11 @@ export const api = {
   saveImage: (pageId: string, data: string, ext: string) =>
     invoke<string>("save_image", { pageId, data, ext }),
   inspectMht: (paths: string[]) =>
-    invoke<MhtFilePreview[]>("inspect_mht", { paths }),
+    invoke<ImportPreview>("inspect_mht", { paths }),
   importMht: (paths: string[]) =>
-    invoke<MhtImportOutcome>("import_mht", { paths }),
+    invoke<ImportOutcome>("import_mht", { paths }),
+  inspectMd: (root: string) => invoke<ImportPreview>("inspect_md", { root }),
+  importMd: (root: string) => invoke<ImportOutcome>("import_md", { root }),
   getSettings: () => invoke<Settings>("get_settings"),
   setSettings: (settings: Settings) => invoke<void>("set_settings", { settings }),
 };

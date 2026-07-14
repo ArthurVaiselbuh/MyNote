@@ -1,12 +1,13 @@
 use base64::engine::general_purpose::STANDARD;
 use base64::Engine;
 use percent_encoding::percent_decode_str;
-use serde::Serialize;
-use std::collections::HashSet;
 use std::fs;
 use std::path::Path;
 
-use crate::store::{flatten_pages, new_id, PageNode, Section, Store};
+use crate::import::{
+    section_exists, DupTracker, ImportOutcome, ImportPreview, PagePreview, SectionPreview,
+};
+use crate::store::{new_id, PageNode, Section, Store};
 
 fn err<E: std::fmt::Display>(e: E) -> String {
     e.to_string()
@@ -17,71 +18,37 @@ fn err<E: std::fmt::Display>(e: E) -> String {
 // destination page id (and thus the assets folder) exists
 const IMG_MARKER: char = '\u{1}';
 
-#[derive(Serialize, Clone)]
-#[serde(rename_all = "camelCase")]
-pub struct PagePreview {
-    pub title: String,
-    pub duplicate: bool,
-}
-
-#[derive(Serialize, Clone)]
-#[serde(rename_all = "camelCase")]
-pub struct FilePreview {
-    pub path: String,
-    pub section_name: String,
-    pub section_exists: bool,
-    pub pages: Vec<PagePreview>,
-    pub error: Option<String>,
-}
-
-#[derive(Serialize)]
-#[serde(rename_all = "camelCase")]
-pub struct ImportOutcome {
-    pub section_ids: Vec<String>,
-    pub page_count: usize,
-}
-
-pub fn inspect(store: &Store, paths: &[String]) -> Vec<FilePreview> {
-    let mut seen_titles: HashSet<String> = flatten_pages(&store.notebook)
-        .into_iter()
-        .map(|(_, p)| p.title.to_lowercase())
-        .collect();
-    paths
+pub fn inspect(store: &Store, paths: &[String]) -> ImportPreview {
+    let mut dup = DupTracker::new(store);
+    let sections = paths
         .iter()
         .map(|path| {
-            let section_name = section_name_of(path);
-            let section_exists = store
-                .notebook
-                .sections
-                .iter()
-                .any(|s| s.name.eq_ignore_ascii_case(&section_name));
+            let name = section_name_of(path);
+            let exists = section_exists(store, &name);
             match load_pages(path) {
-                Ok((pages, _)) => FilePreview {
-                    path: path.clone(),
-                    section_name,
-                    section_exists,
+                Ok((pages, _)) => SectionPreview {
+                    exists,
+                    error: None,
                     pages: pages
                         .into_iter()
-                        .map(|p| {
-                            let duplicate = !seen_titles.insert(p.title.to_lowercase());
-                            PagePreview {
-                                title: p.title,
-                                duplicate,
-                            }
+                        .map(|p| PagePreview {
+                            duplicate: dup.mark(&p.title),
+                            title: p.title,
+                            children: vec![],
                         })
                         .collect(),
-                    error: None,
+                    name,
                 },
-                Err(e) => FilePreview {
-                    path: path.clone(),
-                    section_name,
-                    section_exists,
-                    pages: vec![],
+                Err(e) => SectionPreview {
+                    name,
+                    exists,
                     error: Some(e),
+                    pages: vec![],
                 },
             }
         })
-        .collect()
+        .collect();
+    ImportPreview::from_sections(sections)
 }
 
 pub fn import(store: &mut Store, paths: &[String]) -> Result<ImportOutcome, String> {
@@ -948,14 +915,14 @@ mod tests {
         store.rename_section(&sid, "Work Notes").unwrap();
 
         let path = write_fixture(dir.path(), "Work Notes.mht", SINGLE_PART);
-        let previews = inspect(&store, &[path]);
-        assert_eq!(previews.len(), 1);
-        let preview = &previews[0];
-        assert_eq!(preview.section_name, "Work Notes");
-        assert!(preview.section_exists);
-        assert!(preview.error.is_none());
-        assert!(preview.pages[0].duplicate);
-        assert!(!preview.pages[1].duplicate);
+        let preview = inspect(&store, &[path]);
+        assert_eq!(preview.sections.len(), 1);
+        let section = &preview.sections[0];
+        assert_eq!(section.name, "Work Notes");
+        assert!(section.exists);
+        assert!(section.error.is_none());
+        assert!(section.pages[0].duplicate);
+        assert!(!section.pages[1].duplicate);
     }
 
     #[test]
@@ -963,8 +930,8 @@ mod tests {
         let dir = tempdir().unwrap();
         let store = Store::open(dir.path()).unwrap();
         let path = write_fixture(dir.path(), "junk.mht", "not an mht at all");
-        let previews = inspect(&store, &[path]);
-        assert!(previews[0].error.is_some());
+        let preview = inspect(&store, &[path]);
+        assert!(preview.sections[0].error.is_some());
     }
 
     #[test]

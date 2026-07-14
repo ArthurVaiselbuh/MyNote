@@ -1,4 +1,4 @@
-import type { MhtFilePreview, Notebook, RecentNotebook, SearchHit, Settings } from "../api";
+import type { ImportPreview, Notebook, RecentNotebook, SearchHit, Settings } from "../api";
 import { defaultSettings } from "../api";
 
 export type Pane = "tree" | "editor" | "search" | "results";
@@ -10,7 +10,7 @@ export type ModalName =
   | "confirm"
   | "insert"
   | "colorPicker"
-  | "importMht"
+  | "import"
   | "openNotebook"
   | "welcome";
 
@@ -41,7 +41,11 @@ export const app = $state({
   modal: "none" as ModalName,
   sectionPickerMode: "goto" as "goto" | "move",
   confirm: null as ConfirmRequest | null,
-  importPreview: null as MhtFilePreview[] | null,
+  importMode: "md" as "mht" | "md",
+  importSource: "",
+  importPaths: [] as string[],
+  importPreview: null as ImportPreview | null,
+  importBusy: false,
   recentNotebooks: [] as RecentNotebook[],
 
   treeFilter: "",

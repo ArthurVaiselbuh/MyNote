@@ -100,14 +100,27 @@ are supported cross-platform builds off the same code.
   other Markdown renderers collapse those runs — chosen so the file stays
   clean plain Markdown instead of littering it with `&nbsp;`/`<br>` tokens.
   The importer preserves OneNote's empty paragraphs as extra newlines.
-- **OneNote import** (Ctrl+I, `import_mht.rs`): parses OneNote single-file
-  exports (.mht) in Rust — hand-rolled MIME/quoted-printable/HTML handling, no
-  new deps. Each file becomes a *new* section named after the file; pages split
-  on top-level `border-width:100%` divs (20pt paragraph = title, gray date
-  block → italic stamp line); multipart image parts land in
-  `assets/<page-id>/`. A preview modal warns about duplicate section/page names
-  (vs the notebook and within the batch) before importing — never auto-merges.
-  Markdown specials in note text are not escaped (fidelity over rendering).
+- **Import** (Ctrl+I) is a unified in-app pane (`Import.svelte`, an `app.modal`
+  like Open Notebook) with two sources; both preview a tree of the
+  sections/pages that will be created — flagging duplicate titles and
+  colliding section names (vs the notebook and within the batch) — and always
+  add *new* sections, never auto-merge. Shared preview/outcome types and the
+  duplicate tracker live in `import.rs`.
+  - **OneNote** (`import_mht.rs`): parses single-file exports (.mht) in Rust —
+    hand-rolled MIME/quoted-printable/HTML handling, no new deps. Each file
+    becomes a section named after the file; pages split on top-level
+    `border-width:100%` divs (20pt paragraph = title, gray date block → italic
+    stamp line); multipart image parts land in `assets/<page-id>/`. Markdown
+    specials in note text are not escaped (fidelity over rendering).
+  - **Markdown folder** (`import_md.rs`): copies a folder of `.md`/`.markdown`
+    files into the notebook as fresh `<uuid>.md` pages (never referenced in
+    place). Top-level subfolders become sections; deeper subfolders become
+    nested parent pages (sections can't nest) whose body is their
+    `README.md`/`index.md` if present else a `# <folder>` stub; loose top-level
+    files go into one section named after the chosen folder. Titles come from
+    each file's H1 (else its filename), normalized to a leading H1 via
+    `store::set_title`. Folders with no markdown anywhere are skipped; relative
+    image links are copied verbatim (no asset rewriting).
 - **Inline formatting beyond CommonMark uses Pandoc attribute syntax**,
   whitelisted (markdown-it stays `html:false`): `![alt](src){width=420}` sets
   image width (px, 1–9999, still capped by the preview width) and

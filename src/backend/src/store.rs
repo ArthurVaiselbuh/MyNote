@@ -705,7 +705,7 @@ pub fn flatten_pages<'a>(notebook: &'a Notebook) -> Vec<(&'a Section, &'a PageNo
     out
 }
 
-fn extract_title(content: &str) -> Option<String> {
+pub(crate) fn extract_title(content: &str) -> Option<String> {
     let first = content.lines().find(|l| !l.trim().is_empty())?;
     let title = first.trim().strip_prefix("# ")?.trim();
     if title.is_empty() {
@@ -715,7 +715,7 @@ fn extract_title(content: &str) -> Option<String> {
     }
 }
 
-fn set_title(content: &str, title: &str) -> String {
+pub(crate) fn set_title(content: &str, title: &str) -> String {
     let lines: Vec<&str> = content.lines().collect();
     if let Some(pos) = lines.iter().position(|l| !l.trim().is_empty()) {
         if lines[pos].trim().starts_with("# ") {
