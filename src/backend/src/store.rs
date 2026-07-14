@@ -106,16 +106,7 @@ pub struct Store {
 impl Store {
     pub fn open(root: &Path) -> Result<Store, String> {
         fs::create_dir_all(root).map_err(err)?;
-        let file = root.join("notebook.json");
-        let notebook: Notebook = if file.exists() {
-            let text = fs::read_to_string(&file).map_err(err)?;
-            serde_json::from_str(&text).map_err(err)?
-        } else {
-            Notebook {
-                sections: vec![],
-                last_view: LastView::default(),
-            }
-        };
+        let notebook = load_notebook(root)?;
         let mut store = Store {
             root: root.to_path_buf(),
             notebook,
@@ -136,8 +127,11 @@ impl Store {
 
     pub fn save(&self) -> Result<(), String> {
         let json = serde_json::to_string_pretty(&self.notebook).map_err(err)?;
-        fs::write(self.root.join("notebook.json"), json).map_err(err)?;
-        Ok(())
+        let path = self.root.join("notebook.json");
+        if path.exists() {
+            let _ = fs::copy(&path, self.root.join("notebook.json.bak"));
+        }
+        atomic_write(&path, json.as_bytes())
     }
 
     pub fn page_path(&self, id: &str) -> PathBuf {
@@ -231,11 +225,10 @@ impl Store {
     ) -> Result<PageNode, String> {
         let id = new_id();
         let stamp = chrono::Local::now().format("%Y-%m-%d %H:%M");
-        fs::write(
-            self.page_path(&id),
-            format!("# Untitled\n\n_{stamp}_\n\n"),
-        )
-        .map_err(err)?;
+        atomic_write(
+            &self.page_path(&id),
+            format!("# Untitled\n\n_{stamp}_\n\n").as_bytes(),
+        )?;
         let node = PageNode {
             id: id.clone(),
             title: "Untitled".into(),
@@ -268,7 +261,7 @@ impl Store {
             .ok_or("page not found")?
             .title
             .clone();
-        fs::write(self.page_path(id), content).map_err(err)?;
+        atomic_write(&self.page_path(id), content.as_bytes())?;
         let title = extract_title(content).unwrap_or(existing_title);
         if let Some(node) = self.find_page_mut(id) {
             node.title = title.clone();
@@ -280,7 +273,7 @@ impl Store {
     pub fn rename_page(&mut self, id: &str, title: &str) -> Result<(), String> {
         let title = non_empty(title, "Untitled");
         let content = self.read_page(id).unwrap_or_default();
-        fs::write(self.page_path(id), set_title(&content, &title)).map_err(err)?;
+        atomic_write(&self.page_path(id), set_title(&content, &title).as_bytes())?;
         let node = self.find_page_mut(id).ok_or("page not found")?;
         node.title = title;
         self.save()
@@ -633,6 +626,42 @@ impl Store {
                 .ok_or_else(|| "parent not found".to_string()),
         }
     }
+}
+
+fn atomic_write(path: &Path, contents: &[u8]) -> Result<(), String> {
+    let tmp = path.with_extension("tmp");
+    fs::write(&tmp, contents).map_err(err)?;
+    fs::rename(&tmp, path).map_err(err)
+}
+
+fn parse_notebook(path: &Path) -> Result<Notebook, String> {
+    let text = fs::read_to_string(path).map_err(err)?;
+    serde_json::from_str(&text).map_err(err)
+}
+
+fn load_notebook(root: &Path) -> Result<Notebook, String> {
+    let main = root.join("notebook.json");
+    let backup = root.join("notebook.json.bak");
+    if main.exists() {
+        match parse_notebook(&main) {
+            Ok(notebook) => return Ok(notebook),
+            Err(parse_error) => {
+                if let Ok(notebook) = parse_notebook(&backup) {
+                    log::warn!("notebook.json unreadable; recovered from backup");
+                    return Ok(notebook);
+                }
+                return Err(parse_error);
+            }
+        }
+    }
+    if let Ok(notebook) = parse_notebook(&backup) {
+        log::warn!("notebook.json missing; recovered from backup");
+        return Ok(notebook);
+    }
+    Ok(Notebook {
+        sections: vec![],
+        last_view: LastView::default(),
+    })
 }
 
 fn non_empty(value: &str, fallback: &str) -> String {
@@ -1008,6 +1037,32 @@ mod tests {
         store.delete_section(&sid).unwrap();
         assert_eq!(store.notebook.sections.len(), 1);
         assert_eq!(store.notebook.sections[0].name, "Notes");
+    }
+
+    #[test]
+    fn open_recovers_from_backup_when_notebook_json_is_corrupt() {
+        let dir = tempdir().unwrap();
+        let pid;
+        {
+            let mut store = Store::open(dir.path()).unwrap();
+            let sid = section_id(&store);
+            let page = store.create_page(&sid, None, None).unwrap();
+            pid = page.id.clone();
+            store.create_section("Two").unwrap();
+        }
+        assert!(dir.path().join("notebook.json.bak").exists());
+        fs::write(dir.path().join("notebook.json"), b"{ this is not json").unwrap();
+        let store = Store::open(dir.path()).unwrap();
+        assert!(store.find_page(&pid).is_some());
+    }
+
+    #[test]
+    fn open_fails_when_both_notebook_and_backup_are_corrupt() {
+        let dir = tempdir().unwrap();
+        Store::open(dir.path()).unwrap();
+        fs::write(dir.path().join("notebook.json"), b"{ broken").unwrap();
+        fs::write(dir.path().join("notebook.json.bak"), b"{ also broken").unwrap();
+        assert!(Store::open(dir.path()).is_err());
     }
 
     #[test]

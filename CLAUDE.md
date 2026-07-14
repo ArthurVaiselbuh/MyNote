@@ -47,7 +47,9 @@ are supported cross-platform builds off the same code.
 - `notebook.json` — section list + nested page tree (`id`, `title`,
   `expanded`, `children`) + last view. Page titles are cached here but the
   H1 in the `.md` file wins; they are kept in sync on write/rename.
-- `notebook.json` is the only tree metadata file.
+- `notebook.json` is the only tree metadata file; `notebook.json.bak` is a
+  crash-recovery copy `open` falls back to. All file writes go through
+  temp-file-plus-rename (`store::atomic_write`) so a crash can't truncate them.
 - `assets/<page-id>/` — pasted images. Orphans are pruned **only on notebook
   close/switch**, never during a session (preserves editor undo).
 - **Deletes are deferred:** deleting a page/section drops it from
