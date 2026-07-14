@@ -90,6 +90,7 @@ export interface Settings {
   backgroundColor: string;
   panelColor: string;
   accentColor: string;
+  headingColor: string;
   focusAlpha: number;
   scrollSpeed: number;
   logLevel: string;
@@ -104,6 +105,7 @@ export const defaultSettings: Settings = {
   backgroundColor: "#1e1f22",
   panelColor: "#26282b",
   accentColor: "#5aa0f2",
+  headingColor: "#d4d4d4",
   focusAlpha: 0.5,
   scrollSpeed: 1.0,
   logLevel: "info",

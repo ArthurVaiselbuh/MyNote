@@ -6,6 +6,7 @@ export type ModalName =
   | "none"
   | "help"
   | "settings"
+  | "colors"
   | "sectionPicker"
   | "confirm"
   | "insert"

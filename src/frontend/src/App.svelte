@@ -16,6 +16,7 @@
   import OpenNotebook from "./lib/components/modals/OpenNotebook.svelte";
   import SectionPicker from "./lib/components/modals/SectionPicker.svelte";
   import SettingsModal from "./lib/components/modals/SettingsModal.svelte";
+  import ColorsModal from "./lib/components/modals/ColorsModal.svelte";
   import Welcome from "./lib/components/Welcome.svelte";
 
   const s = $derived(app.settings);
@@ -51,7 +52,7 @@
 
 <div
   class="app"
-  style="--text:{s.textColor}; --bg:{s.backgroundColor}; --panel:{s.panelColor}; --accent:{s.accentColor}; --focus-alpha:{s.focusAlpha}"
+  style="--text:{s.textColor}; --bg:{s.backgroundColor}; --panel:{s.panelColor}; --accent:{s.accentColor}; --heading:{s.headingColor}; --focus-alpha:{s.focusAlpha}"
 >
   <aside class="tree-pane" class:focused={app.focus === "tree"}>
     <SectionStrip />
@@ -68,6 +69,7 @@
 
   {#if app.modal === "help"}<HelpOverlay />{/if}
   {#if app.modal === "settings"}<SettingsModal />{/if}
+  {#if app.modal === "colors"}<ColorsModal />{/if}
   {#if app.modal === "sectionPicker"}<SectionPicker />{/if}
   {#if app.modal === "confirm"}<ConfirmDialog />{/if}
   {#if app.modal === "insert"}<InsertHelper />{/if}

@@ -319,6 +319,7 @@ input:focus {
 .preview h1,
 .preview h2,
 .preview h3 {
+  color: var(--heading);
   border-bottom: 1px solid var(--guide);
   padding-bottom: 4px;
 }
