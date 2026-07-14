@@ -1,3 +1,4 @@
+use log::LevelFilter;
 use serde::{Deserialize, Serialize};
 use std::fs;
 use std::path::PathBuf;
@@ -24,6 +25,7 @@ pub struct Settings {
     pub accent_color: String,
     pub focus_alpha: f64,
     pub scroll_speed: f64,
+    pub log_level: String,
     pub window: Option<WindowGeom>,
 }
 
@@ -39,6 +41,7 @@ impl Default for Settings {
             accent_color: "#5aa0f2".into(),
             focus_alpha: 0.5,
             scroll_speed: 1.0,
+            log_level: "info".into(),
             window: None,
         }
     }
@@ -80,6 +83,22 @@ pub fn default_notebook_dir() -> PathBuf {
     app_dir().join("notebook")
 }
 
+pub const LOG_FILE_STEM: &str = "MyNote";
+
+impl Settings {
+    pub fn log_level_filter(&self) -> LevelFilter {
+        match self.log_level.trim().to_ascii_lowercase().as_str() {
+            "off" | "none" => LevelFilter::Off,
+            "error" => LevelFilter::Error,
+            "info" => LevelFilter::Info,
+            "debug" => LevelFilter::Debug,
+            "warn" | "warning" => LevelFilter::Warn,
+            "verbose" | "trace" => LevelFilter::Trace,
+            _ => LevelFilter::Info,
+        }
+    }
+}
+
 pub const RECENT_LIMIT: usize = 5;
 
 impl Settings {
@@ -116,6 +135,23 @@ mod tests {
         s.remember_notebook("C:\\b");
         s.remember_notebook("C:\\A");
         assert_eq!(s.recent_notebooks, vec!["C:\\A", "C:\\b"]);
+    }
+
+    #[test]
+    fn log_level_parses_known_names_and_defaults_to_warn() {
+        let level = |name: &str| {
+            let mut s = Settings::default();
+            s.log_level = name.into();
+            s.log_level_filter()
+        };
+        assert_eq!(level("off"), LevelFilter::Off);
+        assert_eq!(level("error"), LevelFilter::Error);
+        assert_eq!(level("warn"), LevelFilter::Warn);
+        assert_eq!(level("INFO"), LevelFilter::Info);
+        assert_eq!(level("verbose"), LevelFilter::Trace);
+        assert_eq!(level("trace"), LevelFilter::Trace);
+        assert_eq!(level("nonsense"), LevelFilter::Info);
+        assert_eq!(Settings::default().log_level_filter(), LevelFilter::Info);
     }
 
     #[test]

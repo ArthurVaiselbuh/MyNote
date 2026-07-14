@@ -67,6 +67,17 @@
       <button onclick={resetColors}>Reset to defaults</button>
     </div>
 
+    <div class="settings-row">
+      <label for="set-log">Log detail (applies after restart)</label>
+      <select id="set-log" bind:value={app.settings.logLevel} onchange={persist}>
+        <option value="off">Off</option>
+        <option value="error">Errors only</option>
+        <option value="warn">Warnings</option>
+        <option value="info">Info</option>
+        <option value="verbose">Verbose</option>
+      </select>
+    </div>
+
     <div class="modal-title" style="margin-top:14px">Notebook</div>
     <div class="settings-path">{app.root || "(none open)"}</div>
     <div class="settings-row">

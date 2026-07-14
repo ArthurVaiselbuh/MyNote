@@ -2,6 +2,7 @@ import { getCurrentWebview } from "@tauri-apps/api/webview";
 import { open as openDialog } from "@tauri-apps/plugin-dialog";
 import { api, type NotebookInfo, type Section, type UndoOutcome } from "./api";
 import { editorCtl } from "./editorCtl";
+import { log } from "./log";
 import { app, type ModalName, type Pane } from "./state/app.svelte";
 import { countPages, countSubtree, findNode, flatten, locate, sectionOfPage } from "./treeUtils";
 
@@ -39,6 +40,7 @@ function applyNotebook(info: NotebookInfo) {
 }
 
 export async function openNotebookModal() {
+  log.verbose("open notebook picker");
   try {
     app.recentNotebooks = await api.listRecentNotebooks();
   } catch {
@@ -64,6 +66,7 @@ export async function openNotebookAt(path: string) {
 }
 
 export async function browseNotebookFile() {
+  log.verbose("open notebook file dialog");
   const file = await openDialog({
     title: "Open notebook — select its notebook.json",
     filters: [{ name: "MyNote notebook (notebook.json)", extensions: ["json"] }],
@@ -73,6 +76,7 @@ export async function browseNotebookFile() {
 }
 
 export async function createNotebookDialog() {
+  log.verbose("open new-notebook folder dialog");
   const dir = await openDialog({
     directory: true,
     title: "Choose an empty folder for the new notebook",
@@ -190,6 +194,7 @@ export function deleteSectionWithConfirm(id: string) {
 // ---------- mht import ----------
 
 export async function importMhtDialog() {
+  log.verbose("open OneNote import dialog");
   const picked = await openDialog({
     multiple: true,
     title: "Import OneNote export",
@@ -503,6 +508,7 @@ export async function moveSelectedToAdjacentSection(offset: number) {
 // ---------- search ----------
 
 export function openSearch() {
+  log.verbose("open search");
   app.view = "results";
   app.focus = "search";
   app.searchFocusReq++;
@@ -543,6 +549,7 @@ export function openResult(idx: number) {
 // ---------- focus / view ----------
 
 export function focusPane(pane: Pane) {
+  log.verbose(`focus ${pane}`);
   // only the editor forces the page view — focusing the tree must not kick
   // the user out of results, or the results Tab ring could never cycle
   if (pane === "editor") app.view = "page";
@@ -643,11 +650,13 @@ function blurActive() {
 // ---------- modals ----------
 
 export function openModal(name: ModalName) {
+  log.verbose(`open modal ${name}`);
   app.modal = name;
 }
 
 export function openSectionPicker(mode: "goto" | "move") {
   if (mode === "move" && !app.selectedId) return;
+  log.verbose(`open section picker (${mode})`);
   app.sectionPickerMode = mode;
   app.modal = "sectionPicker";
 }
@@ -674,6 +683,7 @@ export function askConfirm(message: string, action: () => void | Promise<void>) 
 
 export function openInsertHelper() {
   if (app.view !== "page" || !app.currentPageId) return;
+  log.verbose("open insert helper");
   if (app.mode !== "edit") app.mode = "edit";
   app.modal = "insert";
 }

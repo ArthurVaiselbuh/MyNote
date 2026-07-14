@@ -12,11 +12,13 @@ use std::sync::Mutex;
 use tauri::Manager;
 
 pub fn run() {
+    let settings = Settings::load();
     tauri::Builder::default()
+        .plugin(build_log_plugin(&settings))
         .plugin(tauri_plugin_dialog::init())
         .manage(AppState {
             store: Mutex::new(None),
-            settings: Mutex::new(Settings::load()),
+            settings: Mutex::new(settings),
         })
         .register_uri_scheme_protocol("note-asset", |ctx, request| {
             serve_asset(ctx.app_handle(), &request)
@@ -75,7 +77,24 @@ pub fn run() {
         .expect("error while running MyNote");
 }
 
+fn build_log_plugin<R: tauri::Runtime>(settings: &Settings) -> tauri::plugin::TauriPlugin<R> {
+    const MAX_LOG_SIZE: u128 = 5 * 1024 * 1024;
+    tauri_plugin_log::Builder::new()
+        .clear_targets()
+        .target(tauri_plugin_log::Target::new(
+            tauri_plugin_log::TargetKind::Folder {
+                path: settings::app_dir(),
+                file_name: Some(settings::LOG_FILE_STEM.to_string()),
+            },
+        ))
+        .max_file_size(MAX_LOG_SIZE)
+        .rotation_strategy(tauri_plugin_log::RotationStrategy::KeepOne)
+        .level(settings.log_level_filter())
+        .build()
+}
+
 fn persist_on_close(window: &tauri::Window) {
+    log::trace!("window close requested — persisting notebook and settings");
     let state = window.state::<AppState>();
     if let Ok(mut guard) = state.store.lock() {
         if let Some(store) = guard.take() {
@@ -125,6 +144,7 @@ fn serve_asset(
         return not_found();
     };
     let file = root.join("assets").join(rel);
+    log::trace!("serving asset {rel}");
     match std::fs::read(&file) {
         Ok(bytes) => tauri::http::Response::builder()
             .status(200)
@@ -132,7 +152,10 @@ fn serve_asset(
             .header("Access-Control-Allow-Origin", "*")
             .body(bytes)
             .unwrap_or_else(|_| not_found()),
-        Err(_) => not_found(),
+        Err(e) => {
+            log::warn!("asset {rel} not readable: {e}");
+            not_found()
+        }
     }
 }
 

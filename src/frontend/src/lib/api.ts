@@ -86,6 +86,7 @@ export interface Settings {
   accentColor: string;
   focusAlpha: number;
   scrollSpeed: number;
+  logLevel: string;
   window: WindowGeom | null;
 }
 
@@ -99,6 +100,7 @@ export const defaultSettings: Settings = {
   accentColor: "#5aa0f2",
   focusAlpha: 0.5,
   scrollSpeed: 1.0,
+  logLevel: "info",
   window: null,
 };
 
