@@ -1,5 +1,7 @@
 mod assets;
 mod commands;
+mod import;
+mod import_md;
 mod import_mht;
 mod search;
 mod settings;
@@ -46,6 +48,8 @@ pub fn run() {
             commands::save_image,
             commands::inspect_mht,
             commands::import_mht,
+            commands::inspect_md,
+            commands::import_md,
             commands::get_settings,
             commands::set_settings
         ])

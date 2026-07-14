@@ -538,10 +538,48 @@ input:focus {
   padding: 0 5px;
 }
 
-/* ---------- mht import ---------- */
+/* ---------- import ---------- */
 
+.import-modes {
+  display: flex;
+  gap: 6px;
+  margin-bottom: 12px;
+}
+.import-mode {
+  flex: 1;
+  padding: 7px 10px;
+  border: 1px solid var(--guide);
+  border-radius: 6px;
+  background: transparent;
+  color: var(--text);
+}
+.import-mode.active {
+  border-color: var(--accent);
+  background: var(--select);
+  font-weight: 600;
+}
+.import-source {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+.import-source-label {
+  color: var(--muted);
+  font-size: 13px;
+  word-break: break-all;
+}
+.import-hint {
+  color: var(--muted);
+  font-size: 12px;
+  margin: 8px 0 4px;
+}
+.import-empty {
+  color: var(--muted);
+  font-size: 13px;
+  padding: 12px 2px;
+}
 .import-files {
-  max-height: 45vh;
+  max-height: 42vh;
   overflow-y: auto;
 }
 .import-file {

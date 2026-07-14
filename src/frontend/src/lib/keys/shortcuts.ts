@@ -25,7 +25,7 @@ export const GLOBAL_SHORTCUTS: Shortcut[] = [
   { keys: `${M}+G`, desc: "Go to section" },
   { keys: `${M}+${S}+G`, desc: "Move page to section" },
   { keys: `${M}+O`, desc: "Open notebook" },
-  { keys: `${M}+I`, desc: "Import OneNote .mht" },
+  { keys: `${M}+I`, desc: "Import", search: "onenote markdown mht folder pages sections" },
   { keys: `${M}+,`, desc: "Settings" },
   { keys: `${M}+= / − / 0`, desc: "Zoom in / out / reset" },
   { keys: `F3 / ${S}+F3`, desc: "Next / prev match" },
