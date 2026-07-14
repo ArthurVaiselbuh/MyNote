@@ -60,7 +60,8 @@
         <div class="open-nb-empty">No recent notebooks yet</div>
       {/if}
       {#each items as item, i (i)}
-        <!-- svelte-ignore a11y_click_events_have_key_events a11y_no_static_element_interactions -->
+        <!-- svelte-ignore a11y_click_events_have_key_events -->
+        <!-- svelte-ignore a11y_no_static_element_interactions -->
         <div
           class="recent-item"
           class:selected={i === sel}

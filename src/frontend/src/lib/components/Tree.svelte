@@ -61,6 +61,7 @@
   }
 </script>
 
+<!-- svelte-ignore a11y_interactive_supports_focus -->
 <div
   class="tree"
   role="tree"
@@ -80,6 +81,8 @@
     />
   {/if}
   {#each rows as row (row.node.id)}
+    <!-- svelte-ignore a11y_interactive_supports_focus -->
+    <!-- svelte-ignore a11y_click_events_have_key_events -->
     <div
       class="row"
       class:selected={row.node.id === app.selectedId}
