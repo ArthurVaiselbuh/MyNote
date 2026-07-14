@@ -75,6 +75,16 @@ enum UndoOp {
     },
 }
 
+impl UndoOp {
+    fn kind(&self) -> &'static str {
+        match self {
+            UndoOp::DeletePage { .. } => "delete page",
+            UndoOp::DeleteSection { .. } => "delete section",
+            UndoOp::MovePage { .. } => "move page",
+        }
+    }
+}
+
 #[derive(Serialize, Clone)]
 #[serde(rename_all = "camelCase")]
 pub struct UndoOutcome {
@@ -414,6 +424,7 @@ impl Store {
         let Some(op) = self.undo_stack.pop() else {
             return Ok(None);
         };
+        log::info!("undo: {}", op.kind());
         let outcome = match &op {
             UndoOp::DeletePage {
                 node,
@@ -476,6 +487,7 @@ impl Store {
         let Some(op) = self.redo_stack.pop() else {
             return Ok(None);
         };
+        log::info!("redo: {}", op.kind());
         let outcome = match op {
             UndoOp::DeletePage { node, .. } => {
                 let title = node.title.clone();

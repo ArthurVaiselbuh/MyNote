@@ -98,6 +98,7 @@ pub fn open_notebook(state: State<'_, AppState>, path: Option<String>) -> Result
             Store::open(&fallback)?
         }
     };
+    log::info!("opened notebook");
     adopt_store(&state, &mut guard, store)
 }
 
@@ -110,6 +111,7 @@ pub fn create_notebook(state: State<'_, AppState>, path: String) -> Result<Noteb
     let mut guard = state.store.lock().map_err(lock_err)?;
     close_current(&mut guard);
     let store = Store::open(&root)?;
+    log::info!("created notebook");
     adopt_store(&state, &mut guard, store)
 }
 
@@ -147,21 +149,25 @@ pub fn get_tree(state: State<'_, AppState>) -> Result<Notebook, String> {
 
 #[tauri::command]
 pub fn create_section(state: State<'_, AppState>, name: String) -> Result<Section, String> {
+    log::info!("create section");
     with_store(&state, |s| s.create_section(&name))
 }
 
 #[tauri::command]
 pub fn rename_section(state: State<'_, AppState>, id: String, name: String) -> Result<(), String> {
+    log::info!("rename section {id}");
     with_store(&state, |s| s.rename_section(&id, &name))
 }
 
 #[tauri::command]
 pub fn move_section(state: State<'_, AppState>, id: String, index: usize) -> Result<(), String> {
+    log::info!("move section {id} to index {index}");
     with_store(&state, |s| s.move_section(&id, index))
 }
 
 #[tauri::command]
 pub fn delete_section(state: State<'_, AppState>, id: String) -> Result<(), String> {
+    log::info!("delete section {id}");
     with_store(&state, |s| s.delete_section(&id))
 }
 
@@ -172,6 +178,7 @@ pub fn create_page(
     parent_id: Option<String>,
     after_id: Option<String>,
 ) -> Result<PageNode, String> {
+    log::info!("create page in section {section_id} (parent {parent_id:?})");
     with_store(&state, |s| {
         s.create_page(&section_id, parent_id.as_deref(), after_id.as_deref())
     })
@@ -179,21 +186,25 @@ pub fn create_page(
 
 #[tauri::command]
 pub fn read_page(state: State<'_, AppState>, id: String) -> Result<String, String> {
+    log::trace!("read page {id}");
     with_store(&state, |s| s.read_page(&id))
 }
 
 #[tauri::command]
 pub fn write_page(state: State<'_, AppState>, id: String, content: String) -> Result<String, String> {
+    log::trace!("write page {id} ({} bytes)", content.len());
     with_store(&state, |s| s.write_page(&id, &content))
 }
 
 #[tauri::command]
 pub fn rename_page(state: State<'_, AppState>, id: String, title: String) -> Result<(), String> {
+    log::info!("rename page {id}");
     with_store(&state, |s| s.rename_page(&id, &title))
 }
 
 #[tauri::command]
 pub fn delete_page(state: State<'_, AppState>, id: String) -> Result<(), String> {
+    log::info!("delete page {id}");
     with_store(&state, |s| s.delete_page(&id))
 }
 
@@ -205,6 +216,7 @@ pub fn move_page(
     parent_id: Option<String>,
     index: usize,
 ) -> Result<(), String> {
+    log::info!("move page {id} to section {to_section} (parent {parent_id:?}, index {index})");
     with_store(&state, |s| {
         s.move_page(&id, &to_section, parent_id.as_deref(), index)
     })
@@ -222,6 +234,7 @@ pub fn redo(state: State<'_, AppState>) -> Result<Option<UndoOutcome>, String> {
 
 #[tauri::command]
 pub fn set_expanded(state: State<'_, AppState>, id: String, expanded: bool) -> Result<(), String> {
+    log::trace!("set expanded {id} = {expanded}");
     with_store(&state, |s| s.set_expanded(&id, expanded))
 }
 
@@ -240,6 +253,7 @@ pub fn search_pages(
     query: String,
     mode: String,
 ) -> Result<Vec<SearchHit>, String> {
+    log::trace!("search ({mode}), {} chars", query.chars().count());
     with_store(&state, |s| search::search(s, &query, &mode))
 }
 
@@ -260,6 +274,7 @@ pub fn inspect_mht(state: State<'_, AppState>, paths: Vec<String>) -> Result<Vec
 
 #[tauri::command]
 pub fn import_mht(state: State<'_, AppState>, paths: Vec<String>) -> Result<ImportOutcome, String> {
+    log::info!("import {} OneNote file(s)", paths.len());
     with_store(&state, |s| import_mht::import(s, &paths))
 }
 
@@ -279,6 +294,7 @@ pub fn set_settings(state: State<'_, AppState>, settings: Settings) -> Result<()
     if guard.window.is_none() {
         guard.window = window;
     }
+    log::info!("settings updated (log level: {})", guard.log_level);
     guard.save();
     Ok(())
 }

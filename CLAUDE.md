@@ -55,11 +55,11 @@ are supported cross-platform builds off the same code.
   until clean close/notebook switch so tree undo can restore them. Only ids
   the app deleted in the current session are purged at close — unreferenced
   files it didn't delete are never touched.
-- App settings (theme colors, zoom, window geometry, scroll speed, focus
-  alpha, last notebook path, recent-notebooks MRU) live in
+- App settings (theme colors, zoom, window geometry, etc.) live in
   `<config>\MyNote\settings.json` (same `config_root()` as above), not in the
   notebook. Window geometry and the MRU are backend-owned: `set_settings`
   ignores the frontend's copies.
+- `<config>\MyNote\MyNote.log` sits alongside `settings.json`.
 
 ## Design decisions
 
@@ -121,6 +121,23 @@ are supported cross-platform builds off the same code.
   so interleaved edits/renames survive an undo; relies on deferred file
   deletion for content. While typing, Ctrl+Z/Y stay native (CodeMirror/input
   undo) — the tree stack only owns them outside text fields.
+- **Logging** goes through `tauri-plugin-log` (the built-in Tauri mechanism)
+  into a single `MyNote.log` file in `app_dir()`, size-capped with
+  `RotationStrategy::KeepOne`. The level
+  comes from `settings.json::logLevel` (`off|error|warn|info|verbose`, — see `settings.rs::log_level_filter`, where
+  `verbose` maps to `Trace`) and is fixed at startup, so changing it needs a
+  restart. Frontend logs (`log.ts`) share the same file and level filter via
+  the plugin's IPC.
+
+  Convention:
+  - **info** = content mutations (create/move/
+  delete/rename page & section, undo/redo, notebook open, import);
+  - **verbose (trace)** = UI events and high-frequency I/O (focus switches, dialog opens,
+  page read/write, search, expand toggles).
+  - Logs are added only to existing code paths — no handlers exist solely to log.
+  - **No user content or personal data in logs:** never log note bodies,
+    page/section titles, search query text, or filesystem paths. Log ids
+    (UUIDs), counts, sizes, indices, and enum/pane names only.
 - **Deferred / out of scope:** light theme, installer.
 
 ## Keyboard & focus model (the hard part — keep the precedence exact)

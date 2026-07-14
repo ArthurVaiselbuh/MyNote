@@ -21,6 +21,7 @@
     "@codemirror/view": "^6.34.0",
     "@tauri-apps/api": "^2.0.0",
     "@tauri-apps/plugin-dialog": "^2.0.0",
+    "@tauri-apps/plugin-log": "^2.0.0",
     "highlight.js": "^11.11.1",
     "markdown-it": "^14.1.0"
   },
