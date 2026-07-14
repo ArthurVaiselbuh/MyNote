@@ -700,6 +700,10 @@ export function escapeModal() {
     app.modal = "insert";
     return;
   }
+  if (app.modal === "colors") {
+    app.modal = "settings";
+    return;
+  }
   closeModal();
 }
 
