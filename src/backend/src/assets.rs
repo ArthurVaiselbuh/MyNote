@@ -54,7 +54,13 @@ pub fn prune(store: &Store) -> Result<usize, String> {
             let _ = fs::remove_dir_all(&dir);
             continue;
         }
-        let content = store.read_page(&page_id).unwrap_or_default();
+        let content = match store.read_page(&page_id) {
+            Ok(content) => content,
+            Err(e) => {
+                log::warn!("skipping asset prune for page {page_id}: {e}");
+                continue;
+            }
+        };
         let mut left = 0;
         for file in fs::read_dir(&dir).map_err(err)? {
             let file = file.map_err(err)?;
@@ -121,6 +127,23 @@ mod tests {
         assert!(dir.path().join(&kept).exists());
         assert!(!dir.path().join(&orphan).exists());
         assert!(!ghost_dir.exists());
+    }
+
+    #[test]
+    fn prune_keeps_assets_when_page_content_is_unreadable() {
+        let dir = tempdir().unwrap();
+        let mut store = Store::open(dir.path()).unwrap();
+        let sid = store.notebook.sections[0].id.clone();
+        let page = store.create_page(&sid, None, None).unwrap();
+        let img = save_image(&store, &page.id, TINY_PNG_B64, "png").unwrap();
+
+        // page still in the tree, but its .md is gone (transient read failure):
+        // prune must not treat that as "no references" and delete the images.
+        std::fs::remove_file(store.page_path(&page.id)).unwrap();
+
+        let removed = prune(&store).unwrap();
+        assert_eq!(removed, 0);
+        assert!(dir.path().join(&img).exists());
     }
 
     #[test]
