@@ -21,6 +21,31 @@
 
   const s = $derived(app.settings);
 
+  let splitterDragging = $state(false);
+
+  function startTreeResize(e: PointerEvent) {
+    const splitter = e.currentTarget as HTMLElement;
+    const offset = app.settings.treeWidth - e.clientX;
+    splitter.setPointerCapture(e.pointerId);
+    splitterDragging = true;
+    const move = (ev: PointerEvent) => act.setTreeWidth(ev.clientX + offset);
+    const stop = () => {
+      splitter.removeEventListener("pointermove", move);
+      splitter.removeEventListener("pointerup", stop);
+      splitter.removeEventListener("pointercancel", stop);
+      splitterDragging = false;
+      void act.persistSettings();
+    };
+    splitter.addEventListener("pointermove", move);
+    splitter.addEventListener("pointerup", stop);
+    splitter.addEventListener("pointercancel", stop);
+  }
+
+  function resetTreeWidth() {
+    act.setTreeWidth(act.TREE_WIDTH_DEFAULT);
+    void act.persistSettings();
+  }
+
   onMount(() => {
     window.addEventListener("keydown", handleGlobal, true);
 
@@ -54,10 +79,22 @@
   class="app"
   style="--text:{s.textColor}; --bg:{s.backgroundColor}; --panel:{s.panelColor}; --accent:{s.accentColor}; --heading:{s.headingColor}; --focus-alpha:{s.focusAlpha}"
 >
-  <aside class="tree-pane" class:focused={app.focus === "tree"}>
+  <aside
+    class="tree-pane"
+    class:focused={app.focus === "tree"}
+    style:width="{s.treeWidth}px"
+  >
     <SectionStrip />
     <Tree />
   </aside>
+  <div
+    class="splitter"
+    class:dragging={splitterDragging}
+    role="separator"
+    aria-orientation="vertical"
+    onpointerdown={startTreeResize}
+    ondblclick={resetTreeWidth}
+  ></div>
   <main class="main-pane">
     {#if app.view === "results"}
       <SearchBar />

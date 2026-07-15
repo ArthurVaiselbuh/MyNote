@@ -774,6 +774,14 @@ export async function zoomBy(delta: number) {
   await persistSettings();
 }
 
+export const TREE_WIDTH_DEFAULT = 300;
+const TREE_WIDTH_MIN = 160;
+
+export function setTreeWidth(width: number) {
+  const max = Math.max(TREE_WIDTH_MIN, window.innerWidth * 0.6);
+  app.settings.treeWidth = Math.round(Math.min(max, Math.max(TREE_WIDTH_MIN, width)));
+}
+
 export async function zoomReset() {
   app.settings.zoom = 1.0;
   await applyZoom();
