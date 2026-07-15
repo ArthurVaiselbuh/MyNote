@@ -41,6 +41,7 @@ export const app = $state({
 
   modal: "none" as ModalName,
   sectionPickerMode: "goto" as "goto" | "move",
+  sectionPickerRenaming: null as string | null,
   confirm: null as ConfirmRequest | null,
   importMode: "md" as "mht" | "md",
   importSource: "",

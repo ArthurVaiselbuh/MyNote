@@ -20,6 +20,11 @@
   let filter = $state("");
   let sel = $state(currentSectionIndex());
   let listEl = $state<HTMLElement>();
+  let filterEl = $state<HTMLInputElement>();
+
+  $effect(() => {
+    if (!app.sectionPickerRenaming) filterEl?.focus();
+  });
 
   const items = $derived.by(() => {
     const f = filter.trim().toLowerCase();
@@ -46,6 +51,25 @@
     sel = target;
   }
 
+  function startRename() {
+    if (items[sel]) app.sectionPickerRenaming = items[sel].section.id;
+  }
+
+  function commitRename(id: string, value: string) {
+    if (app.sectionPickerRenaming !== id) return;
+    app.sectionPickerRenaming = null;
+    const name = value.trim();
+    if (name) void act.renameSection(id, name);
+  }
+
+  function renameKeys(e: KeyboardEvent) {
+    // Enter commits via blur; Esc is peeled by escapeModal (leaves rename first)
+    if (e.key === "Enter") {
+      e.preventDefault();
+      (e.currentTarget as HTMLInputElement).blur();
+    }
+  }
+
   function choose(idx: number) {
     act.closeModal();
     if (moving) {
@@ -70,6 +94,9 @@
     } else if (e.key === "Enter") {
       e.preventDefault();
       if (items[sel]) choose(items[sel].idx);
+    } else if (e.key === "F2") {
+      e.preventDefault();
+      startRename();
     } else if (e.key === "Delete" && e.shiftKey) {
       e.preventDefault();
       if (items[sel]) {
@@ -88,6 +115,7 @@
     <input
       placeholder="filter sections…"
       style="width:100%"
+      bind:this={filterEl}
       bind:value={filter}
       use:autofocusSelect
       onkeydown={keys}
@@ -102,11 +130,22 @@
           onclick={() => choose(item.idx)}
           onmousemove={() => (sel = i)}
         >
-          <span>{item.section.name}</span>
-          <span class="sub">{countPages(item.section)} pages</span>
+          {#if app.sectionPickerRenaming === item.section.id}
+            <input
+              class="picker-rename"
+              value={item.section.name}
+              use:autofocusSelect
+              onkeydown={renameKeys}
+              onblur={(e) => commitRename(item.section.id, e.currentTarget.value)}
+              onclick={(e) => e.stopPropagation()}
+            />
+          {:else}
+            <span>{item.section.name}</span>
+            <span class="sub">{countPages(item.section)} pages</span>
+          {/if}
         </div>
       {/each}
     </div>
-    <div class="hint">↑↓ select · {ALT_LABEL}+↑↓ reorder · Enter {moving ? "move here" : "open"} · Shift+Del delete section · Esc close</div>
+    <div class="hint">↑↓ select · {ALT_LABEL}+↑↓ reorder · Enter {moving ? "move here" : "open"} · F2 rename · Shift+Del delete section · Esc close</div>
   </div>
 </div>

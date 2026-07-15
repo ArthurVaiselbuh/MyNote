@@ -450,6 +450,11 @@ input:focus {
 .picker-item .sub {
   color: var(--muted);
 }
+.picker-rename {
+  flex: 1;
+  margin: -2px 0;
+  padding: 2px 4px;
+}
 
 .modal-buttons {
   display: flex;

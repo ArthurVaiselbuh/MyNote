@@ -692,10 +692,15 @@ export function openSectionPicker(mode: "goto" | "move") {
   if (mode === "move" && !app.selectedId) return;
   log.verbose(`open section picker (${mode})`);
   app.sectionPickerMode = mode;
+  app.sectionPickerRenaming = null;
   app.modal = "sectionPicker";
 }
 
 export function escapeModal() {
+  if (app.modal === "sectionPicker" && app.sectionPickerRenaming) {
+    app.sectionPickerRenaming = null;
+    return;
+  }
   if (app.modal === "colorPicker") {
     app.modal = "insert";
     return;
