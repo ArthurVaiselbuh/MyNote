@@ -291,6 +291,12 @@ pub fn import_md(state: State<'_, AppState>, root: String) -> Result<ImportOutco
 }
 
 #[tauri::command]
+pub fn reset_agents_md(state: State<'_, AppState>) -> Result<(), String> {
+    log::info!("overwrite AGENTS.md with embedded template");
+    with_store(&state, |s| s.write_agents_template())
+}
+
+#[tauri::command]
 pub fn get_settings(state: State<'_, AppState>) -> Result<Settings, String> {
     state.settings.lock().map_err(lock_err).map(|s| s.clone())
 }

@@ -151,6 +151,7 @@ export const api = {
     invoke<ImportOutcome>("import_mht", { paths }),
   inspectMd: (root: string) => invoke<ImportPreview>("inspect_md", { root }),
   importMd: (root: string) => invoke<ImportOutcome>("import_md", { root }),
+  resetAgentsMd: () => invoke<void>("reset_agents_md"),
   getSettings: () => invoke<Settings>("get_settings"),
   setSettings: (settings: Settings) => invoke<void>("set_settings", { settings }),
 };

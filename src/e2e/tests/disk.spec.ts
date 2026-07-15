@@ -21,6 +21,24 @@ test("close prunes orphan assets but keeps referenced ones", async ({ app }) => 
   expect(fs.existsSync(path.join(dir, "orphan.png"))).toBe(false);
 });
 
+test("AGENTS.md is seeded once, user edits survive, settings can overwrite", async ({
+  app,
+}) => {
+  const agents = path.join(app.notebookDir, "AGENTS.md");
+  const template = fs.readFileSync(agents, "utf8");
+  expect(template).toContain("MyNote notebook");
+
+  fs.writeFileSync(agents, "# my own agent notes\n");
+  await app.relaunch();
+  expect(fs.readFileSync(agents, "utf8")).toBe("# my own agent notes\n");
+
+  await app.page.keyboard.press("Control+,");
+  await app.page.getByRole("button", { name: "Overwrite…" }).click();
+  await app.confirmDanger();
+  await expect(app.page.locator(".status-toast")).toContainText("AGENTS.md overwritten");
+  expect(fs.readFileSync(agents, "utf8")).toBe(template);
+});
+
 test("close never touches files the app did not create", async ({ app }) => {
   await app.newTitledPage("Mine", 1);
   // an agent-style stray page file and a plain markdown file in the root

@@ -95,6 +95,8 @@ pub struct UndoOutcome {
 
 const UNDO_LIMIT: usize = 100;
 
+const AGENTS_TEMPLATE: &str = include_str!("../templates/agents-template.md");
+
 pub struct Store {
     pub root: PathBuf,
     pub notebook: Notebook,
@@ -122,7 +124,18 @@ impl Store {
             });
         }
         store.save()?;
+        if !store.agents_md_path().exists() {
+            store.write_agents_template()?;
+        }
         Ok(store)
+    }
+
+    fn agents_md_path(&self) -> PathBuf {
+        self.root.join("AGENTS.md")
+    }
+
+    pub fn write_agents_template(&self) -> Result<(), String> {
+        atomic_write(&self.agents_md_path(), AGENTS_TEMPLATE.as_bytes())
     }
 
     pub fn save(&self) -> Result<(), String> {
@@ -776,6 +789,21 @@ mod tests {
 
     fn section_id(store: &Store) -> String {
         store.notebook.sections[0].id.clone()
+    }
+
+    #[test]
+    fn open_seeds_agents_md_but_never_overwrites_it() {
+        let dir = tempdir().unwrap();
+        let path = dir.path().join("AGENTS.md");
+        {
+            Store::open(dir.path()).unwrap();
+            assert_eq!(fs::read_to_string(&path).unwrap(), AGENTS_TEMPLATE);
+        }
+        fs::write(&path, "user edits").unwrap();
+        let store = Store::open(dir.path()).unwrap();
+        assert_eq!(fs::read_to_string(&path).unwrap(), "user edits");
+        store.write_agents_template().unwrap();
+        assert_eq!(fs::read_to_string(&path).unwrap(), AGENTS_TEMPLATE);
     }
 
     #[test]

@@ -719,8 +719,12 @@ export function closeModal() {
   if (app.focus === "editor" && app.mode === "edit") app.editorFocusReq++;
 }
 
-export function askConfirm(message: string, action: () => void | Promise<void>) {
-  app.confirm = { message, action: () => void action() };
+export function askConfirm(
+  message: string,
+  action: () => void | Promise<void>,
+  label?: string,
+) {
+  app.confirm = { message, action: () => void action(), label };
   app.modal = "confirm";
 }
 
@@ -729,6 +733,21 @@ export function openInsertHelper() {
   log.verbose("open insert helper");
   if (app.mode !== "edit") app.mode = "edit";
   app.modal = "insert";
+}
+
+export function overwriteAgentsMd() {
+  askConfirm(
+    "Overwrite this notebook's AGENTS.md with the built-in template?",
+    async () => {
+      try {
+        await api.resetAgentsMd();
+        flashStatus("AGENTS.md overwritten");
+      } catch (e) {
+        app.status = String(e);
+      }
+    },
+    "Overwrite",
+  );
 }
 
 // ---------- settings / zoom ----------

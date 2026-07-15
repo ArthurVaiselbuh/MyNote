@@ -53,6 +53,11 @@
     </div>
 
     <div class="settings-row">
+      <span>Reset AGENTS.md</span>
+      <button onclick={() => act.overwriteAgentsMd()}>Overwrite…</button>
+    </div>
+
+    <div class="settings-row">
       <span>Welcome tour</span>
       <button onclick={() => (app.modal = "welcome")}>Show again</button>
     </div>
