@@ -116,6 +116,42 @@ test("Alt+Up in the section picker reorders sections", async ({ app }) => {
   await expect(app.page.locator(".section-strip .name")).toContainText("1/2");
 });
 
+test("F2 in the section picker renames a section", async ({ app }) => {
+  await app.page.keyboard.press("Control+g");
+  await expect(app.page.locator(".modal input")).toBeFocused();
+  await app.page.keyboard.press("F2");
+  const rename = app.page.locator(".picker-item input.picker-rename");
+  await expect(rename).toBeFocused();
+  await app.page.keyboard.press("Control+a");
+  await app.page.keyboard.type("Renamed Notes");
+  await app.page.keyboard.press("Enter");
+
+  await expect(app.page.locator(".picker-item").first()).toContainText("Renamed Notes");
+  await app.page.keyboard.press("Escape");
+  await expect(app.page.locator(".modal")).toHaveCount(0);
+  await expect(app.page.locator(".section-strip .name")).toContainText("Renamed Notes");
+});
+
+test("Esc leaves an in-progress rename before closing the section picker", async ({ app }) => {
+  await app.page.keyboard.press("Control+g");
+  await expect(app.page.locator(".modal input")).toBeFocused();
+  await app.page.keyboard.press("F2");
+  const rename = app.page.locator(".picker-item input.picker-rename");
+  await expect(rename).toBeFocused();
+  await app.page.keyboard.press("Control+a");
+  await app.page.keyboard.type("scrapped");
+
+  // first Esc peels only the rename: picker stays open, name unchanged
+  await app.page.keyboard.press("Escape");
+  await expect(rename).toHaveCount(0);
+  await expect(app.page.locator(".modal")).toBeVisible();
+  await expect(app.page.locator(".picker-item").first()).toContainText("Notes");
+  // second Esc closes the picker
+  await app.page.keyboard.press("Escape");
+  await expect(app.page.locator(".modal")).toHaveCount(0);
+  await expect(app.page.locator(".section-strip .name")).toContainText("Notes");
+});
+
 test("/ filters the tree, Esc clears it", async ({ app }) => {
   await app.newTitledPage("Alpha", 1);
   await app.newTitledPage("Beta", 2);
