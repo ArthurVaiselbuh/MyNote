@@ -50,6 +50,7 @@ pub fn run() {
             commands::import_mht,
             commands::inspect_md,
             commands::import_md,
+            commands::reset_agents_md,
             commands::get_settings,
             commands::set_settings
         ])

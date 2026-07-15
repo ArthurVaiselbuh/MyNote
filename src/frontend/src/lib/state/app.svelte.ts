@@ -18,6 +18,7 @@ export type ModalName =
 export interface ConfirmRequest {
   message: string;
   action: () => void;
+  label?: string;
 }
 
 export interface FindPrefill {

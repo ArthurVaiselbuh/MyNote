@@ -16,7 +16,9 @@
     <div>{app.confirm?.message}</div>
     <div class="modal-buttons">
       <button onclick={() => act.closeModal()}>Cancel</button>
-      <button class="danger" use:autofocus onclick={confirm}>Delete</button>
+      <button class="danger" use:autofocus onclick={confirm}
+        >{app.confirm?.label ?? "Delete"}</button
+      >
     </div>
     <div class="hint">Enter confirms · Esc cancels</div>
   </div>
