@@ -26,6 +26,7 @@ pub struct Settings {
     pub heading_color: String,
     pub focus_alpha: f64,
     pub scroll_speed: f64,
+    pub tree_width: u32,
     pub log_level: String,
     pub window: Option<WindowGeom>,
 }
@@ -43,6 +44,7 @@ impl Default for Settings {
             heading_color: "#d4d4d4".into(),
             focus_alpha: 0.5,
             scroll_speed: 1.0,
+            tree_width: 300,
             log_level: "info".into(),
             window: None,
         }

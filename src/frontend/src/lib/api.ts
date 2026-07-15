@@ -93,6 +93,7 @@ export interface Settings {
   headingColor: string;
   focusAlpha: number;
   scrollSpeed: number;
+  treeWidth: number;
   logLevel: string;
   window: WindowGeom | null;
 }
@@ -108,6 +109,7 @@ export const defaultSettings: Settings = {
   headingColor: "#d4d4d4",
   focusAlpha: 0.5,
   scrollSpeed: 1.0,
+  treeWidth: 300,
   logLevel: "info",
   window: null,
 };

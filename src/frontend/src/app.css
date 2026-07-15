@@ -88,6 +88,19 @@ input:focus {
   outline-color: var(--focus-color);
 }
 
+.splitter {
+  width: 7px;
+  margin: 0 -3px;
+  flex-shrink: 0;
+  cursor: col-resize;
+  z-index: 5;
+  touch-action: none;
+}
+.splitter:hover,
+.splitter.dragging {
+  background: var(--focus-color);
+}
+
 .main-pane {
   flex: 1;
   min-width: 0;
