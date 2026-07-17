@@ -130,6 +130,15 @@ are supported cross-platform builds off the same code.
   in `markdown.ts::COLOR_PALETTE`; 3/4/6/8-digit hex). Anything else renders
   literally. Chosen for on-disk consistency over Obsidian-style `|420`/HTML
   spans; Pandoc/Quarto render both forms natively.
+- **External links** in the preview open in the OS default browser on
+  Ctrl/⌘+Click only (plain click is inert; the link's title tooltip hints the
+  chord) via `tauri-plugin-opener`; the capability grants only `opener:allow-open-url`
+  scoped to `http://*`/`https://*` (deliberately not `opener:default` — no
+  mailto/tel/reveal-in-dir). The webview itself never navigates away: a
+  `navigation-guard` plugin in `lib.rs` rejects main-frame navigation outside
+  the app origin (`tauri:`/`note-asset:` schemes, `localhost`/`*.localhost`
+  hosts). This keeps the no-runtime-network rule — the app process makes no
+  requests; opening a link is delegated to the user's browser.
 - **Tree undo/redo** (Ctrl+Z/Y, backend `Store` op stack): covers delete
   page/section and move page (reorder, demote/promote, cross-section) —
   not creates/renames. Ops record their inverse (detached subtree + location),

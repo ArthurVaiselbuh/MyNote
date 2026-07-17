@@ -106,6 +106,13 @@ describe("color span [text]{...}", () => {
     expect(renderBody("![a](b.png)")).toContain('<img src="b.png" alt="a">');
   });
 
+  it("adds the mod+click hint only to external links", () => {
+    expect(renderBody("[a](https://example.com)")).toMatch(
+      /<a href="https:\/\/example\.com" title="[^"]*\+Click to open in browser">/,
+    );
+    expect(renderBody("[a](b.md)")).toContain('<a href="b.md">a</a>');
+  });
+
   it("still renders a colored span when used as link text", () => {
     const html = renderBody("[[x]{.red}](url)");
     expect(html).toContain('<a href="url">');

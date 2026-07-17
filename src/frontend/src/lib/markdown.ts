@@ -4,6 +4,7 @@ import powershell from "highlight.js/lib/languages/powershell";
 import "highlight.js/styles/atom-one-dark.css";
 import MarkdownIt from "markdown-it";
 import type StateInline from "markdown-it/lib/rules_inline/state_inline.mjs";
+import { MOD_LABEL } from "./keys/platform";
 
 hljs.registerLanguage("powershell", powershell);
 hljs.registerLanguage("dos", dos);
@@ -31,6 +32,18 @@ const md = new MarkdownIt({
 const defaultImage =
   md.renderer.rules.image ??
   ((tokens, idx, opts, _env, self) => self.renderToken(tokens, idx, opts));
+
+const defaultLinkOpen =
+  md.renderer.rules.link_open ??
+  ((tokens, idx, opts, _env, self) => self.renderToken(tokens, idx, opts));
+
+md.renderer.rules.link_open = (tokens, idx, opts, env, self) => {
+  const href = tokens[idx].attrGet("href") ?? "";
+  if (/^https?:\/\//i.test(href)) {
+    tokens[idx].attrSet("title", `${MOD_LABEL}+Click to open in browser`);
+  }
+  return defaultLinkOpen(tokens, idx, opts, env, self);
+};
 
 md.renderer.rules.image = (tokens, idx, opts, env, self) => {
   const token = tokens[idx];
