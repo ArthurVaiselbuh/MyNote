@@ -18,6 +18,8 @@ pub fn run() {
     tauri::Builder::default()
         .plugin(build_log_plugin(&settings))
         .plugin(tauri_plugin_dialog::init())
+        .plugin(tauri_plugin_opener::init())
+        .plugin(navigation_guard())
         .manage(AppState {
             store: Mutex::new(None),
             settings: Mutex::new(settings),
@@ -80,6 +82,24 @@ pub fn run() {
         })
         .run(tauri::generate_context!())
         .expect("error while running MyNote");
+}
+
+fn navigation_guard<R: tauri::Runtime>() -> tauri::plugin::TauriPlugin<R> {
+    tauri::plugin::Builder::new("navigation-guard")
+        .on_navigation(|_, url| {
+            let allowed = match url.scheme() {
+                "tauri" | "note-asset" => true,
+                "http" | "https" => url
+                    .host_str()
+                    .is_some_and(|h| h == "localhost" || h.ends_with(".localhost")),
+                _ => false,
+            };
+            if !allowed {
+                log::warn!("blocked webview navigation to a non-app url");
+            }
+            allowed
+        })
+        .build()
 }
 
 fn build_log_plugin<R: tauri::Runtime>(settings: &Settings) -> tauri::plugin::TauriPlugin<R> {

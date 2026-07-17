@@ -5,7 +5,7 @@ export const isMac =
   typeof navigator !== "undefined" &&
   (/Mac/i.test(navigator.platform) || /Mac OS X/i.test(navigator.userAgent));
 
-export function modPressed(e: KeyboardEvent): boolean {
+export function modPressed(e: KeyboardEvent | MouseEvent): boolean {
   return isMac ? e.metaKey : e.ctrlKey;
 }
 

@@ -1,5 +1,6 @@
 import { getCurrentWebview } from "@tauri-apps/api/webview";
 import { open as openDialog } from "@tauri-apps/plugin-dialog";
+import { openUrl } from "@tauri-apps/plugin-opener";
 import { api, type NotebookInfo, type Section, type UndoOutcome } from "./api";
 import { editorCtl } from "./editorCtl";
 import { log } from "./log";
@@ -284,6 +285,12 @@ export function openPageById(pageId: string) {
   if (!section) return;
   app.sectionIdx = app.notebook.sections.indexOf(section);
   selectAndOpen(pageId);
+}
+
+export function openExternalLink(href: string) {
+  if (!/^https?:\/\//i.test(href)) return;
+  log.verbose("open external link in system browser");
+  openUrl(href).catch((e) => (app.status = String(e)));
 }
 
 export async function newPage() {

@@ -55,6 +55,15 @@ jobs:
         working-directory: src/backend
         run: cargo test --locked
 
+      - name: Stamp version (base.run_number)
+        shell: bash
+        run: |
+          base=$(jq -r .version src/backend/tauri.conf.json | cut -d. -f1,2)
+          version="${base}.${{ github.run_number }}"
+          echo "Building version $version"
+          tmp=$(mktemp)
+          jq --arg v "$version" '.version = $v' src/backend/tauri.conf.json > "$tmp" && mv "$tmp" src/backend/tauri.conf.json
+
       - name: Build release (Windows)
         if: runner.os == 'Windows'
         run: build.bat
@@ -100,15 +109,17 @@ jobs:
           path: dist
           merge-multiple: true
 
-      - name: Read app version
+      - name: Compute release version (base.run_number)
         id: ver
-        run: echo "version=$(jq -r .version src/backend/tauri.conf.json)" >> "$GITHUB_OUTPUT"
+        run: |
+          base=$(jq -r .version src/backend/tauri.conf.json | cut -d. -f1,2)
+          echo "version=${base}.${{ github.run_number }}" >> "$GITHUB_OUTPUT"
 
       - name: Publish GitHub release with all platform binaries
         uses: softprops/action-gh-release@v2
         with:
-          tag_name: v${{ steps.ver.outputs.version }}.${{ github.run_number }}
-          name: MyNote v${{ steps.ver.outputs.version }} (build ${{ github.run_number }})
+          tag_name: v${{ steps.ver.outputs.version }}
+          name: MyNote v${{ steps.ver.outputs.version }}
           target_commitish: ${{ github.sha }}
           files: dist/*
           fail_on_unmatched_files: true

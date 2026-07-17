@@ -1,6 +1,6 @@
 [package]
 name = "MyNote"
-version = "0.1.0"
+version = "1.0.9999"
 edition = "2021"
 rust-version = "1.77"
 
@@ -24,6 +24,7 @@ nucleo-matcher = "0.3"
 base64 = "0.22"
 chrono = "0.4"
 percent-encoding = "2"
+tauri-plugin-opener = "2"
 
 [dev-dependencies]
 tempfile = "3"

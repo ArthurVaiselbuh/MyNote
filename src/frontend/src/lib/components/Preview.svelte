@@ -1,5 +1,6 @@
 <script lang="ts">
   import * as act from "../actions";
+  import { modPressed } from "../keys/platform";
   import { renderBody } from "../markdown";
 
   let { body }: { body: string } = $props();
@@ -13,6 +14,7 @@
     const href = link.getAttribute("href") ?? "";
     const match = href.match(/([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})\.md$/i);
     if (match) act.openPageById(match[1]);
+    else if (modPressed(e)) act.openExternalLink(href);
   }
 </script>
 
