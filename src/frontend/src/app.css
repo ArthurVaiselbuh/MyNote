@@ -285,12 +285,52 @@ input:focus {
   outline: none;
 }
 
+.preview-wrap {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+}
+.preview-find {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 14px;
+  border-bottom: 1px solid var(--guide);
+}
+.preview-find input {
+  flex: 1;
+  min-width: 0;
+}
+.preview-find .mode {
+  color: var(--muted);
+  border: 1px solid var(--guide);
+}
+.preview-find .mode.active {
+  color: var(--accent);
+  border-color: var(--accent);
+}
+.preview-find .count {
+  color: var(--muted);
+  white-space: nowrap;
+}
+.preview-find .error {
+  color: #e06c75;
+}
 .preview {
   flex: 1;
   min-height: 0;
   overflow-y: auto;
   padding: 4px 20px 40px;
   line-height: 1.55;
+}
+.preview mark.find-hit {
+  background: color-mix(in srgb, var(--accent) 30%, transparent);
+  color: inherit;
+  border-radius: 2px;
+}
+.preview mark.find-hit.current {
+  background: color-mix(in srgb, var(--accent) 55%, transparent);
 }
 .preview img {
   max-width: 100%;

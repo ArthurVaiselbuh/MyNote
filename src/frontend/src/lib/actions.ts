@@ -3,9 +3,18 @@ import { open as openDialog } from "@tauri-apps/plugin-dialog";
 import { openUrl } from "@tauri-apps/plugin-opener";
 import { api, type NotebookInfo, type Section, type UndoOutcome } from "./api";
 import { editorCtl } from "./editorCtl";
+import type { FindCtl } from "./findCtl";
 import { log } from "./log";
+import { previewFindCtl } from "./previewFindCtl";
 import { app, type ModalName, type Pane } from "./state/app.svelte";
 import { countPages, countSubtree, findNode, flatten, locate, sectionOfPage } from "./treeUtils";
+
+// the editor's CodeMirror find and the preview's DOM-highlight find are
+// mutually exclusive with the page view mode, so callers dispatch to whichever
+// backs the mode currently on screen
+export function activeFindCtl(): FindCtl | null {
+  return app.mode === "preview" ? previewFindCtl.current : editorCtl.current;
+}
 
 // ---------- notebook / boot ----------
 
@@ -627,7 +636,7 @@ export function toggleMode() {
 export function openFind() {
   if (app.view !== "page" || !app.currentPageId) return;
   app.focus = "editor";
-  editorCtl.current?.openFind();
+  activeFindCtl()?.openFind();
 }
 
 export async function saveNow() {
@@ -643,8 +652,9 @@ export function closeCurrent() {
     closeModal();
     return;
   }
-  if (editorCtl.current?.findOpen()) {
-    editorCtl.current.closeFind();
+  const findCtl = activeFindCtl();
+  if (findCtl?.findOpen()) {
+    findCtl.closeFind();
     if (app.mode === "edit") app.editorFocusReq++;
     return;
   }
