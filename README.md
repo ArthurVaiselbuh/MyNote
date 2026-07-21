@@ -17,15 +17,15 @@ Your notebook is just a folder of plain `.md` files — greppable, diffable, AI-
 
 **Insert and edit code, flip to preview** — `Ctrl+J` opens a searchable insert palette (code blocks, tables, links, task lists…); fenced code is syntax-highlighted in the editor and the rendered preview (`Ctrl+E`):
 
-![Inserting a code block with Ctrl+J, editing it, then switching to preview](docs/edit-preview.gif)
+![Inserting a code block with Ctrl+J, editing it, then switching to preview](src/frontend/public/tutorial/edit-preview.gif)
 
 **Sections and nested pages** — create subpages (`Ctrl+Enter`), fold subtrees (`←`/`→`), hop between sections (`Ctrl+PgUp/PgDn`), all without the mouse:
 
-![Creating subpages, folding them, switching sections](docs/tree-sections.gif)
+![Creating subpages, folding them, switching sections](src/frontend/public/tutorial/tree-sections.gif)
 
 **Never memorize a shortcut** — `?` opens a context-aware cheat sheet with live filtering:
 
-![The ? overlay and its live search](docs/help-search.gif)
+![The ? overlay and its live search](src/frontend/public/tutorial/help-search.gif)
 
 ## Features
 
