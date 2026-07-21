@@ -1,5 +1,4 @@
 import * as act from "../actions";
-import { editorCtl } from "../editorCtl";
 import { app } from "../state/app.svelte";
 import { modPressed } from "./platform";
 import { resultsKeys } from "./resultsKeys";
@@ -62,8 +61,9 @@ export function handleGlobal(e: KeyboardEvent) {
 
   if (e.key === "F3") {
     e.preventDefault();
-    if (e.shiftKey) editorCtl.current?.findPrev();
-    else editorCtl.current?.findNext();
+    const findCtl = act.activeFindCtl();
+    if (e.shiftKey) findCtl?.findPrev();
+    else findCtl?.findNext();
     return;
   }
 

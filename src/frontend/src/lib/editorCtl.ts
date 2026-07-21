@@ -1,12 +1,7 @@
-import type { FindPrefill } from "./state/app.svelte";
+import type { FindCtl } from "./findCtl";
 
-export interface EditorCtl {
+export interface EditorCtl extends FindCtl {
   save(): Promise<void>;
-  openFind(prefill?: FindPrefill | null): void;
-  closeFind(): boolean;
-  findOpen(): boolean;
-  findNext(): void;
-  findPrev(): void;
   insert(before: string, after?: string): void;
   setTitle(title: string): void;
 }
