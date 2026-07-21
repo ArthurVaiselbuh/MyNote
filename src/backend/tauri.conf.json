@@ -16,16 +16,7 @@
     "frontendDist": "../frontend/dist"
   },
   "app": {
-    "windows": [
-      {
-        "title": "MyNote",
-        "width": 1280,
-        "height": 840,
-        "minWidth": 640,
-        "minHeight": 400,
-        "visible": false
-      }
-    ],
+    "windows": [],
     "security": {
       "csp": "default-src 'self'; connect-src 'self' ipc: http://ipc.localhost; img-src 'self' http://note-asset.localhost note-asset: data:; style-src 'self' 'unsafe-inline'; font-src 'self' data:",
       "devCsp": null

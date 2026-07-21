@@ -27,16 +27,43 @@ export class App {
 
   async launch() {
     await waitForPortFree();
+    const webviewLogFile = path.join(this.dataDir, "webview2-chrome-debug.log");
+    fs.mkdirSync(this.dataDir, { recursive: true });
+    let stderr = "";
     this.child = spawn(EXE, [], {
       env: {
         ...process.env,
-        WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS: `--remote-debugging-port=${CDP_PORT}`,
+        // wry always sets WebView2's AdditionalBrowserArguments COM option itself
+        // (even just its own defaults), which makes WebView2 ignore
+        // WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS outright — MyNote reads these two
+        // instead (see lib.rs::run's setup closure) to build that option itself.
+        MYNOTE_E2E_CDP_PORT: String(CDP_PORT),
+        MYNOTE_E2E_LOG_FILE: webviewLogFile,
         WEBVIEW2_USER_DATA_FOLDER: this.dataDir,
       },
-      stdio: "ignore",
+      stdio: ["ignore", "ignore", "pipe"],
     });
-    this.exited = new Promise((resolve) => this.child!.once("exit", () => resolve()));
-    this.browser = await connectWithRetry();
+    this.child.stderr!.on("data", (chunk: Buffer) => (stderr += chunk.toString()));
+    const exited = new Promise<{ code: number | null; signal: NodeJS.Signals | null }>((resolve) =>
+      this.child!.once("exit", (code, signal) => resolve({ code, signal })),
+    );
+    this.exited = exited.then(() => {});
+    try {
+      // Race the CDP attach against the process exiting early — a crash-on-launch
+      // otherwise looks identical to a slow-to-start exe (both time out on connect),
+      // hiding the exit code/stderr that would tell them apart.
+      this.browser = await Promise.race([
+        connectWithRetry(),
+        exited.then(({ code, signal }) => {
+          throw new Error(
+            `mynote.exe exited before opening a CDP port (code ${code}, signal ${signal})` +
+              (stderr ? `\nstderr:\n${stderr}` : ""),
+          );
+        }),
+      ]);
+    } catch (e) {
+      throw new Error(`${(e as Error).message}\n${cdpDiagnostics(webviewLogFile)}`);
+    }
     this.page = await firstPage(this.browser);
     this.page.on("pageerror", (e) => console.log(`[pageerror] ${e.message}`));
     this.page.on("console", (m) => {
@@ -218,6 +245,41 @@ async function connectWithRetry(): Promise<Browser> {
     }
   }
   throw new Error(`could not attach to ${CDP_URL} — did the exe start?`);
+}
+
+function runDiagnostic(cmd: string): string {
+  try {
+    const out = execSync(cmd, { encoding: "utf8", timeout: 10_000 }).trim();
+    return out || "<no output>";
+  } catch (e) {
+    return `<failed to run: ${(e as Error).message}>`;
+  }
+}
+
+/** Last ~8000 chars of the chromium `--log-file` WebView2 was launched with —
+ * that log records DevTools server bind attempts/failures directly, which is
+ * a more definitive signal than inferring from process/socket state alone. */
+function readLogTail(file: string, maxChars = 8_000): string {
+  try {
+    const content = fs.readFileSync(file, "utf8");
+    return content.length > maxChars ? `…(truncated)…\n${content.slice(-maxChars)}` : content;
+  } catch (e) {
+    return `<could not read: ${(e as Error).message}>`;
+  }
+}
+
+/** WebView2 can come up fully (rendering, writing its profile) while its
+ * DevTools port silently fails to bind — Chromium doesn't treat that as
+ * fatal. Dump enough state to tell "exe never started" apart from "exe is
+ * running but the CDP port is unreachable" the next time this fails. */
+function cdpDiagnostics(webviewLogFile: string): string {
+  return [
+    "--- CDP failure diagnostics ---",
+    `mynote.exe processes:\n${runDiagnostic('tasklist /FI "IMAGENAME eq mynote.exe" /V /FO LIST')}`,
+    `msedgewebview2.exe processes:\n${runDiagnostic('tasklist /FI "IMAGENAME eq msedgewebview2.exe" /FO LIST')}`,
+    `sockets on port ${CDP_PORT}:\n${runDiagnostic(`netstat -ano | findstr :${CDP_PORT}`)}`,
+    `webview2 chromium log (${webviewLogFile}):\n${readLogTail(webviewLogFile)}`,
+  ].join("\n\n");
 }
 
 async function firstPage(browser: Browser): Promise<Page> {
