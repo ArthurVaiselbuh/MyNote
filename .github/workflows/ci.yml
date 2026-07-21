@@ -9,8 +9,8 @@ jobs:
   frontend-check:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
         with:
           node-version: 24
       - name: Install frontend deps
@@ -27,7 +27,7 @@ jobs:
         os: [windows-latest, macos-latest, ubuntu-latest]
     runs-on: ${{ matrix.os }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - name: Install Linux webview deps
         if: matrix.os == 'ubuntu-latest'
         run: |
@@ -50,8 +50,8 @@ jobs:
   e2e:
     runs-on: windows-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
         with:
           node-version: 24
       - uses: dtolnay/rust-toolchain@stable
@@ -75,7 +75,7 @@ jobs:
         run: npx playwright test
       - name: Upload e2e artifacts on failure
         if: failure()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: e2e-results
           path: |

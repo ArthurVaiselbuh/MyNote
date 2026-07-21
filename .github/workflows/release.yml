@@ -29,8 +29,8 @@ jobs:
             out: output/mynote-linux
     runs-on: ${{ matrix.os }}
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
         with:
           node-version: 24
 
@@ -82,7 +82,7 @@ jobs:
 
       - name: Upload e2e artifacts on failure
         if: failure() && runner.os == 'Windows'
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: e2e-results
           path: |
@@ -91,7 +91,7 @@ jobs:
           if-no-files-found: ignore
 
       - name: Upload built binary
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: ${{ matrix.artifact }}
           path: ${{ matrix.out }}
@@ -101,10 +101,10 @@ jobs:
     needs: build
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - name: Collect binaries
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v8
         with:
           path: dist
           merge-multiple: true
@@ -116,7 +116,7 @@ jobs:
           echo "version=${base}.${{ github.run_number }}" >> "$GITHUB_OUTPUT"
 
       - name: Publish GitHub release with all platform binaries
-        uses: softprops/action-gh-release@v2
+        uses: softprops/action-gh-release@v3
         with:
           tag_name: v${{ steps.ver.outputs.version }}
           name: MyNote v${{ steps.ver.outputs.version }}
