@@ -31,6 +31,7 @@
     { label: "Link", before: "[", after: "](url)", hint: "[text](url)" },
     { label: "Bold", before: "**", after: "**", hint: "**text**" },
     { label: "Italic", before: "_", after: "_", hint: "_text_" },
+    { label: "Strikethrough", before: "~~", after: "~~", hint: "~~text~~" },
     { label: "Inline code", before: "`", after: "`", hint: "`code`" },
     { label: "Heading 1", before: "# ", after: "", hint: "# " },
     { label: "Heading 2", before: "## ", after: "", hint: "## " },
