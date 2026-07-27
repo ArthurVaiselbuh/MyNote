@@ -944,23 +944,32 @@ mod tests {
         assert_eq!(outcome.page_count, 2);
         assert_eq!(outcome.section_ids.len(), 1);
 
-        let section = store
-            .notebook
-            .sections
-            .iter()
-            .find(|s| s.id == outcome.section_ids[0])
-            .unwrap();
-        assert_eq!(section.name, "Work Notes");
-        assert_eq!(section.pages.len(), 2);
-        assert_eq!(section.pages[0].title, "First Page");
+        let (section_name, page_count, first_page_title, first_page_id) = {
+            let section = store
+                .notebook
+                .sections
+                .iter()
+                .find(|s| s.id == outcome.section_ids[0])
+                .unwrap();
+            (
+                section.name.clone(),
+                section.pages.len(),
+                section.pages[0].title.clone(),
+                section.pages[0].id.clone(),
+            )
+        };
+        assert_eq!(section_name, "Work Notes");
+        assert_eq!(page_count, 2);
+        assert_eq!(first_page_title, "First Page");
 
-        let content = store.read_page(&section.pages[0].id).unwrap();
+        let content = store.read_page(&first_page_id).unwrap();
         assert!(content.starts_with("# First Page\n\n"));
         // the &nbsp; paragraph survives as one extra blank line
         assert!(content.contains("Hello **bold** world\n\n\n- bullet item"));
 
+        drop(store);
         let reopened = Store::open(dir.path()).unwrap();
-        assert!(reopened.find_page(&section.pages[0].id).is_some());
+        assert!(reopened.find_page(&first_page_id).is_some());
     }
 
     #[test]

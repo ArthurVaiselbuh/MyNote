@@ -309,7 +309,9 @@ mod tests {
         // every page landed as a <uuid>.md file in the notebook root
         assert!(store.page_path(&work.pages[0].id).exists());
 
-        let reopened = Store::open(&store.root).unwrap();
+        let root = store.root.clone();
+        drop(store);
+        let reopened = Store::open(&root).unwrap();
         assert!(reopened.notebook.sections.iter().any(|s| s.name == "Export"));
     }
 

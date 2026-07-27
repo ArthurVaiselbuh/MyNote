@@ -87,6 +87,8 @@ are supported cross-platform builds off the same code.
 - **`move_page` index contract:** the index is the position in the destination
   list counted *after* the page has been detached. Frontend computes indices
   against sibling lists with the dragged node filtered out.
+- **One notebook, one writer:** `Store::open` takes an OS-level exclusive lock
+  on `.mynote.lock` in the notebook root, held for the `Store`'s lifetime.
 - **Title sync is bidirectional:** editing the H1/title field renames the tree
   node (`write_page` returns the derived title); tree rename (F2) rewrites the
   H1 in the file.
