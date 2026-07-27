@@ -3,8 +3,34 @@ use std::collections::HashSet;
 use std::fs;
 use std::path::{Path, PathBuf};
 
+use crate::lock::{LockError, NotebookLock};
+
 fn err<E: std::fmt::Display>(e: E) -> String {
     e.to_string()
+}
+
+#[derive(Debug)]
+pub enum OpenError {
+    /// Another live process already holds the notebook's lock file.
+    Locked,
+    Other(String),
+}
+
+impl std::fmt::Display for OpenError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            OpenError::Locked => {
+                write!(f, "this notebook is already open in another MyNote window")
+            }
+            OpenError::Other(e) => write!(f, "{e}"),
+        }
+    }
+}
+
+impl From<OpenError> for String {
+    fn from(e: OpenError) -> String {
+        e.to_string()
+    }
 }
 
 pub fn new_id() -> String {
@@ -103,18 +129,25 @@ pub struct Store {
     undo_stack: Vec<UndoOp>,
     redo_stack: Vec<UndoOp>,
     session_deleted: HashSet<String>,
+    #[allow(dead_code)]
+    lock: NotebookLock,
 }
 
 impl Store {
-    pub fn open(root: &Path) -> Result<Store, String> {
-        fs::create_dir_all(root).map_err(err)?;
-        let notebook = load_notebook(root)?;
+    pub fn open(root: &Path) -> Result<Store, OpenError> {
+        fs::create_dir_all(root).map_err(|e| OpenError::Other(err(e)))?;
+        let lock = NotebookLock::acquire(root).map_err(|e| match e {
+            LockError::HeldElsewhere => OpenError::Locked,
+            LockError::Io(msg) => OpenError::Other(msg),
+        })?;
+        let notebook = load_notebook(root).map_err(OpenError::Other)?;
         let mut store = Store {
             root: root.to_path_buf(),
             notebook,
             undo_stack: vec![],
             redo_stack: vec![],
             session_deleted: HashSet::new(),
+            lock,
         };
         if store.notebook.sections.is_empty() {
             store.notebook.sections.push(Section {
@@ -123,9 +156,9 @@ impl Store {
                 pages: vec![],
             });
         }
-        store.save()?;
+        store.save().map_err(OpenError::Other)?;
         if !store.agents_md_path().exists() {
-            store.write_agents_template()?;
+            store.write_agents_template().map_err(OpenError::Other)?;
         }
         Ok(store)
     }
@@ -1091,6 +1124,20 @@ mod tests {
         fs::write(dir.path().join("notebook.json"), b"{ broken").unwrap();
         fs::write(dir.path().join("notebook.json.bak"), b"{ also broken").unwrap();
         assert!(Store::open(dir.path()).is_err());
+    }
+
+    #[test]
+    fn open_refuses_a_notebook_already_held_by_a_live_store() {
+        let dir = tempdir().unwrap();
+        let first = Store::open(dir.path()).unwrap();
+        match Store::open(dir.path()) {
+            Err(OpenError::Locked) => {}
+            Err(OpenError::Other(e)) => panic!("expected OpenError::Locked, got Other({e})"),
+            Ok(_) => panic!("expected OpenError::Locked, got Ok"),
+        }
+        drop(first);
+        // once the first handle is gone the lock is released, crash or not
+        assert!(Store::open(dir.path()).is_ok());
     }
 
     #[test]

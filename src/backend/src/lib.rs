@@ -3,6 +3,7 @@ mod commands;
 mod import;
 mod import_md;
 mod import_mht;
+mod lock;
 mod search;
 mod settings;
 mod store;

@@ -8,7 +8,7 @@ use crate::import::{ImportOutcome, ImportPreview};
 use crate::{import_md, import_mht};
 use crate::search::{self, SearchHit};
 use crate::settings::{self, Settings};
-use crate::store::{Notebook, PageNode, Section, Store, UndoOutcome};
+use crate::store::{Notebook, OpenError, PageNode, Section, Store, UndoOutcome};
 
 pub struct AppState {
     pub store: Mutex<Option<Store>>,
@@ -91,7 +91,11 @@ pub fn open_notebook(state: State<'_, AppState>, path: Option<String>) -> Result
     close_current(&mut guard);
     let store = match Store::open(&root) {
         Ok(store) => store,
-        Err(e) => {
+        // A lock conflict means the notebook itself is fine — just in use
+        // elsewhere — so silently falling back to a different notebook would
+        // hide that from the user instead of explaining it.
+        Err(OpenError::Locked) => return Err(OpenError::Locked.into()),
+        Err(OpenError::Other(e)) => {
             let fallback = settings::default_notebook_dir();
             if explicit || root == fallback {
                 return Err(e);
