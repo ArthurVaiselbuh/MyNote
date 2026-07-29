@@ -92,9 +92,15 @@ are supported cross-platform builds off the same code.
 - **Title sync is bidirectional:** editing the H1/title field renames the tree
   node (`write_page` returns the derived title); tree rename (F2) rewrites the
   H1 in the file.
-- **Search** runs in Rust: fuzzy via `nucleo-matcher`, regex via `regex`,
-  scanning titles + bodies on demand (no persistent index). Hits carry char
-  ranges for snippet highlighting.
+- **Search** runs in Rust over titles + bodies on demand (no persistent index);
+  hits carry char ranges for snippet highlighting. Fuzzy mode is keyword-based:
+  the query splits on whitespace into terms, `"quoted phrases"` stay whole, and
+  each term is counted as case-insensitive literal occurrences across the
+  *whole page* (so keywords may sit on different lines).Regex mode (`regex` crate) stays per-line. `search_pages` returns the
+  parsed terms alongside the hits so the frontend can prefill the in-page find.
+- **Opening a search result lands in preview**, not the editor, with the
+  preview's find prefilled by an alternation of the parsed terms (the raw
+  pattern in regex mode) so every keyword lights up at once.
 - **Theme:** dark only, but all colors (text/background/panel/accent), focus
   alpha, and scroll speed are user-configurable in Settings and applied as CSS
   variables on the app root.

@@ -57,6 +57,7 @@ export const app = $state({
   searchQuery: "",
   searchMode: "fuzzy" as "fuzzy" | "regex",
   searchError: "",
+  searchTerms: [] as string[],
   results: [] as SearchHit[],
   resultsSel: 0,
 

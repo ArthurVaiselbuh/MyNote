@@ -6,7 +6,8 @@ import { editorCtl } from "./editorCtl";
 import type { FindCtl } from "./findCtl";
 import { log } from "./log";
 import { previewFindCtl } from "./previewFindCtl";
-import { app, type ModalName, type Pane } from "./state/app.svelte";
+import { escapeRegExp } from "./regex";
+import { app, type FindPrefill, type ModalName, type Pane } from "./state/app.svelte";
 import { countPages, countSubtree, findNode, flatten, locate, sectionOfPage } from "./treeUtils";
 
 // the editor's CodeMirror find and the preview's DOM-highlight find are
@@ -568,17 +569,30 @@ export async function runSearch() {
   const query = app.searchQuery.trim();
   if (!query) {
     app.results = [];
+    app.searchTerms = [];
     app.searchError = "";
     return;
   }
   try {
-    app.results = await api.searchPages(query, app.searchMode);
+    const results = await api.searchPages(query, app.searchMode);
+    app.results = results.hits;
+    app.searchTerms = results.terms;
     app.searchError = "";
     app.resultsSel = 0;
   } catch (e) {
     app.results = [];
+    app.searchTerms = [];
     app.searchError = String(e);
   }
+}
+
+// every keyword lights up at once, so a page matched on several of them shows
+// all of them rather than only whichever came first in the query
+function resultFindPrefill(): FindPrefill {
+  const query = app.searchQuery.trim();
+  if (app.searchMode === "regex") return { text: query, regex: true };
+  const alternation = app.searchTerms.map(escapeRegExp).join("|");
+  return alternation ? { text: alternation, regex: true } : { text: query, regex: false };
 }
 
 export function openResult(idx: number) {
@@ -588,7 +602,8 @@ export function openResult(idx: number) {
   if (sectionIdx < 0) return;
   app.sectionIdx = sectionIdx;
   // the editor remounts when leaving the results view and consumes the prefill on load
-  app.findPrefill = { text: app.searchQuery.trim(), regex: app.searchMode === "regex" };
+  app.findPrefill = resultFindPrefill();
+  app.mode = "preview";
   app.view = "page";
   app.selectedId = hit.pageId;
   app.currentPageId = hit.pageId;

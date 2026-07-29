@@ -53,7 +53,9 @@
   {/each}
   {#if app.results.length === 0}
     <div class="empty">
-      {app.searchQuery.trim() ? "No results" : "Type a query above — fuzzy or regex"}
+      {app.searchQuery.trim()
+        ? "No results"
+        : 'Type a query above — keywords, "exact phrase", or regex'}
     </div>
   {/if}
 </div>
