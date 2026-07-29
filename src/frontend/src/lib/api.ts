@@ -38,6 +38,12 @@ export interface SearchHit {
   ranges: [number, number][];
 }
 
+export interface SearchResults {
+  hits: SearchHit[];
+  // the literal keywords/phrases the query split into — empty in regex mode
+  terms: string[];
+}
+
 export interface UndoOutcome {
   label: string;
   sectionId: string | null;
@@ -144,7 +150,7 @@ export const api = {
   setLastView: (sectionId: string | null, pageId: string | null) =>
     invoke<void>("set_last_view", { sectionId, pageId }),
   searchPages: (query: string, mode: "fuzzy" | "regex") =>
-    invoke<SearchHit[]>("search_pages", { query, mode }),
+    invoke<SearchResults>("search_pages", { query, mode }),
   saveImage: (pageId: string, data: string, ext: string) =>
     invoke<string>("save_image", { pageId, data, ext }),
   inspectMht: (paths: string[]) =>

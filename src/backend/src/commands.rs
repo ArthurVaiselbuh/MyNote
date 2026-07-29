@@ -6,7 +6,7 @@ use tauri::State;
 use crate::assets;
 use crate::import::{ImportOutcome, ImportPreview};
 use crate::{import_md, import_mht};
-use crate::search::{self, SearchHit};
+use crate::search::{self, SearchResults};
 use crate::settings::{self, Settings};
 use crate::store::{Notebook, OpenError, PageNode, Section, Store, UndoOutcome};
 
@@ -257,7 +257,7 @@ pub fn search_pages(
     state: State<'_, AppState>,
     query: String,
     mode: String,
-) -> Result<Vec<SearchHit>, String> {
+) -> Result<SearchResults, String> {
     log::trace!("search ({mode}), {} chars", query.chars().count());
     with_store(&state, |s| search::search(s, &query, &mode))
 }

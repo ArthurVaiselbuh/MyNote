@@ -156,7 +156,9 @@
       if (app.findPrefill) {
         const prefill = app.findPrefill;
         app.findPrefill = null;
-        requestAnimationFrame(() => ctlOpenFind(prefill));
+        // opening a search result lands in preview, so the prefill has to reach
+        // the preview's find rather than force the page back into the editor
+        requestAnimationFrame(() => act.activeFindCtl()?.openFind(prefill));
       }
     } catch (e) {
       app.status = String(e);

@@ -4,6 +4,7 @@
   import { modPressed } from "../keys/platform";
   import { renderBody } from "../markdown";
   import { previewFindCtl } from "../previewFindCtl";
+  import { escapeRegExp } from "../regex";
   import type { FindPrefill } from "../state/app.svelte";
 
   let { body }: { body: string } = $props();
@@ -27,10 +28,6 @@
   let currentIdx = -1;
   let displayIdx = $state(-1);
   let matches: HTMLElement[] = [];
-
-  function escapeRegExp(s: string): string {
-    return s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-  }
 
   function buildRegex(): RegExp | null {
     if (!query) return null;
