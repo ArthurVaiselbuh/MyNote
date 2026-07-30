@@ -27,6 +27,10 @@ Your notebook is just a folder of plain `.md` files — greppable, diffable, AI-
 
 ![The ? overlay and its live search](src/frontend/public/tutorial/help-search.gif)
 
+**Optional: full history** — if `git` is installed, MyNote snapshots the notebook so every page keeps a timeline of revisions. `Ctrl+H` diffs one against what's on disk and restores it as a single undoable edit; `Ctrl+Shift+H` brings back deleted pages:
+
+![Diffing a page against an earlier snapshot, then restoring it](src/frontend/public/tutorial/history.gif)
+
 ## Features
 
 - **Plain Markdown on disk** — one `.md` file per page, searchable index. Edit the folder with anything, MyNote won't mind
@@ -34,6 +38,7 @@ Your notebook is just a folder of plain `.md` files — greppable, diffable, AI-
 - **Fuzzy + regex search** across every section (`Ctrl+K`), with highlighted snippets
 - **Quick insert** (`Ctrl+J`) — searchable markdown helper to help insert code blocks, tables, links, task lists, dates…
 - **Undo/Redo** (`Ctrl+Z/Y`) for edits,  page delete and moves — deleted files stay on disk until you close, so nothing is lost mid-session
+- **Optional version history** (`Ctrl+H`, `Ctrl+Shift+H`) — turn it on and MyNote snapshots the notebook with your installed `git`, so old revisions and deleted pages stay recoverable. Never required: without git the feature simply isn't there
 - **Paste images** straight from the clipboard
 - **Import OneNote `.mht` exports** (`Ctrl+I`)
 - **Multiple notebooks** — `Ctrl+O` opens a picker with your recent notebooks, or creates a new one anywhere
