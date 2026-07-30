@@ -4,6 +4,7 @@ import { openUrl } from "@tauri-apps/plugin-opener";
 import { api, type NotebookInfo, type Section, type UndoOutcome } from "./api";
 import { editorCtl } from "./editorCtl";
 import type { FindCtl } from "./findCtl";
+import { MOD_LABEL } from "./keys/platform";
 import { log } from "./log";
 import { previewFindCtl } from "./previewFindCtl";
 import { escapeRegExp } from "./regex";
@@ -32,6 +33,11 @@ export async function boot() {
   } catch (e) {
     app.status = String(e);
     await openNotebookModal();
+  }
+  try {
+    app.git = await api.getGitStatus();
+  } catch {
+    app.git = null;
   }
 }
 
@@ -66,6 +72,11 @@ async function switchNotebook(open: () => Promise<NotebookInfo>) {
   closeModal();
   app.currentPageId = null;
   applyNotebook(info);
+  try {
+    app.git = await api.getGitStatus();
+  } catch {
+    app.git = null;
+  }
 }
 
 export async function openNotebookAt(path: string) {
@@ -273,11 +284,24 @@ export async function runImport() {
   }
 }
 
-function flashStatus(message: string) {
+function flashStatus(message: string, durationMs = 4000) {
   app.status = message;
+  app.statusIsError = false;
+  clearStatusAfter(message, durationMs);
+}
+
+export function flashStatusError(message: string) {
+  app.status = message;
+  app.statusIsError = true;
+  clearStatusAfter(message, 8000);
+}
+
+function clearStatusAfter(message: string, durationMs: number) {
   setTimeout(() => {
-    if (app.status === message) app.status = "";
-  }, 4000);
+    if (app.status !== message) return;
+    app.status = "";
+    app.statusIsError = false;
+  }, durationMs);
 }
 
 // ---------- pages ----------
@@ -656,10 +680,7 @@ export function openFind() {
 
 export async function saveNow() {
   await editorCtl.current?.save();
-  app.status = "saved";
-  setTimeout(() => {
-    if (app.status === "saved") app.status = "";
-  }, 1500);
+  flashStatus("saved", 1500);
 }
 
 export function closeCurrent() {
@@ -717,7 +738,14 @@ function blurActive() {
 
 export function openModal(name: ModalName) {
   log.verbose(`open modal ${name}`);
+  if (name === "help") app.helpContext = "app";
   app.modal = name;
+}
+
+export function openHistoryHelp() {
+  log.verbose("open modal help (history)");
+  app.helpContext = "history";
+  app.modal = "help";
 }
 
 export function openSectionPicker(mode: "goto" | "move") {
@@ -733,6 +761,17 @@ export function escapeModal() {
     app.sectionPickerRenaming = null;
     return;
   }
+  if (app.modal === "help" && app.helpContext === "history") {
+    app.helpContext = "app";
+    app.modal = "history";
+    return;
+  }
+  if (app.modal === "confirm" && app.confirm?.returnTo) {
+    const back = app.confirm.returnTo;
+    app.confirm = null;
+    app.modal = back;
+    return;
+  }
   if (app.modal === "colorPicker") {
     app.modal = "insert";
     return;
@@ -746,6 +785,7 @@ export function escapeModal() {
 
 export function closeModal() {
   app.modal = "none";
+  app.helpContext = "app";
   app.confirm = null;
   app.importPreview = null;
   if (app.focus === "editor" && app.mode === "edit") app.editorFocusReq++;
@@ -755,8 +795,9 @@ export function askConfirm(
   message: string,
   action: () => void | Promise<void>,
   label?: string,
+  returnTo?: ModalName,
 ) {
-  app.confirm = { message, action: () => void action(), label };
+  app.confirm = { message, action: () => void action(), label, returnTo };
   app.modal = "confirm";
 }
 
@@ -825,4 +866,69 @@ export async function zoomReset() {
 export function saveLastView() {
   const section = currentSection();
   void api.setLastView(section?.id ?? null, app.currentPageId).catch(() => {});
+}
+
+// ---------- history ----------
+
+export async function openHistory(tab: "page" | "deleted") {
+  if (!app.git?.available) {
+    flashStatus("git is not available on this machine");
+    return;
+  }
+  if (tab === "page" && !app.currentPageId) {
+    flashStatus("open a page first");
+    return;
+  }
+  log.verbose(`open history (${tab})`);
+  // the Editor unmounts in results view, so a restore would have no buffer to
+  // land in — step back to the page view first (same transition as Esc); the
+  // unmount already flushed the buffer, so the on-disk state is current
+  if (app.view === "results") focusPane("editor");
+  // flush the buffer first, so "now (on disk)" really is what's on screen
+  await editorCtl.current?.save();
+  app.historyTab = tab;
+  app.historyRevBase = 0;
+  app.historyRevSel = 1;
+  app.historyDeletedSel = 0;
+  app.modal = "history";
+}
+
+export function restoreRevision(pageId: string, text: string, when: string) {
+  askConfirm(
+    `Replace the current text of this page with the version from ${when}? ${MOD_LABEL}+Z undoes it.`,
+    () => {
+      if (app.currentPageId !== pageId) {
+        flashStatus("the open page changed — restore cancelled");
+        return;
+      }
+      editorCtl.current?.replaceAll(text);
+      flashStatus(`restored the version from ${when}`);
+    },
+    "Restore",
+    "history",
+  );
+}
+
+export function recoverDeletedPage(sha: string, id: string, label: string, count: number) {
+  askConfirm(
+    `Recover "${label}"${count > 1 ? ` and ${count - 1} more page(s)` : ""}?`,
+    async () => {
+      try {
+        const outcome = await api.restoreDeletedPage(sha, id, currentSection()?.id ?? null);
+        await refreshTree();
+        const idx = app.notebook?.sections.findIndex((s) => s.id === outcome.sectionId) ?? -1;
+        if (idx >= 0) app.sectionIdx = idx;
+        selectAndOpen(outcome.pageId);
+        flashStatus(
+          outcome.renamed
+            ? `recovered ${outcome.pageCount} page(s) as a new copy`
+            : `recovered ${outcome.pageCount} page(s), ${outcome.assetCount} image(s)`,
+        );
+      } catch (e) {
+        app.status = String(e);
+      }
+    },
+    "Recover",
+    "history",
+  );
 }

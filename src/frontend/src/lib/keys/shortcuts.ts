@@ -4,8 +4,10 @@ import { ALT_LABEL, MOD_LABEL, SHIFT_LABEL } from "./platform";
 // help overlay and component tooltips so labels stay platform-correct in one
 // place. Intended to grow into the backing data for user-configurable
 // keybindings — keep it declarative.
-// `search` holds extra terms matched by the help filter but not shown — synonyms
-export type Shortcut = { keys: string; desc: string; search?: string };
+// `search` holds extra terms matched by the help filter but not shown — synonyms.
+// `gate` hides the row entirely when the named feature isn't available (git.rs
+// version history is opt-in and needs system git — see app.git in app.svelte.ts).
+export type Shortcut = { keys: string; desc: string; search?: string; gate?: "git" };
 
 const M = MOD_LABEL;
 const A = ALT_LABEL;
@@ -26,6 +28,8 @@ export const GLOBAL_SHORTCUTS: Shortcut[] = [
   { keys: `${M}+${S}+G`, desc: "Move page to section" },
   { keys: `${M}+O`, desc: "Open notebook" },
   { keys: `${M}+I`, desc: "Import", search: "onenote markdown mht folder pages sections" },
+  { keys: `${M}+H`, desc: "Page history", gate: "git", search: "revision version diff restore snapshot git" },
+  { keys: `${M}+${S}+H`, desc: "Recover deleted pages", gate: "git", search: "undelete trash restore recover" },
   { keys: `${M}+,`, desc: "Settings" },
   { keys: `${M}+= / − / 0`, desc: "Zoom in / out / reset" },
   { keys: `F3 / ${S}+F3`, desc: "Next / prev match" },
@@ -64,4 +68,17 @@ export const RESULTS_SHORTCUTS: Shortcut[] = [
   { keys: "Enter", desc: "Open result" },
   { keys: "/", desc: "Refine query" },
   { keys: "Esc", desc: "Back to page" },
+];
+
+export const HISTORY_SHORTCUTS: Shortcut[] = [
+  { keys: "↑ / ↓", desc: "Select revision" },
+  { keys: `${S}+↑ / ↓`, desc: "Move the comparison base" },
+  { keys: "B", desc: "Set base to selection" },
+  { keys: "1 / 2 / 3 / 4", desc: "Side-by-side / inline / rendered / text" },
+  { keys: "V", desc: "Cycle view mode" },
+  { keys: `N / P (also F3 / ${S}+F3)`, desc: "Next / previous change" },
+  { keys: "Tab", desc: "This page / deleted pages" },
+  { keys: "Enter / R", desc: "Restore selected" },
+  { keys: "?", desc: "This cheat sheet" },
+  { keys: "Esc", desc: "Close history" },
 ];

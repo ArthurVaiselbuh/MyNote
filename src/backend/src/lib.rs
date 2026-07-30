@@ -1,5 +1,7 @@
 mod assets;
 mod commands;
+mod git;
+mod history;
 mod import;
 mod import_md;
 mod import_mht;
@@ -11,8 +13,14 @@ mod store;
 use commands::AppState;
 use percent_encoding::percent_decode_str;
 use settings::Settings;
-use std::sync::Mutex;
-use tauri::Manager;
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{mpsc, Mutex};
+use std::time::{Duration, Instant};
+use tauri::{Emitter, Manager};
+
+const TICK: Duration = Duration::from_secs(60);
+const IDLE_SNAPSHOT_DEADLINE: Duration = Duration::from_secs(20);
+const FAILURE_BACKOFF: Duration = Duration::from_secs(60);
 
 pub fn run() {
     let settings = Settings::load();
@@ -24,6 +32,10 @@ pub fn run() {
         .manage(AppState {
             store: Mutex::new(None),
             settings: Mutex::new(settings),
+            closing: AtomicBool::new(false),
+            git_gate: Mutex::new(()),
+            git_stop: Mutex::new(None),
+            history_gate: Mutex::new(()),
         })
         .register_uri_scheme_protocol("note-asset", |ctx, request| {
             serve_asset(ctx.app_handle(), &request)
@@ -55,7 +67,14 @@ pub fn run() {
             commands::import_md,
             commands::reset_agents_md,
             commands::get_settings,
-            commands::set_settings
+            commands::set_settings,
+            commands::get_git_status,
+            commands::set_git_snapshots,
+            commands::page_revisions,
+            commands::revision_text,
+            commands::deleted_pages,
+            commands::deleted_page_text,
+            commands::restore_deleted_page
         ])
         .setup(|app| {
             let mut builder =
@@ -93,10 +112,26 @@ pub fn run() {
                 }
             }
             let _ = win.show();
+
+            let tx = spawn_git_ticker(app.handle().clone());
+            if let Ok(mut stop) = app.state::<AppState>().git_stop.lock() {
+                *stop = Some(tx);
+            }
             Ok(())
         })
         .on_window_event(|window, event| {
-            if let tauri::WindowEvent::CloseRequested { .. } = event {
+            if let tauri::WindowEvent::CloseRequested { api, .. } = event {
+                let state = window.state::<AppState>();
+                if !state.closing.swap(true, Ordering::SeqCst) {
+                    api.prevent_close();
+                    let _ = window.emit("mynote:flush-and-close", ());
+                    let watchdog = window.clone();
+                    std::thread::spawn(move || {
+                        std::thread::sleep(Duration::from_millis(1500));
+                        let _ = watchdog.close();
+                    });
+                    return;
+                }
                 persist_on_close(window);
             }
         })
@@ -141,11 +176,16 @@ fn build_log_plugin<R: tauri::Runtime>(settings: &Settings) -> tauri::plugin::Ta
 fn persist_on_close(window: &tauri::Window) {
     log::trace!("window close requested — persisting notebook and settings");
     let state = window.state::<AppState>();
+    if let Ok(mut stop) = state.git_stop.lock() {
+        if let Some(tx) = stop.take() {
+            let _ = tx.send(());
+        }
+    }
     if let Ok(mut guard) = state.store.lock() {
         if let Some(store) = guard.take() {
-            store.purge_deleted_files();
-            let _ = assets::prune(&store);
-            let _ = store.save();
+            drop(guard);
+            let info = store.close();
+            commands::commit_on_close(&state, window.app_handle(), &info);
         }
     }
     let settings_lock = state.settings.lock();
@@ -226,5 +266,81 @@ fn content_type(path: &std::path::Path) -> &'static str {
         "bmp" => "image/bmp",
         "svg" => "image/svg+xml",
         _ => "application/octet-stream",
+    }
+}
+
+fn spawn_git_ticker(app: tauri::AppHandle) -> mpsc::Sender<()> {
+    let (tx, rx) = mpsc::channel::<()>();
+    let spawned = std::thread::Builder::new()
+        .name("mynote-git".into())
+        .stack_size(64 * 1024)
+        .spawn(move || git_ticker_loop(app, rx));
+    if let Err(e) = spawned {
+        log::warn!("failed to spawn git ticker thread: {e}");
+    }
+    tx
+}
+
+fn git_ticker_loop(app: tauri::AppHandle, rx: mpsc::Receiver<()>) {
+    let mut backoff_until = Instant::now();
+    loop {
+        match rx.recv_timeout(TICK) {
+            Ok(()) | Err(mpsc::RecvTimeoutError::Disconnected) => return,
+            Err(mpsc::RecvTimeoutError::Timeout) => git_tick(&app, &mut backoff_until),
+        }
+    }
+}
+
+/// Must never hold `store` and `git_gate` at the same time, or this can
+/// deadlock against the close path.
+fn git_tick(app: &tauri::AppHandle, backoff_until: &mut Instant) {
+    if Instant::now() < *backoff_until {
+        return;
+    }
+    let state = app.state::<AppState>();
+
+    let plan = {
+        let Ok(guard) = state.store.lock() else { return };
+        let Some(store) = guard.as_ref() else { return };
+        let cfg = &store.notebook.git;
+        if !git::should_snapshot(
+            cfg,
+            store.change_seq(),
+            store.committed_seq(),
+            store.idle_ms(),
+            store.since_commit_ms(),
+        ) {
+            return;
+        }
+        (store.root.clone(), store.session(), store.change_seq())
+    };
+    let (root, session, seq) = plan;
+
+    if !git::available() || !git::is_repo(&root) {
+        return;
+    }
+
+    let outcome = {
+        let Ok(_gate) = state.git_gate.try_lock() else {
+            return;
+        };
+        git::snapshot(&root, git::SnapshotKind::Idle, IDLE_SNAPSHOT_DEADLINE)
+    };
+
+    match outcome {
+        Ok(_) => {
+            if let Ok(guard) = state.store.lock() {
+                if let Some(store) = guard.as_ref() {
+                    if store.session() == session && store.change_seq() == seq {
+                        store.mark_committed(seq);
+                    }
+                }
+            }
+        }
+        Err(e) => {
+            log::warn!("git idle snapshot failed: {e}");
+            commands::emit_git_snapshot_failed(app);
+            *backoff_until = Instant::now() + FAILURE_BACKOFF;
+        }
     }
 }

@@ -104,6 +104,59 @@ export interface Settings {
   window: WindowGeom | null;
 }
 
+export interface GitStatus {
+  available: boolean;
+  enabled: boolean;
+  repo: boolean;
+  intervalSecs: number;
+}
+
+export interface PageRevision {
+  sha: string;
+  at: number;
+  subject: string;
+}
+
+export interface RevisionText {
+  text: string;
+  truncated: boolean;
+  missing: boolean;
+}
+
+export interface DeletedChild {
+  id: string;
+  title: string;
+  children: DeletedChild[];
+}
+
+export interface DeletedItem {
+  sha: string;
+  at: number;
+  id: string;
+  title: string;
+  sectionId: string | null;
+  sectionName: string | null;
+  sectionExists: boolean;
+  parentId: string | null;
+  parentExists: boolean;
+  resolved: boolean;
+  pageCount: number;
+  children: DeletedChild[];
+}
+
+export interface DeletedHistory {
+  items: DeletedItem[];
+  hitCap: boolean;
+}
+
+export interface RestoreOutcome {
+  sectionId: string;
+  pageId: string;
+  pageCount: number;
+  assetCount: number;
+  renamed: boolean;
+}
+
 export const defaultSettings: Settings = {
   notebookPath: null,
   recentNotebooks: [],
@@ -162,4 +215,13 @@ export const api = {
   resetAgentsMd: () => invoke<void>("reset_agents_md"),
   getSettings: () => invoke<Settings>("get_settings"),
   setSettings: (settings: Settings) => invoke<void>("set_settings", { settings }),
+  getGitStatus: () => invoke<GitStatus>("get_git_status"),
+  setGitSnapshots: (enabled: boolean, intervalSecs?: number) =>
+    invoke<GitStatus>("set_git_snapshots", { enabled, intervalSecs }),
+  pageRevisions: (id: string) => invoke<PageRevision[]>("page_revisions", { id }),
+  revisionText: (id: string, sha: string) => invoke<RevisionText>("revision_text", { id, sha }),
+  deletedPages: () => invoke<DeletedHistory>("deleted_pages"),
+  deletedPageText: (sha: string, id: string) => invoke<RevisionText>("deleted_page_text", { sha, id }),
+  restoreDeletedPage: (sha: string, id: string, fallbackSectionId: string | null) =>
+    invoke<RestoreOutcome>("restore_deleted_page", { sha, id, fallbackSectionId }),
 };

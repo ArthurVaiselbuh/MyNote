@@ -93,9 +93,11 @@
     cmTheme,
   ];
 
+  const AUTOSAVE_MS = 3000;
+
   function scheduleSave() {
     clearTimeout(saveTimer);
-    saveTimer = setTimeout(() => void save(), 800);
+    saveTimer = setTimeout(() => void save(), AUTOSAVE_MS);
   }
 
   function splitDoc(content: string): { title: string; body: string } {
@@ -223,8 +225,9 @@
     if (app.editorFocusReq !== lastEditorReq) {
       lastEditorReq = app.editorFocusReq;
       // gate on app.focus: a remount (leaving results view) replays the last
-      // request, which must not steal focus aimed at another pane
-      if (app.mode === "edit" && app.focus === "editor") view?.focus();
+      // request, which must not steal focus aimed at another pane — nor pull
+      // keystrokes under an open modal (Ctrl+H from results remounts us)
+      if (app.mode === "edit" && app.focus === "editor" && app.modal === "none") view?.focus();
     }
   });
 
@@ -287,6 +290,23 @@
       },
       setTitle(t: string) {
         title = t;
+      },
+      replaceAll(content: string) {
+        if (!view || !loadedId) return;
+        if (app.mode !== "edit") app.mode = "edit";
+        const parsed = splitDoc(content);
+        if (parsed.title) {
+          title = parsed.title;
+          act.updateTreeTitle(loadedId, parsed.title);
+        }
+        // a real transaction over the whole doc — NOT setState(), which would
+        // wipe CodeMirror's undo history and make this restore un-undoable
+        view.dispatch({
+          changes: { from: 0, to: view.state.doc.length, insert: parsed.body },
+          selection: { anchor: 0 },
+          scrollIntoView: true,
+        });
+        view.focus();
       },
     };
     return () => {

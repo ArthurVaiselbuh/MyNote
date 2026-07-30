@@ -62,6 +62,7 @@ are supported cross-platform builds off the same code.
   notebook. Window geometry and the MRU are backend-owned: `set_settings`
   ignores the frontend's copies.
 - `<config>\MyNote\MyNote.log` sits alongside `settings.json`.
+- `notebook.json`'s `git` key is the per-notebook opt-in for git snapshots — see the design decision below.
 
 ## Design decisions
 
@@ -170,6 +171,58 @@ are supported cross-platform builds off the same code.
   - **No user content or personal data in logs:** never log note bodies,
     page/section titles, search query text, or filesystem paths. Log ids
     (UUIDs), counts, sizes, indices, and enum/pane names only.
+- **Autosave** debounces 3s after the last keystroke
+- **Per-notebook git snapshots** are an opt-in safety net (`notebook.json`'s
+  `git.enabled`/`git.intervalSecs`, toggle in Settings), never a runtime
+  dependency: MyNote shells out to the system `git`, and
+  silently no-ops everywhere if it isn't on `PATH` (checked once, cached).
+  Every invocation runs with the user's global and system git config ignored
+  (`GIT_CONFIG_GLOBAL`/`GIT_CONFIG_SYSTEM` nulled in `git.rs::base()`), so only
+  the repo-local config MyNote writes applies — a globally installed git-lfs
+  filter or credential helper can't rewrite the stored bytes or stall a commit.
+  Git is never on the data-safety path — every git failure is "skip and log".
+- **History pane** (Ctrl+H page revisions / Ctrl+Shift+H deleted pages,
+  `history.rs`) reads those snapshots back and is **hidden entirely when git
+  isn't available** — both shortcuts and the Settings "Browse history…"
+  button gate on `GitStatus.available` (`app.git` in the frontend). It is a
+  **full-window pane, not a centered modal**: the revision rail takes over the
+  tree's side and the diff the preview's, so diffs get the whole screen. It
+  still lives in `app.modal` (so the keyboard-precedence rules above apply
+  unchanged) and the tree/`Editor` stay mounted underneath — the Editor *must*
+  stay mounted or `editorCtl.replaceAll` has nothing to restore into. It also
+  stays mounted behind its own restore/recover confirm
+  (`app.confirm.returnTo === "history"`), so cancelling returns to an intact
+  pane; the same holds for the `?` cheat sheet it opens. Its window key handler
+  bails whenever `app.modal !== "history"`, so whichever modal it opened owns
+  the keyboard.
+  The diff's **base defaults to "now (on disk)" with the newest snapshot
+  selected**, so base is the before side and the selection the after side:
+  the split view reads as *what restoring the selected revision would do*
+  (red = lines it drops, green = lines it brings back). Base is movable
+  (Shift+↑/↓, `B`). Commit shas are deliberately not shown — the rail
+  identifies a revision by timestamp and relative age. All git
+  use here is read-only (`log`, `cat-file`, `ls-tree` in `git.rs`, batched via
+  `cat-file --batch` so listing costs a handful of processes regardless of
+  history size) with deadlines and caps, so reads take no `git_gate` and never
+  block a snapshot — they take a separate `history_gate` that only bounds
+  concurrent process spawns. Every history command clones the `root`/
+  `notebook` it needs and drops the store lock before running git, so
+  browsing history never blocks autosave/typing on the same store mutex.
+  Diffs are computed in TypeScript (`lib/diff.ts`, no dependency) rather than
+  parsed from `git diff`, so any revision can be compared with any other
+  including the live on-disk buffer, and **the whole page is always
+  rendered — unchanged runs are never collapsed**, side-by-side or inline.
+  Restoring a revision replaces the CodeMirror buffer as one normal edit
+  (`editorCtl.replaceAll`, undoable via Ctrl+Z, saved by the usual autosave
+  path) — never the on-disk file directly. Recovering a deleted page reads
+  its subtree shape from `notebook.json`'s own history (deferred deletion
+  means the deleting commit itself often doesn't touch `notebook.json` — see
+  the doc comment on `history::deleted_pages`) and writes bodies +
+  `assets/<page-id>/` through `Store::insert_restored`, reusing the original
+  id when free (else a new id, with asset links rewritten), landing at the
+  top level of its old section when an ancestor is gone rather than
+  recreating it. A recovery counts as a *create*, so it is not on the tree
+  undo stack (matching `create_page`/import).
 - **Deferred / out of scope:** light theme, installer.
 
 ## Keyboard & focus model (the hard part — keep the precedence exact)
@@ -191,11 +244,13 @@ One capture-phase window keydown listener dispatches with strict precedence:
    only Esc is handled globally (closes it; a stacked sub-modal steps back one
    layer instead — Esc in the color picker returns to the insert helper).
 2. Global shortcuts fire even while typing: Ctrl+K/F/E/S/N/Shift+N/1/2/3/
-   G/Shift+G/O/I/J/, · Ctrl+PgUp/Dn · Ctrl+=/−/0 · F3/Shift+F3 (`?` only when
-   not typing). Ctrl+G opens the section picker in go-to mode, Ctrl+Shift+G
-   in move-page mode; cross-section moves follow the page (switch to the
-   target section with the page selected). Ctrl+Z/Y (tree undo/redo) are
-   global but yield to native text undo while typing.
+   G/Shift+G/O/I/J/H/Shift+H/, · Ctrl+PgUp/Dn · Ctrl+=/−/0 · F3/Shift+F3 (`?`
+   only when not typing). Ctrl+G opens the section picker in go-to mode,
+   Ctrl+Shift+G in move-page mode; cross-section moves follow the page
+   (switch to the target section with the page selected). Ctrl+H/Shift+H
+   (page history / deleted pages) are inert when git isn't available.
+   Ctrl+Z/Y (tree undo/redo) are global but yield to native text undo while
+   typing.
 3. Typing guard: inside input/textarea/contentEditable/CodeMirror, pane-local
    keys are suppressed. Exception: Tab still cycles out of the search box;
    Tab inside CodeMirror indents.
@@ -208,7 +263,10 @@ editor→tree → clear tree filter. Tab cycles a view-dependent ring
 (page: tree↔editor; results: tree→search→results). PgUp/PgDn scroll the main
 view even when focus is elsewhere (CodeMirror keeps native paging with the
 caret). The `?` overlay is context-aware: focused-pane keys, pane keys,
-globals — filterable.
+globals — filterable. It is the *only* place shortcuts are listed on screen —
+panes don't carry their own cheat-sheet strip. `app.helpContext` selects which
+sheet it shows: the history pane binds `?` to the history-only sheet, and Esc
+there steps back to history instead of closing everything.
 
 Gotcha: the Editor component unmounts in results view — anything that needs
 the editor after leaving results must go through app state consumed on mount

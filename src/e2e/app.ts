@@ -186,6 +186,32 @@ export class App {
     await this.newTitledPage(title, expectedCount);
     await this.setBody(body);
   }
+
+  /** Ctrl+, → tick "Version history" → wait for the interval field → close.
+   * Idempotent: leaves snapshots enabled whether or not they already were. */
+  async enableGitSnapshots() {
+    await this.page.keyboard.press("Control+,");
+    const checkbox = this.page.locator("#set-git");
+    await expect(checkbox).toBeVisible();
+    if (!(await checkbox.isChecked())) {
+      await checkbox.click();
+    }
+    await expect(this.page.locator("#set-git-interval")).toBeVisible();
+    await this.page.keyboard.press("Escape");
+    await expect(this.page.locator(".modal-backdrop")).toHaveCount(0);
+  }
+}
+
+/** Whether the machine running the suite has a usable `git` on PATH — the
+ * same gate `git.rs::available()` applies, checked from the test side so
+ * history specs can skip cleanly instead of failing on a disabled checkbox. */
+export function hasGit(): boolean {
+  try {
+    execSync("git --version", { stdio: "ignore" });
+    return true;
+  } catch {
+    return false;
+  }
 }
 
 function portIsOpen(): Promise<boolean> {

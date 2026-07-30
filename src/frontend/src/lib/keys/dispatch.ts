@@ -47,6 +47,7 @@ export function handleGlobal(e: KeyboardEvent) {
       case "g": handled(); act.openSectionPicker(e.shiftKey ? "move" : "goto"); return;
       case "o": handled(); void act.openNotebookModal(); return;
       case "i": handled(); act.openImport(); return;
+      case "h": handled(); void act.openHistory(e.shiftKey ? "deleted" : "page"); return;
       case ",": handled(); act.openModal("settings"); return;
       case "1": handled(); act.focusPane("tree"); return;
       case "2": handled(); act.focusPane("editor"); return;
