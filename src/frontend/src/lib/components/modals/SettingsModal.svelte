@@ -1,16 +1,51 @@
 <script lang="ts">
+  import { onMount } from "svelte";
   import * as act from "../../actions";
+  import { api, type GitStatus } from "../../api";
   import { MOD_LABEL } from "../../keys/platform";
   import { app } from "../../state/app.svelte";
 
   function persist() {
     void act.persistSettings();
   }
+
+  let gitStatus = $state<GitStatus | null>(null);
+  let gitIntervalMinutes = $state(60);
+
+  onMount(() => {
+    void api.getGitStatus().then((s) => {
+      gitStatus = s;
+      app.git = s;
+      gitIntervalMinutes = Math.max(1, Math.round(s.intervalSecs / 60));
+    });
+  });
+
+  async function toggleGit(e: Event) {
+    const enabled = (e.currentTarget as HTMLInputElement).checked;
+    try {
+      gitStatus = await api.setGitSnapshots(enabled, gitIntervalMinutes * 60);
+      app.git = gitStatus;
+    } catch (err) {
+      app.status = String(err);
+    }
+  }
+
+  async function changeGitInterval() {
+    if (!gitStatus?.enabled) return;
+    try {
+      gitStatus = await api.setGitSnapshots(true, gitIntervalMinutes * 60);
+      app.git = gitStatus;
+    } catch (err) {
+      app.status = String(err);
+    }
+  }
 </script>
 
 <div class="modal-backdrop">
   <div class="modal" style:width="480px" role="dialog">
     <div class="modal-title">Settings</div>
+
+    <div class="settings-section-label">General — every notebook</div>
 
     <div class="settings-row">
       <span>Colors &amp; theme</span>
@@ -40,26 +75,69 @@
       </select>
     </div>
 
-    <div class="modal-title" style="margin-top:14px">Notebook</div>
-    <div class="settings-path">{app.root || "(none open)"}</div>
-    <div class="settings-row">
-      <span>Open a different notebook ({MOD_LABEL}+O)</span>
-      <button
-        onclick={() => {
-          act.closeModal();
-          void act.openNotebookModal();
-        }}>Open…</button
-      >
-    </div>
-
-    <div class="settings-row">
-      <span>Reset AGENTS.md</span>
-      <button onclick={() => act.overwriteAgentsMd()}>Overwrite…</button>
-    </div>
-
     <div class="settings-row">
       <span>Welcome tour</span>
       <button onclick={() => (app.modal = "welcome")}>Show again</button>
+    </div>
+
+    <div class="settings-group">
+      <div class="settings-section-label">Current Notebook</div>
+      <div class="settings-path">{app.root || "(none open)"}</div>
+
+      <div class="settings-row">
+        <span>Switch notebook ({MOD_LABEL}+O)</span>
+        <button
+          onclick={() => {
+            act.closeModal();
+            void act.openNotebookModal();
+          }}>Open…</button
+        >
+      </div>
+
+      <div class="settings-row">
+        <label for="set-git">Version history</label>
+        <input
+          id="set-git"
+          type="checkbox"
+          checked={gitStatus?.enabled ?? false}
+          disabled={!gitStatus?.available}
+          onchange={toggleGit}
+        />
+      </div>
+      {#if gitStatus && !gitStatus.available}
+        <div class="settings-path">
+          git was not found on this machine — install it to enable version history.
+        </div>
+      {:else if gitStatus?.enabled}
+        <div class="settings-row">
+          <label for="set-git-interval">Snapshot interval (minutes)</label>
+          <input
+            id="set-git-interval"
+            type="number"
+            min="1"
+            max="1440"
+            step="1"
+            bind:value={gitIntervalMinutes}
+            onchange={changeGitInterval}
+          />
+        </div>
+      {/if}
+      {#if gitStatus?.available}
+        <div class="settings-row">
+          <span>Browse history ({MOD_LABEL}+H)</span>
+          <button
+            onclick={() => {
+              act.closeModal();
+              void act.openHistory("page");
+            }}>Open…</button
+          >
+        </div>
+      {/if}
+
+      <div class="settings-row">
+        <span>Reset AGENTS.md</span>
+        <button onclick={() => act.overwriteAgentsMd()}>Overwrite…</button>
+      </div>
     </div>
 
     <div class="modal-buttons">

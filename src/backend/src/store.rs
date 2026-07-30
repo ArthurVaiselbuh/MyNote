@@ -1,7 +1,11 @@
 use serde::{Deserialize, Serialize};
+use std::cell::RefCell;
 use std::collections::HashSet;
 use std::fs;
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::OnceLock;
+use std::time::Instant;
 
 use crate::lock::{LockError, NotebookLock};
 
@@ -37,6 +41,24 @@ pub fn new_id() -> String {
     uuid::Uuid::new_v4().to_string()
 }
 
+/// True for any UUID-shaped string (36 chars, hyphens at 8/13/18/23, hex
+/// elsewhere) — how every page file is named. Used to recognize page files
+/// among arbitrary git history paths and as a defensive argv check before a
+/// caller-supplied id reaches a git subprocess.
+pub fn is_page_id(id: &str) -> bool {
+    let bytes = id.as_bytes();
+    if bytes.len() != 36 {
+        return false;
+    }
+    bytes.iter().enumerate().all(|(i, &b)| {
+        if matches!(i, 8 | 13 | 18 | 23) {
+            b == b'-'
+        } else {
+            b.is_ascii_hexdigit()
+        }
+    })
+}
+
 fn default_true() -> bool {
     true
 }
@@ -70,12 +92,36 @@ pub struct LastView {
     pub page_id: Option<String>,
 }
 
+fn default_git_interval_secs() -> u64 {
+    3600
+}
+
+#[derive(Serialize, Deserialize, Clone, Debug)]
+#[serde(rename_all = "camelCase")]
+pub struct GitConfig {
+    #[serde(default)]
+    pub enabled: bool,
+    #[serde(default = "default_git_interval_secs")]
+    pub interval_secs: u64,
+}
+
+impl Default for GitConfig {
+    fn default() -> GitConfig {
+        GitConfig {
+            enabled: false,
+            interval_secs: default_git_interval_secs(),
+        }
+    }
+}
+
 #[derive(Serialize, Deserialize, Clone, Debug)]
 #[serde(rename_all = "camelCase")]
 pub struct Notebook {
     pub sections: Vec<Section>,
     #[serde(default)]
     pub last_view: LastView,
+    #[serde(default)]
+    pub git: GitConfig,
 }
 
 enum UndoOp {
@@ -123,6 +169,22 @@ const UNDO_LIMIT: usize = 100;
 
 const AGENTS_TEMPLATE: &str = include_str!("../templates/agents-template.md");
 
+fn epoch() -> Instant {
+    static EPOCH: OnceLock<Instant> = OnceLock::new();
+    *EPOCH.get_or_init(Instant::now)
+}
+
+pub fn now_ms() -> u64 {
+    epoch().elapsed().as_millis() as u64
+}
+
+static NEXT_SESSION: AtomicU64 = AtomicU64::new(1);
+
+pub struct CloseInfo {
+    pub root: PathBuf,
+    pub git_enabled: bool,
+}
+
 pub struct Store {
     pub root: PathBuf,
     pub notebook: Notebook,
@@ -131,6 +193,13 @@ pub struct Store {
     session_deleted: HashSet<String>,
     #[allow(dead_code)]
     lock: NotebookLock,
+
+    session: u64,
+    change_seq: AtomicU64,
+    committed_seq: AtomicU64,
+    last_change_ms: AtomicU64,
+    last_commit_ms: AtomicU64,
+    last_saved_json: RefCell<String>,
 }
 
 impl Store {
@@ -148,6 +217,12 @@ impl Store {
             redo_stack: vec![],
             session_deleted: HashSet::new(),
             lock,
+            session: NEXT_SESSION.fetch_add(1, Ordering::Relaxed),
+            change_seq: AtomicU64::new(0),
+            committed_seq: AtomicU64::new(0),
+            last_change_ms: AtomicU64::new(now_ms()),
+            last_commit_ms: AtomicU64::new(now_ms()),
+            last_saved_json: RefCell::new(String::new()),
         };
         if store.notebook.sections.is_empty() {
             store.notebook.sections.push(Section {
@@ -172,12 +247,58 @@ impl Store {
     }
 
     pub fn save(&self) -> Result<(), String> {
+        self.save_internal(true)
+    }
+
+    fn save_view_state(&self) -> Result<(), String> {
+        self.save_internal(false)
+    }
+
+    fn save_internal(&self, touch_on_write: bool) -> Result<(), String> {
         let json = serde_json::to_string_pretty(&self.notebook).map_err(err)?;
+        if *self.last_saved_json.borrow() == json {
+            return Ok(());
+        }
         let path = self.root.join("notebook.json");
         if path.exists() {
             let _ = fs::copy(&path, self.root.join("notebook.json.bak"));
         }
-        atomic_write(&path, json.as_bytes())
+        atomic_write(&path, json.as_bytes())?;
+        *self.last_saved_json.borrow_mut() = json;
+        if touch_on_write {
+            self.touch();
+        }
+        Ok(())
+    }
+
+    pub fn session(&self) -> u64 {
+        self.session
+    }
+
+    pub fn change_seq(&self) -> u64 {
+        self.change_seq.load(Ordering::Relaxed)
+    }
+
+    pub fn committed_seq(&self) -> u64 {
+        self.committed_seq.load(Ordering::Relaxed)
+    }
+
+    pub fn idle_ms(&self) -> u64 {
+        now_ms().saturating_sub(self.last_change_ms.load(Ordering::Relaxed))
+    }
+
+    pub fn since_commit_ms(&self) -> u64 {
+        now_ms().saturating_sub(self.last_commit_ms.load(Ordering::Relaxed))
+    }
+
+    pub fn mark_committed(&self, seq: u64) {
+        self.committed_seq.store(seq, Ordering::Relaxed);
+        self.last_commit_ms.store(now_ms(), Ordering::Relaxed);
+    }
+
+    fn touch(&self) {
+        self.change_seq.fetch_add(1, Ordering::Relaxed);
+        self.last_change_ms.store(now_ms(), Ordering::Relaxed);
     }
 
     pub fn page_path(&self, id: &str) -> PathBuf {
@@ -308,7 +429,11 @@ impl Store {
             .title
             .clone();
         atomic_write(&self.page_path(id), content.as_bytes())?;
-        let title = extract_title(content).unwrap_or(existing_title);
+        let title = extract_title(content).unwrap_or_else(|| existing_title.clone());
+        if title == existing_title {
+            self.touch();
+            return Ok(title);
+        }
         if let Some(node) = self.find_page_mut(id) {
             node.title = title.clone();
         }
@@ -411,7 +536,7 @@ impl Store {
     pub fn set_expanded(&mut self, id: &str, expanded: bool) -> Result<(), String> {
         let node = self.find_page_mut(id).ok_or("page not found")?;
         node.expanded = expanded;
-        self.save()
+        self.save_view_state()
     }
 
     pub fn set_last_view(
@@ -423,7 +548,7 @@ impl Store {
             section_id,
             page_id,
         };
-        self.save()
+        self.save_view_state()
     }
 
     fn is_descendant(&self, ancestor_id: &str, node_id: &str) -> bool {
@@ -593,6 +718,16 @@ impl Store {
         }
     }
 
+    pub fn close(self) -> CloseInfo {
+        self.purge_deleted_files();
+        let _ = crate::assets::prune(&self);
+        let _ = self.save();
+        CloseInfo {
+            root: self.root.clone(),
+            git_enabled: self.notebook.git.enabled,
+        }
+    }
+
     fn insert_page_at(
         &mut self,
         node: PageNode,
@@ -672,6 +807,107 @@ impl Store {
                 .ok_or_else(|| "parent not found".to_string()),
         }
     }
+
+    /// True when `id` is free to reuse for a restore: no live tree node, and
+    /// no leftover file on disk either (a pending-purge delete from this same
+    /// session, or a stray `.md` the app never wrote, must never be clobbered).
+    pub fn id_available(&self, id: &str) -> bool {
+        self.find_page(id).is_none() && !self.page_path(id).exists()
+    }
+
+    fn write_incoming(&mut self, page: IncomingPage) -> Result<PageNode, String> {
+        let id = if is_page_id(&page.id) && self.id_available(&page.id) {
+            page.id.clone()
+        } else {
+            new_id()
+        };
+        let content = if id == page.id {
+            page.content
+        } else {
+            // the id changed, so the page's own asset links must follow it —
+            // otherwise every image in the restored page renders broken.
+            page.content.replace(&format!("assets/{}/", page.id), &format!("assets/{id}/"))
+        };
+        atomic_write(&self.page_path(&id), content.as_bytes())?;
+        if !page.assets.is_empty() {
+            let dir = self.root.join("assets").join(&id);
+            fs::create_dir_all(&dir).map_err(err)?;
+            for (name, bytes) in &page.assets {
+                let Some(safe_name) = Path::new(name).file_name().and_then(|f| f.to_str()) else {
+                    continue; // reject traversal / empty names rather than fail the whole restore
+                };
+                let path = dir.join(safe_name);
+                if !path.exists() {
+                    fs::write(&path, bytes).map_err(err)?;
+                }
+            }
+        }
+        // defensive: a restore must never leave a recovered file eligible
+        // for purge by an unrelated still-pending delete of the same id.
+        self.session_deleted.remove(&id);
+
+        let title = extract_title(&content).unwrap_or_else(|| "Untitled".to_string());
+        let mut children = Vec::with_capacity(page.children.len());
+        for child in page.children {
+            children.push(self.write_incoming(child)?);
+        }
+        Ok(PageNode { id, title, expanded: true, children })
+    }
+
+    /// Writes a recovered subtree through the normal file + tree-save path
+    /// (same `atomic_write`, same title-from-H1 sync as every other write) and
+    /// appends it under `parent_id` in `section_id`. `parent_id` is used only
+    /// when it names a page that's actually in that section right now — a
+    /// restored subtree never recreates a missing ancestor, it lands at the
+    /// section's top level instead. Nesting *within* the incoming subtree
+    /// (children/grandchildren) is always preserved. Not on the undo stack:
+    /// a restore is a create, like `create_page`/import.
+    pub fn insert_restored(
+        &mut self,
+        section_id: &str,
+        parent_id: Option<&str>,
+        pages: Vec<IncomingPage>,
+    ) -> Result<Vec<PageNode>, String> {
+        if !self.notebook.sections.iter().any(|s| s.id == section_id) {
+            return Err("section not found".to_string());
+        }
+        if pages.is_empty() {
+            return Ok(Vec::new());
+        }
+        let target_parent = parent_id.and_then(|pid| {
+            let section = self.notebook.sections.iter().find(|s| s.id == section_id)?;
+            find_node(&section.pages, pid)?;
+            Some(pid.to_string())
+        });
+
+        let mut written = Vec::with_capacity(pages.len());
+        for page in pages {
+            written.push(self.write_incoming(page)?);
+        }
+
+        {
+            let list = self.pages_list_mut(section_id, target_parent.as_deref())?;
+            list.extend(written.iter().cloned());
+        }
+        if let Some(pid) = &target_parent {
+            if let Some(parent) = self.find_page_mut(pid) {
+                parent.expanded = true;
+            }
+        }
+        self.save()?;
+        Ok(written)
+    }
+}
+
+/// One recovered page (and its recovered subtree) ready to be written by
+/// `Store::insert_restored`. `content` is the full markdown body including
+/// its `# Title` line; `assets` are `(file name, bytes)` pairs that land
+/// under the page's (possibly reassigned) `assets/<id>/`.
+pub struct IncomingPage {
+    pub id: String,
+    pub content: String,
+    pub assets: Vec<(String, Vec<u8>)>,
+    pub children: Vec<IncomingPage>,
 }
 
 fn atomic_write(path: &Path, contents: &[u8]) -> Result<(), String> {
@@ -707,6 +943,7 @@ fn load_notebook(root: &Path) -> Result<Notebook, String> {
     Ok(Notebook {
         sections: vec![],
         last_view: LastView::default(),
+        git: GitConfig::default(),
     })
 }
 
@@ -867,6 +1104,96 @@ mod tests {
             .unwrap();
         assert_eq!(title, "Meeting Notes");
         assert_eq!(store.find_page(&page.id).unwrap().title, "Meeting Notes");
+    }
+
+    #[test]
+    fn write_page_skips_tree_save_when_title_unchanged() {
+        let (dir, mut store) = open_store();
+        let sid = section_id(&store);
+        let page = store.create_page(&sid, None, None).unwrap();
+        store
+            .write_page(&page.id, "# Untitled\n\nfirst body\n")
+            .unwrap();
+        let json_before = fs::read_to_string(dir.path().join("notebook.json")).unwrap();
+        fs::remove_file(dir.path().join("notebook.json.bak")).unwrap();
+        let seq_before = store.change_seq();
+
+        store
+            .write_page(&page.id, "# Untitled\n\nsecond body\n")
+            .unwrap();
+
+        assert!(!dir.path().join("notebook.json.bak").exists());
+        let json_after = fs::read_to_string(dir.path().join("notebook.json")).unwrap();
+        assert_eq!(json_before, json_after);
+        assert!(store.change_seq() > seq_before);
+        assert_eq!(
+            store.read_page(&page.id).unwrap(),
+            "# Untitled\n\nsecond body\n"
+        );
+    }
+
+    #[test]
+    fn write_page_saves_tree_when_title_changes() {
+        let (dir, mut store) = open_store();
+        let sid = section_id(&store);
+        let page = store.create_page(&sid, None, None).unwrap();
+        fs::remove_file(dir.path().join("notebook.json.bak")).unwrap();
+
+        store
+            .write_page(&page.id, "# New Title\n\nbody\n")
+            .unwrap();
+
+        assert!(dir.path().join("notebook.json.bak").exists());
+        assert_eq!(store.find_page(&page.id).unwrap().title, "New Title");
+    }
+
+    #[test]
+    fn save_is_a_noop_when_nothing_changed() {
+        let (dir, store) = open_store();
+        assert!(!dir.path().join("notebook.json.bak").exists());
+        store.save().unwrap();
+        assert!(!dir.path().join("notebook.json.bak").exists());
+    }
+
+    #[test]
+    fn content_mutations_bump_change_seq() {
+        let (_dir, mut store) = open_store();
+        let sid = section_id(&store);
+        let seq0 = store.change_seq();
+        let page = store.create_page(&sid, None, None).unwrap();
+        assert!(store.change_seq() > seq0);
+        let seq1 = store.change_seq();
+        store.rename_page(&page.id, "Renamed").unwrap();
+        assert!(store.change_seq() > seq1);
+    }
+
+    #[test]
+    fn view_state_does_not_bump_change_seq() {
+        let (_dir, mut store) = open_store();
+        let sid = section_id(&store);
+        let page = store.create_page(&sid, None, None).unwrap();
+        let seq = store.change_seq();
+        store.set_expanded(&page.id, false).unwrap();
+        store
+            .set_last_view(Some(sid), Some(page.id.clone()))
+            .unwrap();
+        assert_eq!(store.change_seq(), seq);
+    }
+
+    #[test]
+    fn notebook_git_config_defaults_and_round_trips() {
+        let (dir, mut store) = open_store();
+        assert!(!store.notebook.git.enabled);
+        assert_eq!(store.notebook.git.interval_secs, 3600);
+
+        store.notebook.git.enabled = true;
+        store.notebook.git.interval_secs = 120;
+        store.save().unwrap();
+        drop(store);
+
+        let reopened = Store::open(dir.path()).unwrap();
+        assert!(reopened.notebook.git.enabled);
+        assert_eq!(reopened.notebook.git.interval_secs, 120);
     }
 
     #[test]
@@ -1138,6 +1465,161 @@ mod tests {
         drop(first);
         // once the first handle is gone the lock is released, crash or not
         assert!(Store::open(dir.path()).is_ok());
+    }
+
+    #[test]
+    fn is_page_id_accepts_uuids_and_rejects_junk() {
+        assert!(is_page_id(&new_id()));
+        assert!(is_page_id("11111111-1111-1111-1111-111111111111"));
+        assert!(!is_page_id("notebook.json"));
+        assert!(!is_page_id("AGENTS.md"));
+        assert!(!is_page_id("-1111111-1111-1111-1111-111111111111"));
+        assert!(!is_page_id("11111111-1111-1111-1111-11111111111")); // too short
+        assert!(!is_page_id("1111111g-1111-1111-1111-111111111111")); // non-hex
+    }
+
+    #[test]
+    fn id_available_is_false_for_a_file_on_disk_without_a_tree_node() {
+        let (_dir, store) = open_store();
+        let orphan_id = new_id();
+        fs::write(store.page_path(&orphan_id), "# X\n").unwrap();
+        assert!(!store.id_available(&orphan_id));
+        assert!(store.id_available(&new_id()));
+    }
+
+    #[test]
+    fn insert_restored_reuses_a_free_id_and_syncs_title_from_h1() {
+        let (dir, mut store) = open_store();
+        let sid = section_id(&store);
+        let id = new_id();
+        let page = IncomingPage {
+            id: id.clone(),
+            content: "# Recovered\n\nbody\n".to_string(),
+            assets: vec![],
+            children: vec![],
+        };
+        let written = store.insert_restored(&sid, None, vec![page]).unwrap();
+        assert_eq!(written.len(), 1);
+        assert_eq!(written[0].id, id);
+        assert_eq!(written[0].title, "Recovered");
+        assert_eq!(store.find_page(&id).unwrap().title, "Recovered");
+        assert_eq!(
+            fs::read_to_string(dir.path().join(format!("{id}.md"))).unwrap(),
+            "# Recovered\n\nbody\n"
+        );
+    }
+
+    #[test]
+    fn insert_restored_mints_a_new_id_when_taken_and_rewrites_asset_links() {
+        let (_dir, mut store) = open_store();
+        let sid = section_id(&store);
+        let live = store.create_page(&sid, None, None).unwrap(); // occupies its own id, irrelevant here
+        let taken_id = live.id.clone();
+        let page = IncomingPage {
+            id: taken_id.clone(),
+            content: format!("# Recovered\n\n![x](assets/{taken_id}/img.png)\n"),
+            assets: vec![("img.png".to_string(), vec![1, 2, 3])],
+            children: vec![],
+        };
+        let written = store.insert_restored(&sid, None, vec![page]).unwrap();
+        assert_ne!(written[0].id, taken_id, "the live id must not be clobbered");
+        let new_id = written[0].id.clone();
+        let content = store.read_page(&new_id).unwrap();
+        assert!(content.contains(&format!("assets/{new_id}/img.png")));
+        assert!(!content.contains(&format!("assets/{taken_id}/img.png")));
+        assert!(store.root.join("assets").join(&new_id).join("img.png").exists());
+    }
+
+    #[test]
+    fn insert_restored_preserves_nesting() {
+        let (_dir, mut store) = open_store();
+        let sid = section_id(&store);
+        let grandchild = IncomingPage {
+            id: new_id(),
+            content: "# Grandchild\n".to_string(),
+            assets: vec![],
+            children: vec![],
+        };
+        let child = IncomingPage {
+            id: new_id(),
+            content: "# Child\n".to_string(),
+            assets: vec![],
+            children: vec![grandchild],
+        };
+        let parent = IncomingPage {
+            id: new_id(),
+            content: "# Parent\n".to_string(),
+            assets: vec![],
+            children: vec![child],
+        };
+        let written = store.insert_restored(&sid, None, vec![parent]).unwrap();
+        assert_eq!(written[0].title, "Parent");
+        assert_eq!(written[0].children[0].title, "Child");
+        assert_eq!(written[0].children[0].children[0].title, "Grandchild");
+        let parent_node = store.find_page(&written[0].id).unwrap();
+        assert_eq!(parent_node.children[0].children[0].title, "Grandchild");
+    }
+
+    #[test]
+    fn insert_restored_appends_to_the_section_top_level_when_parent_is_gone() {
+        let (_dir, mut store) = open_store();
+        let sid = section_id(&store);
+        let page = IncomingPage {
+            id: new_id(),
+            content: "# Orphaned\n".to_string(),
+            assets: vec![],
+            children: vec![],
+        };
+        // "not-a-real-page" never existed in this section
+        let written = store.insert_restored(&sid, Some("not-a-real-page"), vec![page]).unwrap();
+        assert_eq!(store.notebook.sections[0].pages.last().unwrap().id, written[0].id);
+    }
+
+    #[test]
+    fn insert_restored_does_not_clobber_an_existing_asset_file() {
+        let (_dir, mut store) = open_store();
+        let sid = section_id(&store);
+        let id = new_id();
+        let assets_dir = store.root.join("assets").join(&id);
+        fs::create_dir_all(&assets_dir).unwrap();
+        fs::write(assets_dir.join("img.png"), b"current bytes").unwrap();
+        let page = IncomingPage {
+            id: id.clone(),
+            content: "# R\n".to_string(),
+            assets: vec![("img.png".to_string(), b"historical bytes".to_vec())],
+            children: vec![],
+        };
+        store.insert_restored(&sid, None, vec![page]).unwrap();
+        assert_eq!(fs::read(assets_dir.join("img.png")).unwrap(), b"current bytes");
+    }
+
+    #[test]
+    fn insert_restored_bumps_change_seq_and_writes_notebook_json() {
+        let (dir, mut store) = open_store();
+        let sid = section_id(&store);
+        let seq_before = store.change_seq();
+        let page = IncomingPage {
+            id: new_id(),
+            content: "# R\n".to_string(),
+            assets: vec![],
+            children: vec![],
+        };
+        store.insert_restored(&sid, None, vec![page]).unwrap();
+        assert!(store.change_seq() > seq_before);
+        let json = fs::read_to_string(dir.path().join("notebook.json")).unwrap();
+        assert!(json.contains("\"title\": \"R\""));
+    }
+
+    #[test]
+    fn insert_restored_rejects_an_unknown_section() {
+        let (_dir, mut store) = open_store();
+        let page = IncomingPage {
+            id: new_id(),
+            content: "# R\n".to_string(),
+            assets: vec![],
+            children: vec![],
+        };
+        assert!(store.insert_restored("no-such-section", None, vec![page]).is_err());
     }
 
     #[test]

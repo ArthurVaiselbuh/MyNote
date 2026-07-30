@@ -1,5 +1,7 @@
 <script lang="ts">
   import { onMount } from "svelte";
+  import { listen } from "@tauri-apps/api/event";
+  import { getCurrentWindow } from "@tauri-apps/api/window";
   import * as act from "./lib/actions";
   import { handleGlobal } from "./lib/keys/dispatch";
   import { app } from "./lib/state/app.svelte";
@@ -10,6 +12,7 @@
   import Tree from "./lib/components/Tree.svelte";
   import ConfirmDialog from "./lib/components/modals/ConfirmDialog.svelte";
   import HelpOverlay from "./lib/components/modals/HelpOverlay.svelte";
+  import History from "./lib/components/modals/History.svelte";
   import Import from "./lib/components/modals/Import.svelte";
   import ColorPicker from "./lib/components/modals/ColorPicker.svelte";
   import InsertHelper from "./lib/components/modals/InsertHelper.svelte";
@@ -20,6 +23,14 @@
   import Welcome from "./lib/components/Welcome.svelte";
 
   const s = $derived(app.settings);
+
+  // the history pane stays mounted behind the modals it opens itself, so backing
+  // out of them lands on an intact pane instead of a flash of the editor
+  const historyOpen = $derived(
+    app.modal === "history" ||
+      (app.modal === "help" && app.helpContext === "history") ||
+      app.confirm?.returnTo === "history",
+  );
 
   let splitterDragging = $state(false);
 
@@ -65,12 +76,29 @@
     const flushSave = () => void act.saveNow();
     window.addEventListener("blur", flushSave);
 
+    let unlistenFlushAndClose: (() => void) | undefined;
+    void listen("mynote:flush-and-close", async () => {
+      await act.saveNow();
+      await getCurrentWindow().close();
+    }).then((un) => {
+      unlistenFlushAndClose = un;
+    });
+
+    let unlistenGitSnapshotFailed: (() => void) | undefined;
+    void listen<string>("mynote:git-snapshot-failed", (event) => {
+      act.flashStatusError(event.payload);
+    }).then((un) => {
+      unlistenGitSnapshotFailed = un;
+    });
+
     void act.boot();
 
     return () => {
       window.removeEventListener("keydown", handleGlobal, true);
       window.removeEventListener("wheel", wheel);
       window.removeEventListener("blur", flushSave);
+      unlistenFlushAndClose?.();
+      unlistenGitSnapshotFailed?.();
     };
   });
 </script>
@@ -113,11 +141,14 @@
   {#if app.modal === "colorPicker"}<ColorPicker />{/if}
   {#if app.modal === "import"}<Import />{/if}
   {#if app.modal === "openNotebook"}<OpenNotebook />{/if}
+  <!-- full-window: covers tree + main, but leaves the Editor mounted so restore can
+       reach editorCtl -->
+  {#if historyOpen}<History />{/if}
 
   <!-- always mounted: owns its own first-run trigger and visibility -->
   <Welcome />
 
   {#if app.status}
-    <div class="status-toast">{app.status}</div>
+    <div class="status-toast" class:error={app.statusIsError}>{app.status}</div>
   {/if}
 </div>

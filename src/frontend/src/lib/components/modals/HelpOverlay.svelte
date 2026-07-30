@@ -3,6 +3,7 @@
   import {
     EDITOR_SHORTCUTS,
     GLOBAL_SHORTCUTS,
+    HISTORY_SHORTCUTS,
     PANE_SHORTCUTS,
     RESULTS_SHORTCUTS,
     TREE_SHORTCUTS,
@@ -11,6 +12,8 @@
   import { app } from "../../state/app.svelte";
 
   let filter = $state("");
+
+  const inHistory = $derived(app.helpContext === "history");
 
   const paneGroup = $derived.by((): { name: string; rows: Shortcut[] } => {
     switch (app.focus) {
@@ -26,10 +29,11 @@
 
   function filtered(rows: Shortcut[]): Shortcut[] {
     const f = filter.trim().toLowerCase();
-    if (!f) return rows;
-    return rows.filter(({ keys, desc, search }) =>
-      (keys + " " + desc + " " + (search ?? "")).toLowerCase().includes(f),
-    );
+    return rows
+      .filter((r) => !r.gate || (r.gate === "git" && app.git?.available))
+      .filter(
+        ({ keys, desc, search }) => !f || (keys + " " + desc + " " + (search ?? "")).toLowerCase().includes(f),
+      );
   }
 </script>
 
@@ -43,25 +47,34 @@
       use:autofocusSelect
     />
     <div class="help-groups">
-      <div class="help-group">
-        <h3>{paneGroup.name} (focused pane)</h3>
-        {#each filtered(paneGroup.rows) as { keys, desc }}
-          <div class="help-row"><span>{desc}</span><kbd>{keys}</kbd></div>
-        {/each}
-      </div>
-      <div class="help-group">
-        <h3>Panes</h3>
-        {#each filtered(PANE_SHORTCUTS) as { keys, desc }}
-          <div class="help-row"><span>{desc}</span><kbd>{keys}</kbd></div>
-        {/each}
-      </div>
-      <div class="help-group">
-        <h3>Global</h3>
-        {#each filtered(GLOBAL_SHORTCUTS) as { keys, desc }}
-          <div class="help-row"><span>{desc}</span><kbd>{keys}</kbd></div>
-        {/each}
-      </div>
+      {#if inHistory}
+        <div class="help-group">
+          <h3>History</h3>
+          {#each filtered(HISTORY_SHORTCUTS) as { keys, desc }}
+            <div class="help-row"><span>{desc}</span><kbd>{keys}</kbd></div>
+          {/each}
+        </div>
+      {:else}
+        <div class="help-group">
+          <h3>{paneGroup.name} (focused pane)</h3>
+          {#each filtered(paneGroup.rows) as { keys, desc }}
+            <div class="help-row"><span>{desc}</span><kbd>{keys}</kbd></div>
+          {/each}
+        </div>
+        <div class="help-group">
+          <h3>Panes</h3>
+          {#each filtered(PANE_SHORTCUTS) as { keys, desc }}
+            <div class="help-row"><span>{desc}</span><kbd>{keys}</kbd></div>
+          {/each}
+        </div>
+        <div class="help-group">
+          <h3>Global</h3>
+          {#each filtered(GLOBAL_SHORTCUTS) as { keys, desc }}
+            <div class="help-row"><span>{desc}</span><kbd>{keys}</kbd></div>
+          {/each}
+        </div>
+      {/if}
     </div>
-    <div class="hint">Esc closes</div>
+    <div class="hint">{inHistory ? "Esc returns to history" : "Esc closes"}</div>
   </div>
 </div>

@@ -25,8 +25,15 @@ body {
   --guide: color-mix(in srgb, var(--text) 18%, transparent);
   --hover: color-mix(in srgb, var(--text) 7%, transparent);
   --select: color-mix(in srgb, var(--accent) 22%, transparent);
+  --diff-add: #4a9d5f;
+  --diff-del: #b3454a;
+  --diff-add-bg: color-mix(in srgb, var(--diff-add) 16%, transparent);
+  --diff-del-bg: color-mix(in srgb, var(--diff-del) 16%, transparent);
+  --diff-add-word: color-mix(in srgb, var(--diff-add) 42%, transparent);
+  --diff-del-word: color-mix(in srgb, var(--diff-del) 42%, transparent);
 
   display: flex;
+  position: relative;
   height: 100vh;
   background: var(--bg);
   color: var(--text);
@@ -126,6 +133,10 @@ input:focus {
   padding: 6px 12px;
   max-width: 40vw;
   z-index: 200;
+}
+.status-toast.error {
+  color: #e06c75;
+  border-color: #e06c75;
 }
 
 /* ---------- section strip ---------- */
@@ -734,11 +745,28 @@ kbd {
 .settings-row input[type="number"] {
   width: 70px;
 }
+.settings-row input[type="checkbox"] {
+  width: 16px;
+  height: 16px;
+}
 .settings-path {
   color: var(--muted);
   font-size: 12px;
   word-break: break-all;
   margin: 4px 0 8px;
+}
+.settings-section-label {
+  color: var(--muted);
+  font-size: 11px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  margin: 2px 0 4px;
+}
+.settings-group {
+  border-top: 1px solid var(--guide);
+  margin-top: 14px;
+  padding-top: 12px;
 }
 
 /* ---------- insert helper ---------- */
@@ -808,6 +836,226 @@ kbd {
   justify-content: center;
   padding: 8px;
 }
+/* ---------- history ---------- */
+
+/* takes over the whole window: the rail replaces the tree, the pane the preview */
+.history-layout {
+  position: absolute;
+  inset: 0;
+  z-index: 50;
+  display: flex;
+  flex-direction: column;
+  background: var(--bg);
+}
+.history-head {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  padding: 8px 12px;
+  border-bottom: 1px solid var(--guide);
+  background: var(--panel);
+}
+.history-head .modal-title {
+  margin-bottom: 0;
+}
+.history-head .import-modes {
+  margin-bottom: 0;
+}
+.history-head .import-mode {
+  flex: 0 0 auto;
+  padding: 5px 12px;
+  font-size: 13px;
+}
+.history-head-actions {
+  display: flex;
+  gap: 6px;
+  margin-left: auto;
+  color: var(--muted);
+}
+.history-empty {
+  text-align: center;
+  padding: 60px 20px;
+}
+.history-empty p {
+  color: var(--muted);
+  margin-bottom: 14px;
+}
+.history-body {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+}
+.history-rail {
+  width: 320px;
+  flex-shrink: 0;
+  overflow-y: auto;
+  background: var(--panel);
+  border-right: 1px solid var(--guide);
+  padding: 6px;
+}
+.history-rail .picker-item > span:first-child {
+  white-space: nowrap;
+}
+.deleted-row {
+  flex-direction: column;
+  align-items: stretch;
+}
+.rev-tag {
+  margin-left: 6px;
+  font-size: 10px;
+  padding: 1px 5px;
+  border-radius: 3px;
+  background: var(--hover);
+  color: var(--muted);
+}
+.rev-tag.accent {
+  background: var(--select);
+  color: var(--text);
+}
+.history-pane {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  padding: 8px 12px 10px;
+}
+.history-toolbar {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin-bottom: 8px;
+}
+.history-modes {
+  display: flex;
+  gap: 4px;
+}
+.history-modes button {
+  padding: 5px 10px;
+  border: 1px solid var(--guide);
+  border-radius: 6px;
+  background: transparent;
+  color: var(--text);
+  font-size: 12px;
+}
+.history-modes button.active {
+  border-color: var(--accent);
+  background: var(--select);
+  font-weight: 600;
+}
+.history-stats {
+  display: flex;
+  gap: 10px;
+  font-size: 12px;
+  font-family: Consolas, monospace;
+}
+.history-stats .add {
+  color: var(--diff-add);
+}
+.history-stats .del {
+  color: var(--diff-del);
+}
+.history-stats .change {
+  color: var(--muted);
+}
+.history-restore {
+  margin-left: auto;
+}
+.history-note {
+  color: var(--muted);
+  font-size: 12px;
+  padding: 6px 2px;
+}
+.history-content {
+  flex: 1;
+  min-height: 0;
+  overflow: auto;
+  border: 1px solid var(--guide);
+  border-radius: 6px;
+}
+.history-rendered {
+  padding: 10px 20px;
+}
+.history-raw {
+  margin: 0;
+  padding: 10px 14px;
+  font-family: Consolas, monospace;
+  font-size: 13px;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+.diff {
+  font-family: Consolas, monospace;
+  font-size: 13px;
+}
+.diff-head {
+  position: sticky;
+  top: 0;
+  z-index: 1;
+  display: grid;
+  grid-template-columns: 44px 1fr 44px 1fr;
+  font-family: "Segoe UI", system-ui, sans-serif;
+  font-size: 12px;
+  font-weight: 600;
+  background: var(--panel);
+  border-bottom: 1px solid var(--guide);
+}
+.diff-head span {
+  padding: 4px 6px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.diff-row {
+  display: grid;
+  align-items: start;
+  content-visibility: auto;
+  contain-intrinsic-size: auto 20px;
+}
+.diff.split .diff-row {
+  grid-template-columns: 44px 1fr 44px 1fr;
+}
+.diff.inline .diff-row {
+  grid-template-columns: 44px 44px 16px 1fr;
+}
+.diff-row.cursor {
+  outline: 1px solid var(--accent);
+  outline-offset: -1px;
+}
+.diff-num {
+  color: var(--muted);
+  text-align: right;
+  padding: 1px 8px 1px 0;
+  user-select: none;
+}
+.diff-marker {
+  color: var(--muted);
+  text-align: center;
+}
+.diff-cell {
+  white-space: pre-wrap;
+  word-break: break-word;
+  padding: 1px 6px;
+}
+.diff-cell.tint-del,
+.diff-row.tint-del .diff-cell {
+  background: var(--diff-del-bg);
+}
+.diff-cell.tint-add,
+.diff-row.tint-add .diff-cell {
+  background: var(--diff-add-bg);
+}
+.tint-del mark.word {
+  background: var(--diff-del-word);
+  color: inherit;
+  border-radius: 2px;
+}
+.tint-add mark.word {
+  background: var(--diff-add-word);
+  color: inherit;
+  border-radius: 2px;
+}
+
 .color-cell input[type="color"] {
   position: absolute;
   width: 0;
