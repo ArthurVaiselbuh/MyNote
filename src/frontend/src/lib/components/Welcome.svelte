@@ -61,6 +61,16 @@
       ],
     },
     {
+      title: "Optional: full history",
+      lead: `With git installed, MyNote snapshots the notebook so every page keeps a timeline of revisions. ${M}+H diffs one against what's on disk and restores it as a single undoable edit; ${M}+Shift+H brings back deleted pages.`,
+      gif: "/tutorial/history.gif",
+      alt: "Diffing a page against an earlier snapshot, then restoring it",
+      keys: [
+        { combo: `${M}+H`, label: "Page history" },
+        { combo: `${M}+Shift+H`, label: "Deleted pages" },
+      ],
+    },
+    {
       title: "You're all set",
       lead: "A notebook is ready in your default folder — or pick where your notes should live. Every page is plain Markdown you can edit with any tool.",
       keys: [

@@ -3,7 +3,7 @@ import { spawnSync } from "node:child_process";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { App } from "../app";
+import { App, hasGit } from "../app";
 
 // Records the README/onboarding demo GIFs by driving the real release exe
 // over CDP, dumping frames as PNGs, and handing them to ffmpeg for a
@@ -280,6 +280,124 @@ test("tree-sections: subpages, folding, section switching", async ({ app }) => {
   await sleep(900);
 
   await rec.stopAndSave("tree-sections");
+});
+
+/** Replaces the whole body, defeating the editor's auto-indent line by line
+ * (typing a multi-line string straight in re-inserts each list marker). */
+async function setBodyLines(page: Page, lines: string[]) {
+  await page.keyboard.press("Control+2");
+  await expect(page.locator(".cm-content")).toBeFocused();
+  await page.keyboard.press("Control+a");
+  await page.keyboard.type(lines[0]);
+  for (const line of lines.slice(1)) {
+    await page.keyboard.press("Enter");
+    await page.keyboard.press("Shift+Home");
+    if (line) await page.keyboard.type(line);
+    else await page.keyboard.press("Delete");
+  }
+  await page.keyboard.press("Control+s");
+  await page.keyboard.press("Escape");
+  await expect(page.locator(".cm-content")).not.toBeFocused();
+}
+
+const CHECKLIST_V1 = [
+  "Ship 2.4 on Friday.",
+  "",
+  "Pre-flight",
+  "- freeze the release branch",
+  "- run the full test matrix",
+  "",
+  "Release",
+  "- tag v2.4.0 and push the tag",
+  "- write the changelog entry",
+];
+
+const CHECKLIST_V2 = [
+  "Ship 2.4 on Friday.",
+  "",
+  "Pre-flight",
+  "- freeze the release branch",
+  "- run the full test matrix on Windows and macOS",
+  "- bump the version in tauri.conf.json",
+  "",
+  "Release",
+  "- tag v2.4.0 and push the tag",
+  "- build with build.bat, smoke-test the exe",
+  "- write the changelog entry",
+  "",
+  "Rollback plan",
+  "- keep 2.3.1 pinned in the archive folder",
+  "- revert the tag, announce in #releases",
+];
+
+test("history: snapshots, diff, restore", async ({ app }) => {
+  test.skip(!hasGit(), "git not found on PATH — history is inert without it");
+
+  await app.enableGitSnapshots();
+  await app.newPageWithBody("Scratch pad", "throwaway numbers from the sync", 1);
+  await app.newTitledPage("Release checklist", 2);
+  await setBodyLines(app.page, CHECKLIST_V1);
+  await app.relaunch(); // close-commit: the first snapshot
+
+  await expect(app.page.locator(".tree .row.selected .title")).toHaveText("Release checklist");
+  await setBodyLines(app.page, CHECKLIST_V2);
+  await app.page.keyboard.press("ArrowUp"); // onto Scratch pad
+  await expect(app.page.locator(".tree .row.selected .title")).toHaveText("Scratch pad");
+  await app.page.keyboard.press("Delete");
+  await app.confirmDanger();
+  await app.relaunch(); // second snapshot, and the deletion lands in history
+
+  const { page } = app; // relaunch swaps the CDP page — bind it after the last one
+  await expect(page.locator(".tree .row")).toHaveCount(1);
+  await expect(page.locator(".tree .row.selected .title")).toHaveText("Release checklist");
+
+  const rec = new Recorder();
+  rec.start(page);
+  await sleep(700);
+
+  // the accident the pane exists for: a whole section goes, and gets saved
+  await page.keyboard.press("Control+2");
+  await expect(page.locator(".cm-content")).toBeFocused();
+  await page.keyboard.press("Control+End");
+  for (let i = 0; i < 4; i++) await page.keyboard.press("Shift+ArrowUp");
+  await page.keyboard.press("Shift+End");
+  await sleep(700);
+  await page.keyboard.press("Delete");
+  await page.keyboard.press("Control+s");
+  await sleep(1100);
+
+  await page.keyboard.press("Control+h");
+  await expect(page.locator(".history-layout")).toBeVisible();
+  await expect(page.locator(".history-rail .picker-item")).toHaveCount(3, { timeout: 15_000 });
+  await expect(page.locator(".diff.split")).toBeVisible();
+  await sleep(2400); // read the split diff: green is what restoring brings back
+
+  await page.keyboard.press("ArrowDown"); // step back to the older snapshot
+  await sleep(2000);
+  await page.keyboard.press("ArrowUp");
+  await sleep(1200);
+
+  await page.keyboard.press("2"); // inline diff
+  await expect(page.locator(".diff.inline")).toBeVisible();
+  await sleep(1800);
+  await page.keyboard.press("1");
+  await expect(page.locator(".diff.split")).toBeVisible();
+  await sleep(1000);
+
+  await page.keyboard.press("Tab"); // the other half: pages deleted since
+  await expect(page.locator(".history-rail .picker-item")).toContainText(["Scratch pad"]);
+  await sleep(1800);
+  await page.keyboard.press("Tab");
+  await expect(page.locator(".diff.split")).toBeVisible();
+  await sleep(900);
+
+  await page.keyboard.press("Enter"); // restore the newest snapshot
+  await app.confirmDanger();
+  await expect(page.locator(".history-layout")).toHaveCount(0);
+  await expect(page.locator(".cm-content")).toContainText("Rollback plan");
+  await sleep(2000);
+
+  await rec.stopAndSave("history");
 });
 
 test("help-search: the ? overlay and its live filter", async ({ app }) => {
