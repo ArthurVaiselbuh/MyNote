@@ -6,7 +6,9 @@ export default defineConfig({
   testDir: "./tests",
   fullyParallel: false,
   workers: 1,
-  timeout: 60_000,
+  // a history test relaunches the exe three times, and each launch waits on a
+  // real cold start — the budget has to cover that on a loaded CI runner
+  timeout: 180_000,
   expect: { timeout: 10_000 },
   reporter: [["list"]],
 });

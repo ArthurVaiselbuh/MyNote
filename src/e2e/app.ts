@@ -19,6 +19,11 @@ export class App {
   private child: ChildProcess | null = null;
   private browser: Browser | null = null;
   private exited: Promise<void> = Promise.resolve();
+  private closing = false;
+  /** Set when the exe dies on its own. Every Playwright call then fails with a
+   * bare "Target page… has been closed", which names the assertion that
+   * happened to be in flight instead of the exit — keep the real cause. */
+  unexpectedExit: string | null = null;
 
   constructor(notebookDir: string, dataDir: string) {
     this.notebookDir = notebookDir;
@@ -44,8 +49,16 @@ export class App {
       stdio: ["ignore", "ignore", "pipe"],
     });
     this.child.stderr!.on("data", (chunk: Buffer) => (stderr += chunk.toString()));
+    this.closing = false;
     const exited = new Promise<{ code: number | null; signal: NodeJS.Signals | null }>((resolve) =>
-      this.child!.once("exit", (code, signal) => resolve({ code, signal })),
+      this.child!.once("exit", (code, signal) => {
+        if (!this.closing) {
+          this.unexpectedExit =
+            `mynote.exe exited on its own mid-test (code ${code}, signal ${signal})` +
+            (stderr ? `\nstderr:\n${stderr}` : "");
+        }
+        resolve({ code, signal });
+      }),
     );
     this.exited = exited.then(() => {});
     try {
@@ -71,7 +84,7 @@ export class App {
     });
     // "Notes" (not "—") means the notebook finished loading, not just the shell
     await expect(this.page.locator(".section-strip .name")).toContainText("Notes", {
-      timeout: 15_000,
+      timeout: 45_000,
     });
     await this.dismissWelcome();
   }
@@ -87,22 +100,34 @@ export class App {
     }
   }
 
-  /** Graceful close (WM_CLOSE) so the backend runs its on-close purge. */
+  /** Graceful close (WM_CLOSE) so the backend runs its on-close purge, falling
+   * back to a hard kill of the whole tree. Both steps target the pid we
+   * spawned rather than the name "mynote": a wedged instance that ignores
+   * WM_CLOSE must still die, and killing the host alone orphans its
+   * msedgewebview2 children, which keep the CDP port bound and poison every
+   * later launch in the run. */
   async close() {
-    if (!this.child) return;
+    if (!this.child?.pid) return;
+    this.closing = true;
+    const pid = this.child.pid;
     await this.browser?.close().catch(() => {});
     this.browser = null;
-    execSync(
-      `powershell -NoProfile -Command "(Get-Process mynote -ErrorAction SilentlyContinue).CloseMainWindow()"`,
-      { timeout: 10_000 },
+    quietly(
+      `powershell -NoProfile -Command "(Get-Process -Id ${pid} -ErrorAction SilentlyContinue).CloseMainWindow()"`,
     );
-    await Promise.race([
-      this.exited,
-      sleep(10_000).then(() => {
-        throw new Error("app did not exit after CloseMainWindow");
-      }),
+    const exitedCleanly = await Promise.race([
+      this.exited.then(() => true),
+      sleep(15_000).then(() => false),
     ]);
+    if (!exitedCleanly) {
+      console.log(`[fixture] pid ${pid} ignored WM_CLOSE — killing its process tree`);
+      killTree(pid);
+      await Promise.race([this.exited, sleep(10_000)]);
+    }
     this.child = null;
+    // the host can exit while a WebView2 child still holds the port; the next
+    // launch would then attach to nothing (or to the wrong instance)
+    await waitForPortFree();
   }
 
   async relaunch() {
@@ -214,6 +239,18 @@ export function hasGit(): boolean {
   }
 }
 
+function quietly(cmd: string) {
+  try {
+    execSync(cmd, { timeout: 30_000, stdio: ["ignore", "ignore", "ignore"] });
+  } catch {}
+}
+
+/** `/T` takes the WebView2 children with it — without it they orphan and keep
+ * the CDP port bound long after the host is gone. */
+function killTree(pid: number) {
+  quietly(`taskkill /PID ${pid} /T /F`);
+}
+
 function portIsOpen(): Promise<boolean> {
   return new Promise((resolve) => {
     const sock = net.connect({ host: "127.0.0.1", port: CDP_PORT });
@@ -223,7 +260,10 @@ function portIsOpen(): Promise<boolean> {
     };
     sock.once("connect", () => finish(true));
     sock.once("error", () => finish(false));
-    sock.setTimeout(500, () => finish(false));
+    // a loaded machine is exactly when connects are slowest, so a timeout must
+    // read as "still in use" — the opposite guess hands the port to a launch
+    // that then races the previous instance for it
+    sock.setTimeout(2_000, () => finish(true));
   });
 }
 
@@ -364,14 +404,11 @@ export const test = base.extend<{ app: App }>({
       await app.launch();
       await use(app);
     } finally {
-      await app.close().catch(() => {
-        try {
-          execSync(
-            'powershell -NoProfile -Command "Get-Process mynote -ErrorAction SilentlyContinue | Stop-Process"',
-            { timeout: 10_000 },
-          );
-        } catch {}
-      });
+      if (app.unexpectedExit) {
+        console.log(`\n--- app died during this test ---\n${app.unexpectedExit}`);
+      }
+      // a test must never hand the next one a live app or a bound CDP port
+      await app.close().catch((e) => console.log(`[fixture] close failed: ${(e as Error).message}`));
       restoreSettings();
     }
   },
