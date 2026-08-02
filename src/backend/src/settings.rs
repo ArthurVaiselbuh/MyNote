@@ -27,6 +27,7 @@ pub struct Settings {
     pub focus_alpha: f64,
     pub scroll_speed: f64,
     pub tree_width: u32,
+    pub peek_width: u32,
     pub log_level: String,
     pub window: Option<WindowGeom>,
 }
@@ -45,6 +46,7 @@ impl Default for Settings {
             focus_alpha: 0.5,
             scroll_speed: 1.0,
             tree_width: 300,
+            peek_width: 460,
             log_level: "info".into(),
             window: None,
         }

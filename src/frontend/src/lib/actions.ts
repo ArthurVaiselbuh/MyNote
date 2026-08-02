@@ -6,6 +6,7 @@ import { editorCtl } from "./editorCtl";
 import type { FindCtl } from "./findCtl";
 import { MOD_LABEL } from "./keys/platform";
 import { log } from "./log";
+import { peekCtl } from "./peekCtl";
 import { previewFindCtl } from "./previewFindCtl";
 import { escapeRegExp } from "./regex";
 import { app, type FindPrefill, type ModalName, type Pane } from "./state/app.svelte";
@@ -13,8 +14,10 @@ import { countPages, countSubtree, findNode, flatten, locate, sectionOfPage } fr
 
 // the editor's CodeMirror find and the preview's DOM-highlight find are
 // mutually exclusive with the page view mode, so callers dispatch to whichever
-// backs the mode currently on screen
+// backs the mode currently on screen — and in results view neither is mounted,
+// so the peek's term highlights are what F3 steps through
 export function activeFindCtl(): FindCtl | null {
+  if (app.view === "results") return peekCtl.current;
   return app.mode === "preview" ? previewFindCtl.current : editorCtl.current;
 }
 
@@ -612,7 +615,7 @@ export async function runSearch() {
 
 // every keyword lights up at once, so a page matched on several of them shows
 // all of them rather than only whichever came first in the query
-function resultFindPrefill(): FindPrefill {
+export function resultFindPrefill(): FindPrefill {
   const query = app.searchQuery.trim();
   if (app.searchMode === "regex") return { text: query, regex: true };
   const alternation = app.searchTerms.map(escapeRegExp).join("|");
@@ -713,7 +716,9 @@ export function closeCurrent() {
 export function scrollMain(dir: number) {
   let el: Element | null = null;
   if (app.view === "results") {
-    el = document.getElementById("results-scroll");
+    // the peek is the only thing worth paging in results view — the list itself
+    // follows the selection, which the arrow keys already drive
+    el = document.getElementById("peek-scroll") ?? document.getElementById("results-scroll");
   } else if (app.mode === "preview") {
     el = document.getElementById("preview-scroll");
   } else {
@@ -853,6 +858,14 @@ const TREE_WIDTH_MIN = 160;
 export function setTreeWidth(width: number) {
   const max = Math.max(TREE_WIDTH_MIN, window.innerWidth * 0.6);
   app.settings.treeWidth = Math.round(Math.min(max, Math.max(TREE_WIDTH_MIN, width)));
+}
+
+export const PEEK_WIDTH_DEFAULT = 460;
+const PEEK_WIDTH_MIN = 220;
+
+export function setPeekWidth(width: number) {
+  const max = Math.max(PEEK_WIDTH_MIN, window.innerWidth * 0.7);
+  app.settings.peekWidth = Math.round(Math.min(max, Math.max(PEEK_WIDTH_MIN, width)));
 }
 
 export async function zoomReset() {

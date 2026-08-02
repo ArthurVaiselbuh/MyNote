@@ -65,6 +65,8 @@ export const EDITOR_SHORTCUTS: Shortcut[] = [
 
 export const RESULTS_SHORTCUTS: Shortcut[] = [
   { keys: "↑ / ↓", desc: "Select result" },
+  { keys: "PgUp / PgDn", desc: "Scroll the preview", search: "peek page" },
+  { keys: `N / P (also F3 / ${S}+F3)`, desc: "Next / prev match in the preview", search: "peek" },
   { keys: "Enter", desc: "Open result" },
   { keys: "/", desc: "Refine query" },
   { keys: "Esc", desc: "Back to page" },

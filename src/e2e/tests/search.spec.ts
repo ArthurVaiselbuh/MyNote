@@ -37,6 +37,53 @@ test("fuzzy and regex search open the right page", async ({ app }) => {
   await expect(app.page.locator(".title-input")).toHaveValue("Grocery");
 });
 
+test("the peek renders the selected result and follows the selection", async ({ app }) => {
+  await app.newPageWithBody("Groceries", "buy milk milk milk and eggs", 1);
+  await app.newPageWithBody("Dairy", "milk comes from cows", 2);
+
+  await app.page.keyboard.press("Control+k");
+  await app.page.keyboard.type("milk");
+  await app.page.keyboard.press("Enter");
+  await expect(app.page.locator(".results .hit")).toHaveCount(2);
+
+  // more occurrences ranks Groceries first, so it is what the peek opens on
+  const peek = app.page.locator(".peek");
+  await expect(peek.locator(".peek-head")).toContainText("Groceries");
+  await expect(peek.locator("#peek-scroll")).toContainText("buy milk milk milk and eggs");
+  await expect(peek.locator("mark.find-hit")).toHaveCount(3);
+  await expect(peek.locator("mark.find-hit.current")).toHaveCount(1);
+
+  // N steps matches inside the peeked page without changing the selection
+  await app.page.keyboard.press("n");
+  await expect(peek.locator("mark.find-hit").nth(1)).toHaveClass(/current/);
+  await expect(peek.locator(".peek-head")).toContainText("Groceries");
+
+  await app.page.keyboard.press("ArrowDown");
+  await expect(peek.locator(".peek-head")).toContainText("Dairy");
+  await expect(peek.locator("#peek-scroll")).toContainText("milk comes from cows");
+
+  // opening the result leaves the peek behind for the real editor
+  await app.page.keyboard.press("Enter");
+  await expect(app.page.locator(".peek")).toHaveCount(0);
+  await expect(app.page.locator(".title-input")).toHaveValue("Dairy");
+});
+
+test("PgDn scrolls the peek, not the results list", async ({ app }) => {
+  const long = Array.from({ length: 200 }, (_, i) => `line ${i} of filler`).join("\n");
+  await app.newPageWithBody("Long", `needle\n${long}`, 1);
+
+  await app.page.keyboard.press("Control+k");
+  await app.page.keyboard.type("needle");
+  await app.page.keyboard.press("Enter");
+  await expect(app.page.locator(".results .hit")).toHaveCount(1);
+
+  const scrollTop = () => app.page.locator("#peek-scroll").evaluate((el) => el.scrollTop);
+  await expect(app.page.locator(".peek mark.find-hit")).toHaveCount(1);
+  const before = await scrollTop();
+  await app.page.keyboard.press("PageDown");
+  await expect.poll(scrollTop).toBeGreaterThan(before);
+});
+
 test("keywords rank by how many matched; quotes match the phrase whole", async ({ app }) => {
   await app.newPageWithBody("Loud", "alpha alpha alpha", 1);
   await app.newPageWithBody("Quiet", "alpha and beta", 2);

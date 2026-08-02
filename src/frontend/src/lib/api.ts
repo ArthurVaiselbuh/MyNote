@@ -100,6 +100,7 @@ export interface Settings {
   focusAlpha: number;
   scrollSpeed: number;
   treeWidth: number;
+  peekWidth: number;
   logLevel: string;
   window: WindowGeom | null;
 }
@@ -169,6 +170,7 @@ export const defaultSettings: Settings = {
   focusAlpha: 0.5,
   scrollSpeed: 1.0,
   treeWidth: 300,
+  peekWidth: 460,
   logLevel: "info",
   window: null,
 };

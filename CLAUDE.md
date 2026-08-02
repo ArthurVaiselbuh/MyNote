@@ -100,6 +100,20 @@ are supported cross-platform builds off the same code.
 - **Opening a search result lands in preview**, not the editor, with the
   preview's find prefilled by an alternation of the parsed terms (the raw
   pattern in regex mode) so every keyword lights up at once.
+- **The results view peeks the selected hit** (`ResultPeek.svelte`): the list
+  keeps the left of the main pane, a read-only render of the selected page takes
+  the right, behind its own splitter (`settings.json::peekWidth`). It is inert —
+  no `app.focus` target of its own, no find panel, links are dead — so the
+  four-pane focus model and the Esc ladder are unchanged. It reads its page with
+  `read_page` debounced 120ms (arrow-key traversal outruns the reads) and cached
+  per result set. It does **not** scroll to the hit's `lineNo`: `renderBody`'s
+  blank-line spacer paragraphs destroy any source-line-to-DOM mapping, so it
+  scrolls to the first highlighted term instead, which is what was being looked
+  for anyway. Highlighting is the same DOM pass the preview's find uses
+  (`lib/highlight.ts`). Unlike `Preview`, the peek writes its body with
+  `innerHTML` rather than `{@html}` — highlighting rewrites text nodes under the
+  node, which leaves Svelte's bookkeeping for its own range stale and silently
+  drops the body on the next update.
 - **Theme:** dark only, but all colors (text/background/panel/accent), focus
   alpha, and scroll speed are user-configurable in Settings and applied as CSS
   variables on the app root.
@@ -254,13 +268,16 @@ One capture-phase window keydown listener dispatches with strict precedence:
    Tab inside CodeMirror indents.
 4. Pane-local keys (tree: arrows, `/`, Enter, F2, Del, Ctrl+]/[,
    Alt+↑/↓ reorder, Alt+←/→ move to section — tree moves all use Alt+arrows;
-   results: arrows, Enter, `/`).
+   results: arrows, Enter, `/`, `N`/`P` to step matches in the peek).
 
 Esc peels one layer per press: modal → find panel → results→page →
 editor→tree → clear tree filter. Tab cycles a view-dependent ring
 (page: tree↔editor; results: tree→search→results). PgUp/PgDn scroll the main
 view even when focus is elsewhere (CodeMirror keeps native paging with the
-caret). The `?` overlay is context-aware: focused-pane keys, pane keys,
+caret); in results view that means the **peek**, not the list — the list
+follows the selection the arrows already drive. F3/Shift+F3 likewise route to
+the peek there, since neither the editor nor the preview is mounted. The `?`
+overlay is context-aware: focused-pane keys, pane keys,
 globals — filterable. It is the *only* place shortcuts are listed on screen —
 panes don't carry their own cheat-sheet strip. `app.helpContext` selects which
 sheet it shows: the history pane binds `?` to the history-only sheet, and Esc
