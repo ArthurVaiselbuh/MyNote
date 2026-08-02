@@ -6,6 +6,7 @@
   import { handleGlobal } from "./lib/keys/dispatch";
   import { app } from "./lib/state/app.svelte";
   import Editor from "./lib/components/Editor.svelte";
+  import ResultPeek from "./lib/components/ResultPeek.svelte";
   import Results from "./lib/components/Results.svelte";
   import SearchBar from "./lib/components/SearchBar.svelte";
   import SectionStrip from "./lib/components/SectionStrip.svelte";
@@ -32,19 +33,23 @@
       app.confirm?.returnTo === "history",
   );
 
-  let splitterDragging = $state(false);
+  let draggingSplitter = $state<"tree" | "peek" | null>(null);
 
-  function startTreeResize(e: PointerEvent) {
+  // the tree grows rightward from the left edge, the peek leftward from the
+  // right one, so each maps the pointer to its own width
+  function dragSplitter(e: PointerEvent, which: "tree" | "peek") {
     const splitter = e.currentTarget as HTMLElement;
-    const offset = app.settings.treeWidth - e.clientX;
+    const widthAt = (x: number) => (which === "tree" ? x : window.innerWidth - x);
+    const setWidth = which === "tree" ? act.setTreeWidth : act.setPeekWidth;
+    const grabbed = app.settings[which === "tree" ? "treeWidth" : "peekWidth"] - widthAt(e.clientX);
     splitter.setPointerCapture(e.pointerId);
-    splitterDragging = true;
-    const move = (ev: PointerEvent) => act.setTreeWidth(ev.clientX + offset);
+    draggingSplitter = which;
+    const move = (ev: PointerEvent) => setWidth(widthAt(ev.clientX) + grabbed);
     const stop = () => {
       splitter.removeEventListener("pointermove", move);
       splitter.removeEventListener("pointerup", stop);
       splitter.removeEventListener("pointercancel", stop);
-      splitterDragging = false;
+      draggingSplitter = null;
       void act.persistSettings();
     };
     splitter.addEventListener("pointermove", move);
@@ -54,6 +59,11 @@
 
   function resetTreeWidth() {
     act.setTreeWidth(act.TREE_WIDTH_DEFAULT);
+    void act.persistSettings();
+  }
+
+  function resetPeekWidth() {
+    act.setPeekWidth(act.PEEK_WIDTH_DEFAULT);
     void act.persistSettings();
   }
 
@@ -117,16 +127,27 @@
   </aside>
   <div
     class="splitter"
-    class:dragging={splitterDragging}
+    class:dragging={draggingSplitter === "tree"}
     role="separator"
     aria-orientation="vertical"
-    onpointerdown={startTreeResize}
+    onpointerdown={(e) => dragSplitter(e, "tree")}
     ondblclick={resetTreeWidth}
   ></div>
   <main class="main-pane">
     {#if app.view === "results"}
       <SearchBar />
-      <Results />
+      <div class="results-split">
+        <Results />
+        <div
+          class="splitter"
+          class:dragging={draggingSplitter === "peek"}
+          role="separator"
+          aria-orientation="vertical"
+          onpointerdown={(e) => dragSplitter(e, "peek")}
+          ondblclick={resetPeekWidth}
+        ></div>
+        <ResultPeek />
+      </div>
     {:else}
       <Editor />
     {/if}

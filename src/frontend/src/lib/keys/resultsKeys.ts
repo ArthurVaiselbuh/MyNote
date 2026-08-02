@@ -1,4 +1,5 @@
 import * as act from "../actions";
+import { peekCtl } from "../peekCtl";
 import { app } from "../state/app.svelte";
 
 export function resultsKeys(e: KeyboardEvent) {
@@ -22,6 +23,14 @@ export function resultsKeys(e: KeyboardEvent) {
       handled();
       app.focus = "search";
       app.searchFocusReq++;
+      return;
+    case "n":
+      handled();
+      peekCtl.current?.findNext();
+      return;
+    case "p":
+      handled();
+      peekCtl.current?.findPrev();
       return;
   }
 }

@@ -1,6 +1,7 @@
 <script lang="ts">
   import { onMount, tick } from "svelte";
   import * as act from "../actions";
+  import { applyHighlights, clearHighlights } from "../highlight";
   import { modPressed } from "../keys/platform";
   import { renderBody } from "../markdown";
   import { previewFindCtl } from "../previewFindCtl";
@@ -38,67 +39,20 @@
     }
   }
 
-  function clearHighlights() {
-    if (!containerEl) return;
-    const marks = containerEl.querySelectorAll("mark.find-hit");
-    for (const m of marks) m.replaceWith(...Array.from(m.childNodes));
-    containerEl.normalize();
-  }
-
-  // matches only within a single text node — a term split across inline
-  // formatting (e.g. bold covering half the word) won't be found, the usual
-  // limit of a per-text-node highlighter
-  function applyHighlights(re: RegExp): HTMLElement[] {
-    if (!containerEl) return [];
-    const walker = document.createTreeWalker(containerEl, NodeFilter.SHOW_TEXT);
-    const nodes: Text[] = [];
-    let n: Node | null;
-    while ((n = walker.nextNode())) nodes.push(n as Text);
-
-    const found: HTMLElement[] = [];
-    for (const node of nodes) {
-      const text = node.textContent ?? "";
-      re.lastIndex = 0;
-      let m: RegExpExecArray | null;
-      let last = 0;
-      let hit = false;
-      const frag = document.createDocumentFragment();
-      while ((m = re.exec(text))) {
-        if (m[0].length === 0) {
-          re.lastIndex++;
-          continue;
-        }
-        hit = true;
-        if (m.index > last) frag.append(text.slice(last, m.index));
-        const mark = document.createElement("mark");
-        mark.className = "find-hit";
-        mark.textContent = m[0];
-        frag.append(mark);
-        found.push(mark);
-        last = m.index + m[0].length;
-      }
-      if (hit) {
-        if (last < text.length) frag.append(text.slice(last));
-        node.replaceWith(frag);
-      }
-    }
-    return found;
-  }
-
   function runSearch() {
-    clearHighlights();
+    if (containerEl) clearHighlights(containerEl);
     matches = [];
     matchCount = 0;
     currentIdx = -1;
     displayIdx = -1;
     error = "";
-    if (!open || !query) return;
+    if (!open || !query || !containerEl) return;
     const re = buildRegex();
     if (!re) {
       error = "Invalid regex";
       return;
     }
-    matches = applyHighlights(re);
+    matches = applyHighlights(containerEl, re);
     matchCount = matches.length;
     if (matches.length) goTo(0);
   }
