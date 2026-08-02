@@ -39,6 +39,7 @@ const GITATTRIBUTES: &str = "\
 const GITIGNORE: &str = "\
 .mynote.lock
 notebook.json.bak
+notebook.user.json
 *.tmp
 
 .DS_Store
@@ -264,6 +265,25 @@ fn seed_file_if_absent(path: &Path, contents: &str) -> Result<(), String> {
     fs::write(path, contents).map_err(err)
 }
 
+/// Append to existing .gitignore for backwards compatibility
+fn ensure_excluded(root: &Path, patterns: &[&str]) -> Result<(), String> {
+    let info = root.join(".git").join("info");
+    fs::create_dir_all(&info).map_err(err)?;
+    let path = info.join("exclude");
+    let current = fs::read_to_string(&path).unwrap_or_default();
+    let missing: Vec<&str> = patterns
+        .iter()
+        .copied()
+        .filter(|pattern| !current.lines().any(|line| line.trim() == *pattern))
+        .collect();
+    if missing.is_empty() {
+        return Ok(());
+    }
+    let separator = if current.is_empty() || current.ends_with('\n') { "" } else { "\n" };
+    let appended = format!("{current}{separator}{}\n", missing.join("\n"));
+    fs::write(&path, appended).map_err(err)
+}
+
 fn run_config(root: &Path, key: &str, value: &str) -> Result<(), String> {
     let out = run(root, &["config", "--local", key, value], CONFIG_DEADLINE)?;
     if out.code != 0 {
@@ -314,6 +334,7 @@ pub fn ensure_repo(root: &Path) -> Result<(), String> {
     fs::create_dir_all(root.join(".git").join(HOOKS_DIR)).map_err(err)?;
     seed_file_if_absent(&root.join(".gitattributes"), GITATTRIBUTES)?;
     seed_file_if_absent(&root.join(".gitignore"), GITIGNORE)?;
+    ensure_excluded(root, &[crate::store::USER_STATE_FILE])?;
     run_config(root, "core.autocrlf", "false")?;
     run_config(root, "core.safecrlf", "false")?;
     run_config(root, "commit.gpgsign", "false")?;
@@ -776,6 +797,7 @@ mod tests {
     fn ignore_and_attributes_content() {
         assert!(GITIGNORE.contains(".mynote.lock"));
         assert!(GITIGNORE.contains("notebook.json.bak"));
+        assert!(GITIGNORE.contains(crate::store::USER_STATE_FILE));
         assert!(GITIGNORE.contains("*.tmp"));
         assert!(GITATTRIBUTES.contains("* -text"));
     }
@@ -823,6 +845,7 @@ mod tests {
         fs::write(dir.path().join(&uuid_md), "# Page\n").unwrap();
         fs::write(dir.path().join(".mynote.lock"), "").unwrap();
         fs::write(dir.path().join("notebook.json.bak"), "{}").unwrap();
+        fs::write(dir.path().join(crate::store::USER_STATE_FILE), "{}").unwrap();
         fs::write(dir.path().join("scratch.tmp"), "junk").unwrap();
 
         assert!(dir.path().join(".git").is_dir());
@@ -845,6 +868,7 @@ mod tests {
         assert!(files.contains(&uuid_md));
         assert!(!files.contains(".mynote.lock"));
         assert!(!files.contains("notebook.json.bak"));
+        assert!(!files.contains(crate::store::USER_STATE_FILE));
         assert!(!files.contains("scratch.tmp"));
     }
 
@@ -1062,6 +1086,30 @@ mod tests {
             fs::read_to_string(dir.path().join(".gitignore")).unwrap(),
             "custom-edit\n"
         );
+    }
+
+    #[test]
+    fn a_user_owned_gitignore_still_gets_view_state_excluded() {
+        need_git!();
+        let dir = init_temp_repo();
+        fs::write(dir.path().join(".gitignore"), "custom-edit\n").unwrap();
+        ensure_repo(dir.path()).unwrap();
+        ensure_repo(dir.path()).unwrap();
+
+        let exclude =
+            fs::read_to_string(dir.path().join(".git").join("info").join("exclude")).unwrap();
+        assert_eq!(
+            exclude.lines().filter(|l| l.trim() == crate::store::USER_STATE_FILE).count(),
+            1,
+            "the pattern is appended once, not on every ensure_repo"
+        );
+
+        fs::write(dir.path().join("notebook.json"), "{}").unwrap();
+        fs::write(dir.path().join(crate::store::USER_STATE_FILE), "{}").unwrap();
+        assert!(snapshot(dir.path(), SnapshotKind::Idle, Duration::from_secs(20)).unwrap());
+        let files_out = base(dir.path()).args(["ls-files"]).stdout(Stdio::piped()).output().unwrap();
+        let files = String::from_utf8_lossy(&files_out.stdout);
+        assert!(!files.contains(crate::store::USER_STATE_FILE));
     }
 
     // -----------------------------------------------------------------

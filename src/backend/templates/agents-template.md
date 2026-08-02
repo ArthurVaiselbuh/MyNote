@@ -9,8 +9,9 @@ This guide exists so agents can read and understand the notebook's structure wit
 ## Layout
 
 - `notebook.json` — section list and nested page tree. Each page node has
-  `id`, `title`, `expanded`, `children`. `notebook.json.bak` is a
+  `id`, `title`, `children`. `notebook.json.bak` is a
   crash-recovery copy.
+- `notebook.user.json` — disposable per-user view state (last open page, etc). Not part of the content
 - `<uuid>.md` — one file per page, named by its page id from `notebook.json`.
   The first non-empty line is the page title as an H1 (`# Title`).
 - `assets/<page-id>/` — images pasted into that page, referenced from its
