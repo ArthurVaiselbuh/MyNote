@@ -124,6 +124,81 @@ pub struct Notebook {
     pub git: GitConfig,
 }
 
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct StoredNotebook<'a> {
+    sections: Vec<StoredSection<'a>>,
+    git: &'a GitConfig,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct StoredSection<'a> {
+    id: &'a str,
+    name: &'a str,
+    pages: Vec<StoredPage<'a>>,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct StoredPage<'a> {
+    id: &'a str,
+    title: &'a str,
+    children: Vec<StoredPage<'a>>,
+}
+
+impl<'a> From<&'a Notebook> for StoredNotebook<'a> {
+    fn from(notebook: &'a Notebook) -> StoredNotebook<'a> {
+        StoredNotebook {
+            sections: notebook
+                .sections
+                .iter()
+                .map(|s| StoredSection {
+                    id: &s.id,
+                    name: &s.name,
+                    pages: stored_pages(&s.pages),
+                })
+                .collect(),
+            git: &notebook.git,
+        }
+    }
+}
+
+fn stored_pages(list: &[PageNode]) -> Vec<StoredPage<'_>> {
+    list.iter()
+        .map(|n| StoredPage {
+            id: &n.id,
+            title: &n.title,
+            children: stored_pages(&n.children),
+        })
+        .collect()
+}
+
+#[derive(Serialize, Deserialize, Clone, Debug, Default)]
+#[serde(rename_all = "camelCase")]
+struct UserState {
+    #[serde(default)]
+    last_view: LastView,
+    #[serde(default)]
+    collapsed: Vec<String>,
+}
+
+fn collect_collapsed(list: &[PageNode], out: &mut Vec<String>) {
+    for node in list {
+        if !node.expanded {
+            out.push(node.id.clone());
+        }
+        collect_collapsed(&node.children, out);
+    }
+}
+
+fn apply_collapsed(list: &mut [PageNode], collapsed: &HashSet<String>) {
+    for node in list.iter_mut() {
+        node.expanded = !collapsed.contains(&node.id);
+        apply_collapsed(&mut node.children, collapsed);
+    }
+}
+
 enum UndoOp {
     DeletePage {
         node: PageNode,
@@ -167,6 +242,8 @@ pub struct UndoOutcome {
 
 const UNDO_LIMIT: usize = 100;
 
+pub const USER_STATE_FILE: &str = "notebook.user.json";
+
 const AGENTS_TEMPLATE: &str = include_str!("../templates/agents-template.md");
 
 fn epoch() -> Instant {
@@ -200,6 +277,7 @@ pub struct Store {
     last_change_ms: AtomicU64,
     last_commit_ms: AtomicU64,
     last_saved_json: RefCell<String>,
+    last_saved_user_json: RefCell<String>,
 }
 
 impl Store {
@@ -209,7 +287,14 @@ impl Store {
             LockError::HeldElsewhere => OpenError::Locked,
             LockError::Io(msg) => OpenError::Other(msg),
         })?;
-        let notebook = load_notebook(root).map_err(OpenError::Other)?;
+        let mut notebook = load_notebook(root).map_err(OpenError::Other)?;
+        if let Some(user) = load_user_state(root) {
+            notebook.last_view = user.last_view;
+            let collapsed: HashSet<String> = user.collapsed.into_iter().collect();
+            for section in notebook.sections.iter_mut() {
+                apply_collapsed(&mut section.pages, &collapsed);
+            }
+        }
         let mut store = Store {
             root: root.to_path_buf(),
             notebook,
@@ -223,6 +308,7 @@ impl Store {
             last_change_ms: AtomicU64::new(now_ms()),
             last_commit_ms: AtomicU64::new(now_ms()),
             last_saved_json: RefCell::new(String::new()),
+            last_saved_user_json: RefCell::new(String::new()),
         };
         if store.notebook.sections.is_empty() {
             store.notebook.sections.push(Section {
@@ -231,6 +317,8 @@ impl Store {
                 pages: vec![],
             });
         }
+        // before `save()` drops the legacy inline copies from notebook.json
+        store.save_view_state().map_err(OpenError::Other)?;
         store.save().map_err(OpenError::Other)?;
         if !store.agents_md_path().exists() {
             store.write_agents_template().map_err(OpenError::Other)?;
@@ -247,15 +335,7 @@ impl Store {
     }
 
     pub fn save(&self) -> Result<(), String> {
-        self.save_internal(true)
-    }
-
-    fn save_view_state(&self) -> Result<(), String> {
-        self.save_internal(false)
-    }
-
-    fn save_internal(&self, touch_on_write: bool) -> Result<(), String> {
-        let json = serde_json::to_string_pretty(&self.notebook).map_err(err)?;
+        let json = serde_json::to_string_pretty(&StoredNotebook::from(&self.notebook)).map_err(err)?;
         if *self.last_saved_json.borrow() == json {
             return Ok(());
         }
@@ -265,10 +345,31 @@ impl Store {
         }
         atomic_write(&path, json.as_bytes())?;
         *self.last_saved_json.borrow_mut() = json;
-        if touch_on_write {
-            self.touch();
-        }
+        self.touch();
         Ok(())
+    }
+
+    fn save_view_state(&self) -> Result<(), String> {
+        let mut collapsed = Vec::new();
+        for section in &self.notebook.sections {
+            collect_collapsed(&section.pages, &mut collapsed);
+        }
+        let state = UserState {
+            last_view: self.notebook.last_view.clone(),
+            collapsed,
+        };
+        let json = serde_json::to_string_pretty(&state).map_err(err)?;
+        if *self.last_saved_user_json.borrow() == json {
+            return Ok(());
+        }
+        atomic_write(&self.user_state_path(), json.as_bytes())?;
+        *self.last_saved_user_json.borrow_mut() = json;
+        log::trace!("view state saved ({} collapsed)", state.collapsed.len());
+        Ok(())
+    }
+
+    fn user_state_path(&self) -> PathBuf {
+        self.root.join(USER_STATE_FILE)
     }
 
     pub fn session(&self) -> u64 {
@@ -464,6 +565,7 @@ impl Store {
         self.session_deleted.extend(ids);
         if self.notebook.last_view.page_id.as_deref() == Some(id) {
             self.notebook.last_view.page_id = None;
+            let _ = self.save_view_state();
         }
         Ok(UndoOp::DeletePage {
             node,
@@ -722,6 +824,7 @@ impl Store {
         self.purge_deleted_files();
         let _ = crate::assets::prune(&self);
         let _ = self.save();
+        let _ = self.save_view_state();
         CloseInfo {
             root: self.root.clone(),
             git_enabled: self.notebook.git.enabled,
@@ -947,6 +1050,20 @@ fn load_notebook(root: &Path) -> Result<Notebook, String> {
     })
 }
 
+fn load_user_state(root: &Path) -> Option<UserState> {
+    let path = root.join(USER_STATE_FILE);
+    if !path.exists() {
+        return None;
+    }
+    match fs::read_to_string(&path).map_err(err).and_then(|t| serde_json::from_str(&t).map_err(err)) {
+        Ok(state) => Some(state),
+        Err(_) => {
+            log::warn!("{USER_STATE_FILE} unreadable; view state reset");
+            None
+        }
+    }
+}
+
 fn non_empty(value: &str, fallback: &str) -> String {
     let trimmed = value.trim();
     if trimmed.is_empty() {
@@ -1168,16 +1285,132 @@ mod tests {
     }
 
     #[test]
-    fn view_state_does_not_bump_change_seq() {
-        let (_dir, mut store) = open_store();
+    fn view_state_does_not_bump_change_seq_or_rewrite_notebook_json() {
+        let (dir, mut store) = open_store();
         let sid = section_id(&store);
         let page = store.create_page(&sid, None, None).unwrap();
         let seq = store.change_seq();
+        let notebook_before = fs::read_to_string(dir.path().join("notebook.json")).unwrap();
+        fs::remove_file(dir.path().join("notebook.json.bak")).unwrap();
+
         store.set_expanded(&page.id, false).unwrap();
         store
             .set_last_view(Some(sid), Some(page.id.clone()))
             .unwrap();
+
         assert_eq!(store.change_seq(), seq);
+        assert_eq!(
+            fs::read_to_string(dir.path().join("notebook.json")).unwrap(),
+            notebook_before
+        );
+        assert!(!dir.path().join("notebook.json.bak").exists());
+    }
+
+    #[test]
+    fn notebook_json_carries_no_view_state() {
+        let (dir, mut store) = open_store();
+        let sid = section_id(&store);
+        let page = store.create_page(&sid, None, None).unwrap();
+        store.set_expanded(&page.id, false).unwrap();
+        store.set_last_view(Some(sid), Some(page.id.clone())).unwrap();
+        store.rename_page(&page.id, "Structure").unwrap();
+
+        let json = fs::read_to_string(dir.path().join("notebook.json")).unwrap();
+        assert!(!json.contains("lastView"));
+        assert!(!json.contains("expanded"));
+        assert!(json.contains("\"title\": \"Structure\""));
+        assert!(json.contains("\"git\""));
+    }
+
+    #[test]
+    fn view_state_round_trips_through_the_user_file() {
+        let dir = tempdir().unwrap();
+        let sid;
+        let collapsed_id;
+        let open_id;
+        {
+            let mut store = Store::open(dir.path()).unwrap();
+            sid = section_id(&store);
+            collapsed_id = store.create_page(&sid, None, None).unwrap().id;
+            open_id = store.create_page(&sid, None, None).unwrap().id;
+            store.set_expanded(&collapsed_id, false).unwrap();
+            store
+                .set_last_view(Some(sid.clone()), Some(open_id.clone()))
+                .unwrap();
+        }
+        let user_json = fs::read_to_string(dir.path().join(USER_STATE_FILE)).unwrap();
+        assert!(user_json.contains("lastView"));
+        assert!(user_json.contains(&collapsed_id));
+
+        let store = Store::open(dir.path()).unwrap();
+        assert!(!store.find_page(&collapsed_id).unwrap().expanded);
+        assert!(store.find_page(&open_id).unwrap().expanded);
+        assert_eq!(store.notebook.last_view.section_id.as_deref(), Some(sid.as_str()));
+        assert_eq!(store.notebook.last_view.page_id.as_deref(), Some(open_id.as_str()));
+    }
+
+    #[test]
+    fn legacy_inline_view_state_migrates_on_open() {
+        let dir = tempdir().unwrap();
+        let sid = new_id();
+        let collapsed_id = new_id();
+        let child_id = new_id();
+        let legacy = format!(
+            r#"{{
+              "sections": [{{
+                "id": "{sid}",
+                "name": "Notes",
+                "pages": [{{
+                  "id": "{collapsed_id}",
+                  "title": "Parent",
+                  "expanded": false,
+                  "children": [{{ "id": "{child_id}", "title": "Child", "expanded": true, "children": [] }}]
+                }}]
+              }}],
+              "lastView": {{ "sectionId": "{sid}", "pageId": "{child_id}" }}
+            }}"#
+        );
+        fs::write(dir.path().join("notebook.json"), legacy).unwrap();
+
+        {
+            let store = Store::open(dir.path()).unwrap();
+            assert!(!store.find_page(&collapsed_id).unwrap().expanded);
+            assert_eq!(store.notebook.last_view.page_id.as_deref(), Some(child_id.as_str()));
+        }
+        let json = fs::read_to_string(dir.path().join("notebook.json")).unwrap();
+        assert!(!json.contains("lastView"));
+        assert!(!json.contains("expanded"));
+
+        // and the migrated state survives the rewrite
+        let reopened = Store::open(dir.path()).unwrap();
+        assert!(!reopened.find_page(&collapsed_id).unwrap().expanded);
+        assert_eq!(
+            reopened.notebook.last_view.page_id.as_deref(),
+            Some(child_id.as_str())
+        );
+    }
+
+    #[test]
+    fn a_corrupt_or_missing_user_file_opens_with_defaults() {
+        let dir = tempdir().unwrap();
+        let pid;
+        {
+            let mut store = Store::open(dir.path()).unwrap();
+            let sid = section_id(&store);
+            pid = store.create_page(&sid, None, None).unwrap().id;
+            store.set_expanded(&pid, false).unwrap();
+            store.set_last_view(Some(sid), Some(pid.clone())).unwrap();
+        }
+        fs::write(dir.path().join(USER_STATE_FILE), b"{ not json").unwrap();
+        {
+            let store = Store::open(dir.path()).unwrap();
+            assert!(store.find_page(&pid).unwrap().expanded);
+            assert!(store.notebook.last_view.page_id.is_none());
+        }
+        fs::remove_file(dir.path().join(USER_STATE_FILE)).unwrap();
+        let store = Store::open(dir.path()).unwrap();
+        assert!(store.find_page(&pid).unwrap().expanded);
+        assert!(store.notebook.last_view.page_id.is_none());
     }
 
     #[test]
