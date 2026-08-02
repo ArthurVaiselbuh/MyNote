@@ -32,11 +32,21 @@ pub struct SearchHit {
     pub rank: Rank,
 }
 
+#[derive(Default, Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
+pub enum Strategy {
+    Phrase,
+    Word,
+    Partial,
+    #[default]
+    Fuzzy,
+}
+
 /// field order is the ranking order: matching more of the query's distinct
 /// terms always outweighs matching one term more often
 #[derive(Default, Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
 pub struct Rank {
     pub terms_matched: usize,
+    pub tier: Reverse<Strategy>,
     pub occurrences: usize,
     pub title_matched: bool,
 }
@@ -67,15 +77,24 @@ pub fn search(store: &Store, query: &str, mode: &str) -> Result<SearchResults, S
 
 fn keyword_search(store: &Store, query: &str) -> (Vec<SearchHit>, Vec<String>) {
     let terms = parse_terms(query);
+    let phrase = whole_query_phrase(query);
     let mut matcher = Matcher::new(Config::DEFAULT);
     let mut hits = Vec::new();
     for (section, page) in flatten_pages(&store.notebook) {
         let content = page_content(store, page);
-        if let Some(hit) = page_hit(section, page, &content, &terms, &mut matcher) {
+        if let Some(hit) = page_hit(section, page, &content, &terms, &phrase, &mut matcher) {
             hits.push(hit);
         }
     }
     (hits, terms.into_iter().map(|t| t.text).collect())
+}
+
+fn whole_query_phrase(query: &str) -> Vec<char> {
+    let words: Vec<&str> = query
+        .split(|c: char| c == '"' || c.is_whitespace())
+        .filter(|word| !word.is_empty())
+        .collect();
+    lower_chars(&words.join(" "))
 }
 
 fn parse_terms(query: &str) -> Vec<Term> {
@@ -106,6 +125,7 @@ fn page_hit(
     page: &PageNode,
     content: &str,
     terms: &[Term],
+    phrase: &[char],
     matcher: &mut Matcher,
 ) -> Option<SearchHit> {
     let lines = searchable_lines(content);
@@ -114,16 +134,22 @@ fn page_hit(
     let mut ranges_per_line: Vec<Vec<(usize, usize)>> = vec![Vec::new(); lines.len()];
     let mut terms_per_line: Vec<usize> = vec![0; lines.len()];
     let mut rank = Rank::default();
+    let mut weakest_strategy = Strategy::Phrase;
 
     for term in terms {
+        let mut strategy = Strategy::Word;
         let mut matched_lines = literal_lines(&lowered, &lower_chars(&term.text));
         if matched_lines.is_empty() && !term.quoted {
             matched_lines.extend(best_fuzzy_line(&lines, &term.text, matcher));
+            strategy = Strategy::Fuzzy;
+        } else if !any_word_bounded(&lowered, &matched_lines) {
+            strategy = Strategy::Partial;
         }
         if matched_lines.is_empty() {
             continue;
         }
         rank.terms_matched += 1;
+        weakest_strategy = weakest_strategy.max(strategy);
         for (line_idx, ranges) in matched_lines {
             rank.occurrences += ranges.len();
             rank.title_matched |= lines[line_idx].0 == 0;
@@ -134,6 +160,10 @@ fn page_hit(
     if rank.terms_matched == 0 {
         return None;
     }
+    if lowered.iter().any(|line| has_word_bounded_match(line, phrase)) {
+        weakest_strategy = Strategy::Phrase;
+    }
+    rank.tier = Reverse(weakest_strategy);
 
     let best = (0..lines.len())
         .filter(|&i| terms_per_line[i] > 0)
@@ -150,6 +180,30 @@ fn literal_lines(lowered: &[Vec<char>], needle: &[char]) -> Vec<LineRanges> {
         .map(|(idx, haystack)| (idx, literal_ranges(haystack, needle)))
         .filter(|(_, ranges)| !ranges.is_empty())
         .collect()
+}
+
+fn any_word_bounded(lowered: &[Vec<char>], matched_lines: &[LineRanges]) -> bool {
+    matched_lines.iter().any(|(line_idx, ranges)| {
+        ranges
+            .iter()
+            .any(|&(start, end)| is_word_bounded(&lowered[*line_idx], start, end))
+    })
+}
+
+fn has_word_bounded_match(haystack: &[char], needle: &[char]) -> bool {
+    literal_ranges(haystack, needle)
+        .iter()
+        .any(|&(start, end)| is_word_bounded(haystack, start, end))
+}
+
+fn is_word_bounded(haystack: &[char], start: usize, end: usize) -> bool {
+    let opens = start == 0 || !is_word_char(haystack[start - 1]);
+    let closes = end == haystack.len() || !is_word_char(haystack[end]);
+    opens && closes
+}
+
+fn is_word_char(c: char) -> bool {
+    c.is_alphanumeric() || c == '_'
 }
 
 fn literal_ranges(haystack: &[char], needle: &[char]) -> Vec<(usize, usize)> {
@@ -219,6 +273,7 @@ fn regex_search(store: &Store, query: &str) -> Result<Vec<SearchHit>, String> {
                 terms_matched: 1,
                 occurrences: ranges.len(),
                 title_matched: line_no == 0,
+                ..Rank::default()
             };
             hits.push(make_hit(section, page, line_no, text, ranges, rank));
         }
@@ -453,6 +508,89 @@ mod tests {
         let (_dir, store) = store_with(&["# Page\n\nmilkshake\n"]);
         let found = hits(&store, "milk milks", "fuzzy");
         assert_eq!(found[0].ranges, vec![(0, 5)]);
+    }
+
+    #[test]
+    fn whole_word_outranks_a_substring_only_match() {
+        let (_dir, store) = store_with(&[
+            "# Shake\n\nmilkshake milkshake milkshake\n",
+            "# Fridge\n\nbuy milk\n",
+        ]);
+        let found = hits(&store, "milk", "fuzzy");
+        assert_eq!(found[0].title, "Fridge");
+        assert_eq!(found[0].rank.tier, Reverse(Strategy::Phrase));
+        assert_eq!(found[1].rank.tier, Reverse(Strategy::Partial));
+    }
+
+    #[test]
+    fn substring_outranks_a_fuzzy_only_match() {
+        let (_dir, store) = store_with(&["# Typo\n\nm i l l k y way\n", "# Shake\n\nmilkshake\n"]);
+        let found = hits(&store, "milk", "fuzzy");
+        assert_eq!(found[0].title, "Shake");
+        assert_eq!(found[0].rank.tier, Reverse(Strategy::Partial));
+        assert_eq!(found[1].rank.tier, Reverse(Strategy::Fuzzy));
+    }
+
+    #[test]
+    fn the_full_query_as_a_phrase_outranks_the_same_words_apart() {
+        let (_dir, store) = store_with(&[
+            "# Apart\n\ndeployment notes\n\npipeline notes\n\ndeployment pipeline again\n",
+            "# Together\n\nthe deployment pipeline broke\n",
+        ]);
+        let found = hits(&store, "deployment pipeline", "fuzzy");
+        assert_eq!(found[0].title, "Apart");
+        let apart_and_together_both_phrase_tier =
+            found.iter().all(|h| h.rank.tier == Reverse(Strategy::Phrase));
+        assert!(apart_and_together_both_phrase_tier);
+
+        let (_dir, store) = store_with(&[
+            "# Apart\n\ndeployment notes\n\npipeline notes\n",
+            "# Together\n\nthe deployment pipeline broke\n",
+        ]);
+        let found = hits(&store, "deployment pipeline", "fuzzy");
+        assert_eq!(found[0].title, "Together");
+        assert_eq!(found[0].rank.tier, Reverse(Strategy::Phrase));
+        assert_eq!(found[1].rank.tier, Reverse(Strategy::Word));
+    }
+
+    #[test]
+    fn word_boundaries_hold_at_line_edges_and_punctuation() {
+        let (_dir, store) = store_with(&[
+            "# Start\n\nmilk is here\n",
+            "# End\n\nwe need milk\n",
+            "# Punctuated\n\n(milk), please\n",
+            "# Joined\n\nmilk_shake\n",
+        ]);
+        let found = hits(&store, "milk", "fuzzy");
+        let tier_of = |title: &str| found.iter().find(|h| h.title == title).unwrap().rank.tier;
+        assert_eq!(tier_of("Start"), Reverse(Strategy::Phrase));
+        assert_eq!(tier_of("End"), Reverse(Strategy::Phrase));
+        assert_eq!(tier_of("Punctuated"), Reverse(Strategy::Phrase));
+        assert_eq!(tier_of("Joined"), Reverse(Strategy::Partial));
+    }
+
+    #[test]
+    fn a_quoted_phrase_never_drops_to_fuzzy_tier() {
+        let (_dir, store) = store_with(&[
+            "# Bounded\n\nthe deployment pipeline broke\n",
+            "# Glued\n\nxdeployment pipelinex\n",
+        ]);
+        let found = hits(&store, "\"deployment pipeline\"", "fuzzy");
+        assert_eq!(found[0].title, "Bounded");
+        assert_eq!(found[0].rank.tier, Reverse(Strategy::Phrase));
+        assert_eq!(found[1].rank.tier, Reverse(Strategy::Partial));
+        assert!(found.iter().all(|h| h.rank.tier != Reverse(Strategy::Fuzzy)));
+    }
+
+    #[test]
+    fn more_terms_matched_still_beats_a_stronger_tier() {
+        let (_dir, store) = store_with(&[
+            "# Both\n\nalphabet soup\n\nbeta\n",
+            "# One\n\nalpha alone\n",
+        ]);
+        let found = hits(&store, "alpha beta", "fuzzy");
+        assert_eq!(found[0].title, "Both");
+        assert_eq!(found[0].rank.terms_matched, 2);
     }
 
     #[test]
