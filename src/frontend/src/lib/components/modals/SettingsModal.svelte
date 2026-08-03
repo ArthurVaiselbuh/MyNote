@@ -1,9 +1,12 @@
 <script lang="ts">
   import { onMount } from "svelte";
+  import { getVersion } from "@tauri-apps/api/app";
   import * as act from "../../actions";
   import { api, type GitStatus } from "../../api";
   import { MOD_LABEL } from "../../keys/platform";
   import { app } from "../../state/app.svelte";
+
+  const RELEASES_URL = "https://github.com/ArthurVaiselbuh/MyNote/releases";
 
   function persist() {
     void act.persistSettings();
@@ -11,8 +14,10 @@
 
   let gitStatus = $state<GitStatus | null>(null);
   let gitIntervalMinutes = $state(60);
+  let version = $state("");
 
   onMount(() => {
+    void getVersion().then((v) => (version = v));
     void api.getGitStatus().then((s) => {
       gitStatus = s;
       app.git = s;
@@ -141,6 +146,13 @@
     </div>
 
     <div class="modal-buttons">
+      {#if version}
+        <button
+          class="settings-version"
+          title="Open the releases page in your browser"
+          onclick={() => act.openExternalLink(RELEASES_URL)}>v{version}</button
+        >
+      {/if}
       <button class="primary" onclick={() => act.closeModal()}>Done</button>
     </div>
   </div>
