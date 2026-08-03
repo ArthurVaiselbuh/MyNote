@@ -58,6 +58,14 @@ jobs:
       - uses: Swatinem/rust-cache@v2
         with:
           workspaces: src/backend
+      - name: Stamp PR version (base-pr<number>-<run>)
+        shell: bash
+        run: |
+          base=$(jq -r .version src/backend/tauri.conf.json)
+          version="${base}-pr${{ github.event.pull_request.number || 0 }}-${{ github.run_number }}"
+          echo "Building version $version"
+          tmp=$(mktemp)
+          jq --arg v "$version" '.version = $v' src/backend/tauri.conf.json > "$tmp" && mv "$tmp" src/backend/tauri.conf.json
       - name: Build release exe
         run: build.bat
         shell: cmd
