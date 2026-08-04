@@ -266,6 +266,19 @@ one shortcut table in `keys/shortcuts.ts` that both the help overlay and every
 tooltip render from. Intended as the basis for future user-configurable
 keybindings: change/extend chords in those two files, not scattered literals.
 
+**Bindings never match on `e.key` directly** — they match on
+`platform.ts::chordKey(e)`, which is layout-stable: an ASCII letter is taken as
+printed (AZERTY/QWERTZ users press the letter they see), everything else
+resolves from the physical key's US-QWERTY meaning. Without it, switching the
+OS layout to a non-Latin one (Hebrew, Cyrillic, Greek) breaks every
+letter/punctuation shortcut — `e.key` for Ctrl+K becomes `ל`. Punctuation can't
+trust its printed character even when that is ASCII: Hebrew puts `,` on the
+Shift+`/` position, so the `?` help chord would otherwise open Settings. `?` is
+therefore expressed as `isHelpChord(e)` (Shift + base `/`), and shifted
+punctuation normalizes to its unshifted base key. Named keys (Arrow\*, Enter,
+Esc, Tab, F2/F3, Delete, PageUp/Dn) are layout-independent and pass through, so
+components matching those need no seam.
+
 One capture-phase window keydown listener dispatches with strict precedence:
 
 1. Open modal (picker/help/settings/confirm/insert helper) owns the keyboard;

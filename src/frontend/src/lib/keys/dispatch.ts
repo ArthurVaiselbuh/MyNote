@@ -2,7 +2,7 @@ import * as act from "../actions";
 import { contextMenu, contextMenuKeys } from "../contextMenu.svelte";
 import { app } from "../state/app.svelte";
 import { isTextEntry } from "../textEntry";
-import { modPressed } from "./platform";
+import { chordKey, isHelpChord, modPressed } from "./platform";
 import { resultsKeys } from "./resultsKeys";
 import { treeKeys } from "./treeKeys";
 
@@ -36,7 +36,7 @@ export function handleGlobal(e: KeyboardEvent) {
       e.preventDefault();
       e.stopPropagation();
     };
-    switch (e.key.toLowerCase()) {
+    switch (chordKey(e)) {
       // while typing, Ctrl+Z/Y stay native (editor/input text undo)
       case "z": if (typing) break; handled(); void (e.shiftKey ? act.redoLast() : act.undoLast()); return;
       case "y": if (typing) break; handled(); void act.redoLast(); return;
@@ -54,9 +54,9 @@ export function handleGlobal(e: KeyboardEvent) {
       case "1": handled(); act.focusPane("tree"); return;
       case "2": handled(); act.focusPane("editor"); return;
       case "3": handled(); act.focusTitle(); return;
-      case "pageup": handled(); act.gotoSectionOffset(-1); return;
-      case "pagedown": handled(); act.gotoSectionOffset(1); return;
-      case "=": case "+": handled(); void act.zoomBy(0.1); return;
+      case "PageUp": handled(); act.gotoSectionOffset(-1); return;
+      case "PageDown": handled(); act.gotoSectionOffset(1); return;
+      case "=": handled(); void act.zoomBy(0.1); return;
       case "-": handled(); void act.zoomBy(-0.1); return;
       case "0": handled(); void act.zoomReset(); return;
     }
@@ -78,7 +78,7 @@ export function handleGlobal(e: KeyboardEvent) {
     return;
   }
 
-  if (e.key === "?" && !typing && !mod) {
+  if (isHelpChord(e) && !typing && !mod) {
     e.preventDefault();
     act.openModal("help");
     return;

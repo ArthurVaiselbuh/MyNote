@@ -2,6 +2,7 @@
   import * as act from "../../actions";
   import { api, type DeletedChild, type DeletedHistory, type DeletedItem, type PageRevision } from "../../api";
   import { diffText, type DiffResult } from "../../diff";
+  import { chordKey, isHelpChord } from "../../keys/platform";
   import { renderBody } from "../../markdown";
   import { app, type HistoryMode } from "../../state/app.svelte";
 
@@ -314,11 +315,12 @@
     // still mounted behind its own confirm dialog — that dialog owns the keyboard then
     if (app.modal !== "history") return;
     if (e.metaKey || e.ctrlKey || e.altKey) return;
-    switch (e.key) {
-      case "?":
-        e.preventDefault();
-        act.openHistoryHelp();
-        return;
+    if (isHelpChord(e)) {
+      e.preventDefault();
+      act.openHistoryHelp();
+      return;
+    }
+    switch (chordKey(e)) {
       case "ArrowUp":
         e.preventDefault();
         if (e.shiftKey) {
@@ -334,7 +336,6 @@
         else moveDeletedSel(1);
         return;
       case "b":
-      case "B":
         if (app.historyTab === "page") {
           e.preventDefault();
           app.historyRevBase = app.historyRevSel;
@@ -362,8 +363,7 @@
         if (app.historyTab === "page") app.historyMode = "text";
         else deletedMode = "text";
         return;
-      case "v":
-      case "V": {
+      case "v": {
         e.preventDefault();
         if (app.historyTab === "page") {
           const order: HistoryMode[] = ["split", "inline", "rendered", "text"];
@@ -374,14 +374,12 @@
         return;
       }
       case "n":
-      case "N":
         if (app.historyTab === "page" && (app.historyMode === "split" || app.historyMode === "inline")) {
           e.preventDefault();
           jumpChange(1);
         }
         return;
       case "p":
-      case "P":
         if (app.historyTab === "page" && (app.historyMode === "split" || app.historyMode === "inline")) {
           e.preventDefault();
           jumpChange(-1);
@@ -399,7 +397,6 @@
         return;
       case "Enter":
       case "r":
-      case "R":
         e.preventDefault();
         doRestore();
         return;

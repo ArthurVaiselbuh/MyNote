@@ -1,5 +1,5 @@
 import * as act from "../actions";
-import { modPressed } from "./platform";
+import { chordKey, modPressed } from "./platform";
 
 export function treeKeys(e: KeyboardEvent) {
   const mod = modPressed(e);
@@ -13,7 +13,7 @@ export function treeKeys(e: KeyboardEvent) {
     return;
   }
 
-  switch (e.key) {
+  switch (chordKey(e)) {
     case "/": handled(); act.openTreeFilter(); return;
     case "ArrowUp": handled(); act.selectOffset(-1); return;
     case "ArrowDown": handled(); act.selectOffset(1); return;
