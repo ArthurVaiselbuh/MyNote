@@ -61,7 +61,7 @@
         </div>
         <div class="help-group">
           <h3>Global</h3>
-          {#each filtered(rowsFor("global")) as { keys, desc }}
+          {#each filtered([...rowsFor("global"), ...rowsFor("system")]) as { keys, desc }}
             <div class="help-row"><span>{desc}</span><kbd>{keys}</kbd></div>
           {/each}
         </div>
