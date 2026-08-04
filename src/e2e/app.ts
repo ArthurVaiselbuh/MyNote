@@ -379,7 +379,10 @@ function swapSettingsToScratch(notebookDir: string) {
     fs.rmSync(SETTINGS_BAK);
   }
   if (fs.existsSync(SETTINGS)) fs.copyFileSync(SETTINGS, SETTINGS_BAK);
-  fs.writeFileSync(SETTINGS, JSON.stringify({ notebookPath: notebookDir, window: null }));
+  fs.writeFileSync(
+    SETTINGS,
+    JSON.stringify({ notebookPath: notebookDir, window: null, logLevel: "verbose" }),
+  );
 }
 
 function restoreSettings() {
