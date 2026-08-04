@@ -2,6 +2,7 @@ mod assets;
 mod commands;
 mod git;
 mod history;
+mod hotkey;
 mod import;
 mod import_md;
 mod import_mht;
@@ -34,6 +35,7 @@ pub fn run() {
             tauri_plugin_autostart::MacosLauncher::LaunchAgent,
             Some(vec![startup::HIDDEN_ARG]),
         ))
+        .plugin(hotkey::plugin())
         .plugin(navigation_guard())
         .manage(AppState {
             store: Mutex::new(None),
@@ -119,6 +121,7 @@ pub fn run() {
             }
             tray::sync(app.handle(), tray_enabled);
             startup::sync(app.handle(), start_on_login);
+            hotkey::sync(app.handle());
             if !(tray_enabled && startup::launched_hidden()) {
                 let _ = win.show();
             }

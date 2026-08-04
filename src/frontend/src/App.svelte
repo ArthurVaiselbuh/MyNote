@@ -119,6 +119,13 @@
       unlistenGitSnapshotFailed = un;
     });
 
+    let unlistenHotkeyUnavailable: (() => void) | undefined;
+    void listen<string>("mynote:hotkey-unavailable", (event) => {
+      act.flashStatusError(event.payload);
+    }).then((un) => {
+      unlistenHotkeyUnavailable = un;
+    });
+
     void act.boot();
 
     return () => {
@@ -129,6 +136,7 @@
       unlistenFlushAndClose?.();
       unlistenFlush?.();
       unlistenGitSnapshotFailed?.();
+      unlistenHotkeyUnavailable?.();
     };
   });
 </script>

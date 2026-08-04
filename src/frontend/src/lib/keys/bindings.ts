@@ -13,7 +13,7 @@ import { ALT_LABEL, MOD_LABEL, SHIFT_LABEL, chordKey, isMac } from "./platform";
 // map keep their defaults, so bindings added in a later version light up
 // without touching the user's file.
 
-export type BindingContext = "global" | "pane" | "tree" | "results" | "history";
+export type BindingContext = "global" | "system" | "pane" | "tree" | "results" | "history";
 
 export type Command = {
   id: string;
@@ -82,6 +82,14 @@ export const COMMANDS: Command[] = [
   { id: "app.zoomReset", ctx: "global", desc: "Reset zoom", defaults: ["Mod+0"] },
   { id: "app.help", ctx: "global", desc: "Shortcut overlay", defaults: ["Shift+/"] },
 
+  {
+    id: "app.showWindow",
+    ctx: "system",
+    desc: "Bring MyNote to the front",
+    defaults: [],
+    search: "global system-wide hotkey foreground restore tray background focus",
+  },
+
   { id: "pane.scrollUp", ctx: "pane", desc: "Scroll active view up", defaults: ["PageUp"] },
   { id: "pane.scrollDown", ctx: "pane", desc: "Scroll active view down", defaults: ["PageDown"] },
 
@@ -141,6 +149,7 @@ const BY_ID = new Map(COMMANDS.map((c) => [c.id, c]));
 
 export const CONTEXT_LABELS: Record<BindingContext, string> = {
   global: "Global — work from anywhere, even while typing",
+  system: "System-wide — works while another app has the keyboard",
   pane: "Panes",
   tree: "Page tree",
   results: "Search results",
@@ -330,12 +339,22 @@ export function matches(id: string, e: KeyboardEvent): boolean {
 // one of them would never fire. Two panes may safely share a chord; the history
 // pane owns the keyboard outright and shares with nobody.
 const REACH: Record<BindingContext, BindingContext[]> = {
-  global: ["global", "pane", "tree", "results"],
-  pane: ["global", "pane", "tree", "results"],
-  tree: ["global", "pane", "tree"],
-  results: ["global", "pane", "results"],
-  history: ["history"],
+  global: ["global", "system", "pane", "tree", "results"],
+  system: ["global", "system", "pane", "tree", "results", "history"],
+  pane: ["global", "system", "pane", "tree", "results"],
+  tree: ["global", "system", "pane", "tree"],
+  results: ["global", "system", "pane", "results"],
+  history: ["system", "history"],
 };
+
+export function rejectionOf(id: string, chord: string): string | null {
+  if (BY_ID.get(id)?.ctx !== "system") return null;
+  const { mod, alt } = parseChord(chord);
+  if (!mod && !alt) {
+    return `A system-wide shortcut needs ${MOD_LABEL} or ${ALT_LABEL} — otherwise it swallows that key in every app.`;
+  }
+  return null;
+}
 
 /** The command a chord would collide with if assigned to `id`, if any. */
 export function conflictOf(id: string, chord: string): Command | null {

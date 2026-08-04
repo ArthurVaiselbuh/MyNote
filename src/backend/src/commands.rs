@@ -8,6 +8,7 @@ use tauri::{Emitter, State};
 use crate::assets;
 use crate::git::{self, SnapshotKind};
 use crate::history;
+use crate::hotkey;
 use crate::import::{ImportOutcome, ImportPreview};
 use crate::{import_md, import_mht};
 use crate::search::{self, SearchResults};
@@ -551,5 +552,6 @@ pub fn set_settings(
     drop(guard);
     tray::sync(&app, tray_enabled);
     startup::sync(&app, start_on_login);
+    hotkey::sync(&app);
     Ok(())
 }

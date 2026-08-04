@@ -199,6 +199,10 @@ are supported cross-platform builds off the same code.
   argument; MyNote starts without showing its window only when that argument is
   present *and* the tray is enabled. Both settings are applied by `set_settings`
   as well as at startup, so toggling takes effect without a restart.
+- **The "bring MyNote to the front" chord is the one binding the OS owns**
+  it has to reach the app while another program has the keyboard, so it is registered
+  system-wide and reveals the window through the same `tray::reveal_window` the
+  tray's Show item uses . It is unassigned by default.
 - **Autosave** debounces 3s after the last keystroke
 - **Per-notebook git snapshots** are an opt-in safety net (`notebook.json`'s
   `git.enabled`/`git.intervalSecs`, toggle in Settings), never a runtime

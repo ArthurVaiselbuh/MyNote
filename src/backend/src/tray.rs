@@ -54,7 +54,7 @@ pub fn reveal_window(app: &AppHandle) {
     let Some(window) = app.get_webview_window("main") else {
         return;
     };
-    log::trace!("revealing window from tray");
+    log::trace!("revealing window");
     let _ = window.unminimize();
     let _ = window.show();
     let _ = window.set_focus();

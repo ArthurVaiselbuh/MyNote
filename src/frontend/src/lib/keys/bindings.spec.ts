@@ -10,6 +10,7 @@ import {
   isTextChord,
   labelOf,
   parseChord,
+  rejectionOf,
   resetAllToDefaults,
   unassign,
 } from "./bindings";
@@ -118,6 +119,27 @@ describe("overrides", () => {
   it("lets two panes share a chord but not a pane and a global", () => {
     expect(conflictOf("tree.open", "Enter")).toBe(null); // results.open also uses Enter
     expect(conflictOf("tree.rename", "Mod+k")?.id).toBe("app.search");
+  });
+});
+
+describe("the system-wide shortcut", () => {
+  it("stays unassigned and inert until the user sets it", () => {
+    expect(chordsOf("app.showWindow")).toEqual([]);
+    expect(commandFor("global", press("F5", "F5"))).toBe(null);
+  });
+
+  it("refuses a chord the OS would swallow in every app", () => {
+    expect(rejectionOf("app.showWindow", "n")).not.toBe(null);
+    expect(rejectionOf("app.showWindow", "Shift+F5")).not.toBe(null);
+    expect(rejectionOf("app.showWindow", "Mod+Alt+n")).toBe(null);
+    expect(rejectionOf("app.search", "n")).toBe(null);
+  });
+
+  it("collides with in-app chords, which the OS would never deliver", () => {
+    expect(conflictOf("app.showWindow", "Mod+k")?.id).toBe("app.search");
+    expect(conflictOf("app.showWindow", "b")?.id).toBe("history.setBase");
+    assignChord("app.showWindow", "Mod+k");
+    expect(chordsOf("app.search")).toEqual([]);
   });
 });
 

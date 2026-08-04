@@ -12,6 +12,7 @@
     conflictOf,
     formatChord,
     isDefault,
+    rejectionOf,
     resetAllToDefaults,
     resetToDefault,
     unassign,
@@ -24,7 +25,7 @@
   let capturing = $state<string | null>(null);
   let captureNote = $state("");
 
-  const CONTEXT_ORDER: BindingContext[] = ["global", "pane", "tree", "results", "history"];
+  const CONTEXT_ORDER: BindingContext[] = ["global", "system", "pane", "tree", "results", "history"];
 
   function visible(command: Command): boolean {
     if (command.gate === "git" && !app.git?.available) return false;
@@ -73,6 +74,11 @@
     if (!chord) return; // a modifier on its own — wait for the real key
     if (chord.startsWith("Other+")) {
       captureNote = "That modifier isn't usable in a shortcut.";
+      return;
+    }
+    const rejection = rejectionOf(capturing, chord);
+    if (rejection) {
+      captureNote = rejection;
       return;
     }
     const stolen = conflictOf(capturing, chord);

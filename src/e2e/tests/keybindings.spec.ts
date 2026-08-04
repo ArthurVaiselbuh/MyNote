@@ -68,6 +68,26 @@ test("a shortcut can be unassigned, and reset all restores the defaults", async 
   await expect(app.page.locator(".tree .row")).toHaveCount(2);
 });
 
+test("the system-wide shortcut starts unassigned and refuses a bare chord", async ({ app }) => {
+  const FRONT = "Bring MyNote to the front";
+  await openKeybindings(app);
+
+  const row = rowFor(app, FRONT);
+  await expect(row.locator(".keybind-unassigned")).toBeVisible();
+
+  await row.getByRole("button", { name: "Change…" }).click();
+  await app.page.keyboard.press("b");
+  await expect(app.page.locator(".keybind-note")).toContainText("Ctrl or Alt");
+  await expect(row).toHaveClass(/capturing/); // still waiting for a usable chord
+
+  await app.page.keyboard.press("Control+Alt+F9");
+  await expect(row.locator("kbd")).toHaveText("Ctrl+Alt+F9");
+
+  await app.relaunch();
+  await openKeybindings(app);
+  await expect(rowFor(app, FRONT).locator("kbd")).toHaveText("Ctrl+Alt+F9");
+});
+
 test("claiming a taken chord moves it off the command that held it", async ({ app }) => {
   await app.newTitledPage("Alpha", 1);
   await openKeybindings(app);
