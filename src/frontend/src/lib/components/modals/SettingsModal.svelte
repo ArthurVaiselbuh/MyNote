@@ -13,7 +13,7 @@
   }
 
   let gitStatus = $state<GitStatus | null>(null);
-  let gitIntervalMinutes = $state(60);
+  let gitIntervalMinutes = $state(20);
   let version = $state("");
 
   onMount(() => {
