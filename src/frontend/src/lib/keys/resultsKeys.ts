@@ -1,10 +1,11 @@
 import * as act from "../actions";
 import { peekCtl } from "../peekCtl";
 import { app } from "../state/app.svelte";
+import { chordKey } from "./platform";
 
 export function resultsKeys(e: KeyboardEvent) {
   const handled = () => e.preventDefault();
-  switch (e.key) {
+  switch (chordKey(e)) {
     case "ArrowUp":
       handled();
       app.resultsSel = Math.max(0, app.resultsSel - 1);
