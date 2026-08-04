@@ -302,15 +302,20 @@ async function waitForPortFree() {
   );
 }
 
+const ATTACH_BUDGET_MS = 60_000;
+
 async function connectWithRetry(): Promise<Browser> {
-  for (let i = 0; i < 75; i++) {
+  const deadline = Date.now() + ATTACH_BUDGET_MS;
+  do {
     try {
       return await chromium.connectOverCDP(CDP_URL, { timeout: 3_000 });
     } catch {
       await sleep(200);
     }
-  }
-  throw new Error(`could not attach to ${CDP_URL} — did the exe start?`);
+  } while (Date.now() < deadline);
+  throw new Error(
+    `could not attach to ${CDP_URL} within ${ATTACH_BUDGET_MS / 1000}s — did the exe start?`,
+  );
 }
 
 function runDiagnostic(cmd: string): string {
