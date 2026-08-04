@@ -93,13 +93,17 @@ pub struct LastView {
 }
 
 fn default_git_interval_secs() -> u64 {
-    3600
+    1200
+}
+
+fn default_git_enabled() -> bool {
+    true
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug)]
 #[serde(rename_all = "camelCase")]
 pub struct GitConfig {
-    #[serde(default)]
+    #[serde(default = "default_git_enabled")]
     pub enabled: bool,
     #[serde(default = "default_git_interval_secs")]
     pub interval_secs: u64,
@@ -108,7 +112,7 @@ pub struct GitConfig {
 impl Default for GitConfig {
     fn default() -> GitConfig {
         GitConfig {
-            enabled: false,
+            enabled: default_git_enabled(),
             interval_secs: default_git_interval_secs(),
         }
     }
@@ -1416,16 +1420,16 @@ mod tests {
     #[test]
     fn notebook_git_config_defaults_and_round_trips() {
         let (dir, mut store) = open_store();
-        assert!(!store.notebook.git.enabled);
-        assert_eq!(store.notebook.git.interval_secs, 3600);
+        assert!(store.notebook.git.enabled);
+        assert_eq!(store.notebook.git.interval_secs, 1200);
 
-        store.notebook.git.enabled = true;
+        store.notebook.git.enabled = false;
         store.notebook.git.interval_secs = 120;
         store.save().unwrap();
         drop(store);
 
         let reopened = Store::open(dir.path()).unwrap();
-        assert!(reopened.notebook.git.enabled);
+        assert!(!reopened.notebook.git.enabled);
         assert_eq!(reopened.notebook.git.interval_secs, 120);
     }
 
