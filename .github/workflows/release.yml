@@ -120,10 +120,11 @@ jobs:
       - name: Changelog since last release
         run: |
           prev_tag=$(git describe --tags --abbrev=0 --match 'v*' 2>/dev/null || true)
+          skip_marked=(--invert-grep --fixed-strings --regexp-ignore-case --grep='[skip-changelog]')
           if [ -n "$prev_tag" ]; then
-            git log "${prev_tag}..HEAD" --no-merges --pretty=format:'- %s' > CHANGELOG_body.txt
+            git log "${prev_tag}..HEAD" --no-merges "${skip_marked[@]}" --pretty=format:'- %s' > CHANGELOG_body.txt
           else
-            git log --no-merges --pretty=format:'- %s' > CHANGELOG_body.txt
+            git log --no-merges "${skip_marked[@]}" --pretty=format:'- %s' > CHANGELOG_body.txt
           fi
 
       - name: Publish GitHub release with all platform binaries
