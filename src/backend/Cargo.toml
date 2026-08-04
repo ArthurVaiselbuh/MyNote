@@ -1,7 +1,7 @@
 [package]
 name = "MyNote"
 # Must also update tauri.conf.json , this one is not significant
-version = "1.1.9999"
+version = "1.2.9999"
 edition = "2021"
 rust-version = "1.77"
 
