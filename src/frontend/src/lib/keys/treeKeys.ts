@@ -1,28 +1,24 @@
 import * as act from "../actions";
-import { chordKey, modPressed } from "./platform";
+import { commandFor } from "./bindings";
 
 export function treeKeys(e: KeyboardEvent) {
-  const mod = modPressed(e);
-  const handled = () => e.preventDefault();
-
-  if (e.altKey) {
-    if (e.key === "ArrowLeft") { handled(); void act.moveSelectedToAdjacentSection(-1); }
-    if (e.key === "ArrowRight") { handled(); void act.moveSelectedToAdjacentSection(1); }
-    if (e.key === "ArrowUp") { handled(); void act.moveSelected(-1); }
-    if (e.key === "ArrowDown") { handled(); void act.moveSelected(1); }
-    return;
+  switch (commandFor("tree", e)) {
+    case "tree.filter": act.openTreeFilter(); break;
+    case "tree.selectUp": act.selectOffset(-1); break;
+    case "tree.selectDown": act.selectOffset(1); break;
+    case "tree.collapse": void act.collapseOrParent(); break;
+    case "tree.expand": void act.expandOrChild(); break;
+    case "tree.open": act.activateSelected(); break;
+    case "tree.newSubpage": void act.newSubpage(); break;
+    case "tree.rename": act.startRename(); break;
+    case "tree.moveUp": void act.moveSelected(-1); break;
+    case "tree.moveDown": void act.moveSelected(1); break;
+    case "tree.demote": void act.demoteSelected(); break;
+    case "tree.promote": void act.promoteSelected(); break;
+    case "tree.delete": act.deleteSelected(); break;
+    case "tree.toPrevSection": void act.moveSelectedToAdjacentSection(-1); break;
+    case "tree.toNextSection": void act.moveSelectedToAdjacentSection(1); break;
+    default: return;
   }
-
-  switch (chordKey(e)) {
-    case "/": handled(); act.openTreeFilter(); return;
-    case "ArrowUp": handled(); act.selectOffset(-1); return;
-    case "ArrowDown": handled(); act.selectOffset(1); return;
-    case "ArrowLeft": handled(); void act.collapseOrParent(); return;
-    case "ArrowRight": handled(); void act.expandOrChild(); return;
-    case "Enter": handled(); mod ? void act.newSubpage() : act.activateSelected(); return;
-    case "F2": handled(); act.startRename(); return;
-    case "Delete": handled(); act.deleteSelected(); return;
-    case "]": if (mod) { handled(); void act.demoteSelected(); } return;
-    case "[": if (mod) { handled(); void act.promoteSelected(); } return;
-  }
+  e.preventDefault();
 }

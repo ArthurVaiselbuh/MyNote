@@ -1148,3 +1148,65 @@ kbd {
   border: 0;
   opacity: 0;
 }
+
+/* ---------- keybindings ---------- */
+
+.keybind-list {
+  margin-top: 10px;
+  max-height: 52vh;
+  overflow-y: auto;
+}
+.keybind-row {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 4px 6px;
+  border-radius: 6px;
+}
+.keybind-row:hover {
+  background: var(--select);
+}
+.keybind-row.capturing {
+  background: var(--select);
+  outline: 1px solid var(--accent);
+}
+.keybind-desc {
+  flex: 1;
+  min-width: 0;
+}
+.keybind-chords {
+  display: flex;
+  gap: 4px;
+  flex: 0 0 200px;
+  justify-content: flex-end;
+}
+.keybind-capture {
+  color: var(--accent);
+  font-size: 12px;
+}
+.keybind-unassigned,
+.keybind-fixed-note {
+  color: var(--muted);
+  font-size: 12px;
+}
+.keybind-actions {
+  display: flex;
+  gap: 4px;
+  flex: 0 0 200px;
+  justify-content: flex-end;
+}
+.keybind-actions button {
+  font-size: 11px;
+  padding: 2px 8px;
+}
+.keybind-row.fixed .keybind-desc {
+  color: var(--muted);
+}
+.keybind-note {
+  color: #d9a13c;
+  font-size: 12px;
+  margin-top: 8px;
+}
+.keybind-reset-all {
+  margin-right: auto;
+}

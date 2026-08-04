@@ -1,37 +1,33 @@
 import * as act from "../actions";
 import { peekCtl } from "../peekCtl";
 import { app } from "../state/app.svelte";
-import { chordKey } from "./platform";
+import { commandFor } from "./bindings";
 
 export function resultsKeys(e: KeyboardEvent) {
-  const handled = () => e.preventDefault();
-  switch (chordKey(e)) {
-    case "ArrowUp":
-      handled();
+  switch (commandFor("results", e)) {
+    case "results.selectUp":
       app.resultsSel = Math.max(0, app.resultsSel - 1);
       app.focus = "results";
-      return;
-    case "ArrowDown":
-      handled();
+      break;
+    case "results.selectDown":
       app.resultsSel = Math.min(Math.max(0, app.results.length - 1), app.resultsSel + 1);
       app.focus = "results";
-      return;
-    case "Enter":
-      handled();
+      break;
+    case "results.open":
       act.openResult(app.resultsSel);
-      return;
-    case "/":
-      handled();
+      break;
+    case "results.refine":
       app.focus = "search";
       app.searchFocusReq++;
-      return;
-    case "n":
-      handled();
+      break;
+    case "results.nextMatch":
       peekCtl.current?.findNext();
-      return;
-    case "p":
-      handled();
+      break;
+    case "results.prevMatch":
       peekCtl.current?.findPrev();
+      break;
+    default:
       return;
   }
+  e.preventDefault();
 }

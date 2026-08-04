@@ -6,11 +6,12 @@
   // so no backend/settings plumbing leaks the feature into the rest of the app.
   import { onMount } from "svelte";
   import * as act from "../actions";
-  import { MOD_LABEL } from "../keys/platform";
+  import { labelOf } from "../keys/bindings";
   import { app } from "../state/app.svelte";
 
   const SEEN_KEY = "mynote.welcome.v1";
-  const M = MOD_LABEL;
+  // the tour speaks in the user's own chords, so a rebound key never reads as a lie
+  const K = labelOf;
 
   type Key = { combo: string; label: string };
   type Slide = {
@@ -22,7 +23,9 @@
     intro?: boolean;
   };
 
-  const slides: Slide[] = [
+  // derived, not a plain const: settings (and with them the user's chords) load
+  // after this component mounts
+  const slides: Slide[] = $derived([
     {
       title: "Welcome to MyNote",
       lead: "Local-first, keyboard-driven Markdown notes. Your notebook is just a folder of plain .md files — greppable, diffable, and entirely yours.",
@@ -31,56 +34,56 @@
     },
     {
       title: "Write, insert, preview",
-      lead: `${M}+J opens a searchable palette — code blocks, tables, links, task lists, dates. ${M}+E flips between the editor and a live rendered preview.`,
+      lead: `${K("app.insertHelper")} opens a searchable palette — code blocks, tables, links, task lists, dates. ${K("app.toggleMode")} flips between the editor and a live rendered preview.`,
       gif: "/tutorial/edit-preview.gif",
       alt: "Inserting a code block with the palette, then switching to preview",
       keys: [
-        { combo: `${M}+J`, label: "Insert palette" },
-        { combo: `${M}+E`, label: "Edit / Preview" },
+        { combo: K("app.insertHelper"), label: "Insert palette" },
+        { combo: K("app.toggleMode"), label: "Edit / Preview" },
       ],
     },
     {
       title: "Organize without the mouse",
-      lead: `${M}+N adds a page, ${M}+Enter a subpage. Fold and unfold subtrees with ← / →, and hop between sections with ${M}+PgUp / PgDn.`,
+      lead: `${K("page.new")} adds a page, ${K("tree.newSubpage")} a subpage. Fold and unfold subtrees with ← / →, and hop between sections with ${K("section.prev")} / ${K("section.next")}.`,
       gif: "/tutorial/tree-sections.gif",
       alt: "Creating subpages, folding them, switching sections",
       keys: [
-        { combo: `${M}+N`, label: "New page" },
-        { combo: `${M}+Enter`, label: "New subpage" },
-        { combo: `${M}+PgUp / PgDn`, label: "Switch section" },
+        { combo: K("page.new"), label: "New page" },
+        { combo: K("tree.newSubpage"), label: "New subpage" },
+        { combo: `${K("section.prev")} / ${K("section.next")}`, label: "Switch section" },
       ],
     },
     {
       title: "Never memorize a shortcut",
-      lead: `Press ? at any time for a context-aware cheat sheet with live search. ${M}+K searches every note — fuzzy or regex — with highlighted snippets.`,
+      lead: `Press ${K("app.help")} at any time for a context-aware cheat sheet with live search. ${K("app.search")} searches every note — fuzzy or regex — with highlighted snippets.`,
       gif: "/tutorial/help-search.gif",
       alt: "The ? shortcut overlay with live filtering",
       keys: [
-        { combo: "?", label: "Shortcut cheat sheet" },
-        { combo: `${M}+K`, label: "Search everything" },
+        { combo: K("app.help"), label: "Shortcut cheat sheet" },
+        { combo: K("app.search"), label: "Search everything" },
       ],
     },
     {
       title: "Optional: full history",
-      lead: `With git installed, MyNote snapshots the notebook so every page keeps a timeline of revisions. ${M}+H diffs one against what's on disk and restores it as a single undoable edit; ${M}+Shift+H brings back deleted pages.`,
+      lead: `With git installed, MyNote snapshots the notebook so every page keeps a timeline of revisions. ${K("history.open")} diffs one against what's on disk and restores it as a single undoable edit; ${K("history.openDeleted")} brings back deleted pages.`,
       gif: "/tutorial/history.gif",
       alt: "Diffing a page against an earlier snapshot, then restoring it",
       keys: [
-        { combo: `${M}+H`, label: "Page history" },
-        { combo: `${M}+Shift+H`, label: "Deleted pages" },
+        { combo: K("history.open"), label: "Page history" },
+        { combo: K("history.openDeleted"), label: "Deleted pages" },
       ],
     },
     {
       title: "You're all set",
       lead: "A notebook is ready in your default folder — or pick where your notes should live. Every page is plain Markdown you can edit with any tool.",
       keys: [
-        { combo: `${M}+O`, label: "Open / switch notebook" },
-        { combo: `${M}+I`, label: "Import OneNote .mht" },
-        { combo: `${M}+Z / Y`, label: "Undo / redo" },
-        { combo: "?", label: "Help anytime" },
+        { combo: K("notebook.open"), label: "Open / switch notebook" },
+        { combo: K("notebook.import"), label: "Import OneNote .mht" },
+        { combo: `${K("app.undo")} / ${K("app.redo")}`, label: "Undo / redo" },
+        { combo: K("app.help"), label: "Help anytime" },
       ],
     },
-  ];
+  ]);
 
   let idx = $state(0);
   const slide = $derived(slides[idx]);

@@ -2,7 +2,7 @@
   import * as act from "../../actions";
   import { autofocusSelect } from "../../autofocus";
   import { editorCtl } from "../../editorCtl";
-  import { MOD_LABEL } from "../../keys/platform";
+  import { labelOf } from "../../keys/bindings";
   import { COLOR_PALETTE } from "../../markdown";
 
   interface Item {
@@ -109,7 +109,7 @@
 
 <div class="modal-backdrop">
   <div class="modal" style:width="440px" role="dialog">
-    <div class="modal-title">Insert ({MOD_LABEL}+J)</div>
+    <div class="modal-title">Insert{labelOf("app.insertHelper") ? ` (${labelOf("app.insertHelper")})` : ""}</div>
     <input
       placeholder="filter…"
       style="width:100%"

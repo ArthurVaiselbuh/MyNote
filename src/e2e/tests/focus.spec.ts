@@ -29,14 +29,15 @@ test("Tab cycles panes; Esc peels editor back to tree", async ({ app }) => {
 
 test("? opens the context-aware, filterable help overlay", async ({ app }) => {
   await app.newTitledPage("Alpha", 1);
-  await app.page.keyboard.press("?");
+  // the help chord is Shift+the base "/" key — press("?") alone sends no shiftKey
+  await app.page.keyboard.press("Shift+Slash");
   await expect(app.page.locator(".modal-title")).toHaveText("Keyboard shortcuts");
   await expect(app.page.locator(".help-group h3").first()).toHaveText("Tree (focused pane)");
 
   const filter = app.page.locator(".modal input");
   await expect(filter).toBeFocused();
   await app.page.keyboard.type("undo");
-  await expect(app.page.locator(".help-row", { hasText: "Undo / redo" })).toBeVisible();
+  await expect(app.page.locator(".help-row", { hasText: "Undo delete & move" })).toBeVisible();
   await expect(app.page.locator(".help-row", { hasText: "Zoom" })).toHaveCount(0);
 
   await app.page.keyboard.press("Escape");

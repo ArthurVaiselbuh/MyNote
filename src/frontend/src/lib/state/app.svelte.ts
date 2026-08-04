@@ -14,6 +14,7 @@ export type ModalName =
   | "import"
   | "openNotebook"
   | "welcome"
+  | "keybindings"
   | "history";
 
 export interface ConfirmRequest {
@@ -48,6 +49,9 @@ export const app = $state({
   creatingSection: false,
 
   modal: "none" as ModalName,
+  // the keybindings pane is recording a chord — the dispatcher must not act on
+  // the very keys being recorded
+  capturingChord: false,
   sectionPickerMode: "goto" as "goto" | "move",
   sectionPickerRenaming: null as string | null,
   confirm: null as ConfirmRequest | null,

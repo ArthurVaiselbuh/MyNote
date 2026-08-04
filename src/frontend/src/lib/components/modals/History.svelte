@@ -2,7 +2,7 @@
   import * as act from "../../actions";
   import { api, type DeletedChild, type DeletedHistory, type DeletedItem, type PageRevision } from "../../api";
   import { diffText, type DiffResult } from "../../diff";
-  import { chordKey, isHelpChord } from "../../keys/platform";
+  import { commandFor } from "../../keys/bindings";
   import { renderBody } from "../../markdown";
   import { app, type HistoryMode } from "../../state/app.svelte";
 
@@ -311,96 +311,78 @@
     }
   }
 
+  const onPageTab = $derived(app.historyTab === "page");
+  const diffing = $derived(app.historyMode === "split" || app.historyMode === "inline");
+
   function keys(e: KeyboardEvent) {
     // still mounted behind its own confirm dialog — that dialog owns the keyboard then
     if (app.modal !== "history") return;
-    if (e.metaKey || e.ctrlKey || e.altKey) return;
-    if (isHelpChord(e)) {
-      e.preventDefault();
-      act.openHistoryHelp();
-      return;
-    }
-    switch (chordKey(e)) {
-      case "ArrowUp":
-        e.preventDefault();
-        if (e.shiftKey) {
-          if (app.historyTab === "page") moveRailBase(-1);
-        } else if (app.historyTab === "page") moveRailSel(-1);
+    switch (commandFor("history", e)) {
+      case "history.help":
+        act.openHistoryHelp();
+        break;
+      case "history.selUp":
+        if (onPageTab) moveRailSel(-1);
         else moveDeletedSel(-1);
-        return;
-      case "ArrowDown":
-        e.preventDefault();
-        if (e.shiftKey) {
-          if (app.historyTab === "page") moveRailBase(1);
-        } else if (app.historyTab === "page") moveRailSel(1);
+        break;
+      case "history.selDown":
+        if (onPageTab) moveRailSel(1);
         else moveDeletedSel(1);
-        return;
-      case "b":
-        if (app.historyTab === "page") {
-          e.preventDefault();
-          app.historyRevBase = app.historyRevSel;
-        }
-        return;
-      case "1":
-        if (app.historyTab === "page") {
-          e.preventDefault();
-          app.historyMode = "split";
-        }
-        return;
-      case "2":
-        if (app.historyTab === "page") {
-          e.preventDefault();
-          app.historyMode = "inline";
-        }
-        return;
-      case "3":
-        e.preventDefault();
-        if (app.historyTab === "page") app.historyMode = "rendered";
+        break;
+      case "history.baseUp":
+        if (!onPageTab) return;
+        moveRailBase(-1);
+        break;
+      case "history.baseDown":
+        if (!onPageTab) return;
+        moveRailBase(1);
+        break;
+      case "history.setBase":
+        if (!onPageTab) return;
+        app.historyRevBase = app.historyRevSel;
+        break;
+      case "history.modeSplit":
+        if (!onPageTab) return;
+        app.historyMode = "split";
+        break;
+      case "history.modeInline":
+        if (!onPageTab) return;
+        app.historyMode = "inline";
+        break;
+      case "history.modeRendered":
+        if (onPageTab) app.historyMode = "rendered";
         else deletedMode = "rendered";
-        return;
-      case "4":
-        e.preventDefault();
-        if (app.historyTab === "page") app.historyMode = "text";
+        break;
+      case "history.modeText":
+        if (onPageTab) app.historyMode = "text";
         else deletedMode = "text";
-        return;
-      case "v": {
-        e.preventDefault();
-        if (app.historyTab === "page") {
+        break;
+      case "history.cycleMode":
+        if (onPageTab) {
           const order: HistoryMode[] = ["split", "inline", "rendered", "text"];
           app.historyMode = order[(order.indexOf(app.historyMode) + 1) % order.length];
         } else {
           deletedMode = deletedMode === "rendered" ? "text" : "rendered";
         }
-        return;
-      }
-      case "n":
-        if (app.historyTab === "page" && (app.historyMode === "split" || app.historyMode === "inline")) {
-          e.preventDefault();
-          jumpChange(1);
-        }
-        return;
-      case "p":
-        if (app.historyTab === "page" && (app.historyMode === "split" || app.historyMode === "inline")) {
-          e.preventDefault();
-          jumpChange(-1);
-        }
-        return;
-      case "F3":
-        if (app.historyTab === "page") {
-          e.preventDefault();
-          jumpChange(e.shiftKey ? -1 : 1);
-        }
-        return;
-      case "Tab":
-        e.preventDefault();
-        app.historyTab = app.historyTab === "page" ? "deleted" : "page";
-        return;
-      case "Enter":
-      case "r":
-        e.preventDefault();
+        break;
+      case "history.nextChange":
+        if (!onPageTab || !diffing) return;
+        jumpChange(1);
+        break;
+      case "history.prevChange":
+        if (!onPageTab || !diffing) return;
+        jumpChange(-1);
+        break;
+      case "history.switchTab":
+        app.historyTab = onPageTab ? "deleted" : "page";
+        break;
+      case "history.restore":
         doRestore();
+        break;
+      default:
         return;
     }
+    e.preventDefault();
   }
 </script>
 

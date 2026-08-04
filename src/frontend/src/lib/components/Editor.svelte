@@ -21,7 +21,7 @@
   import * as act from "../actions";
   import { api } from "../api";
   import { editorCtl } from "../editorCtl";
-  import { MOD_LABEL } from "../keys/platform";
+  import { hintOf, labelOf } from "../keys/bindings";
   import { app, type FindPrefill } from "../state/app.svelte";
   import { findNode } from "../treeUtils";
   import Preview from "./Preview.svelte";
@@ -334,7 +334,7 @@
         onfocus={() => (app.focus = "editor")}
       />
       <span class="dirty-dot">{dirty ? "●" : ""}</span>
-      <button class="mode-btn" title="Toggle edit/preview ({MOD_LABEL}+E)" onclick={() => act.toggleMode()}>
+      <button class="mode-btn" title="Toggle edit/preview{hintOf('app.toggleMode')}" onclick={() => act.toggleMode()}>
         {app.mode === "edit" ? "Preview" : "Edit"}
       </button>
     </div>
@@ -348,6 +348,6 @@
     <Preview body={previewText} />
   {/if}
   {#if !app.currentPageId}
-    <div class="editor-empty">No page selected — {MOD_LABEL}+N creates one</div>
+    <div class="editor-empty">No page selected — {labelOf('page.new')} creates one</div>
   {/if}
 </div>

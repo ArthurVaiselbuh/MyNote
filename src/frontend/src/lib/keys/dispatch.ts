@@ -2,12 +2,18 @@ import * as act from "../actions";
 import { contextMenu, contextMenuKeys } from "../contextMenu.svelte";
 import { app } from "../state/app.svelte";
 import { isTextEntry } from "../textEntry";
-import { chordKey, isHelpChord, modPressed } from "./platform";
+import { chordOf, commandFor, isTextChord } from "./bindings";
 import { resultsKeys } from "./resultsKeys";
 import { treeKeys } from "./treeKeys";
 
+// A global chord fires even while typing, but only if it can't be text: a
+// command rebound to a bare letter must not swallow that letter in the editor.
+function firesWhileTyping(e: KeyboardEvent): boolean {
+  const chord = chordOf(e);
+  return !!chord && !isTextChord(chord);
+}
+
 export function handleGlobal(e: KeyboardEvent) {
-  const mod = modPressed(e);
   const target = e.target as HTMLElement | null;
 
   // 0. an open context menu owns the keyboard, one layer above a modal — it can
@@ -16,6 +22,10 @@ export function handleGlobal(e: KeyboardEvent) {
     contextMenuKeys(e);
     return;
   }
+
+  // the keybindings pane is recording a chord — every key belongs to it,
+  // including the Esc that cancels the recording
+  if (app.capturingChord) return;
 
   // 1+2. an open modal (incl. insert helper) owns the keyboard; only Esc is
   // global (closes it, or steps a stacked modal back one layer)
@@ -31,43 +41,13 @@ export function handleGlobal(e: KeyboardEvent) {
   const typing = isTextEntry(e.target);
 
   // 3. global shortcuts fire regardless of focus
-  if (mod && !e.altKey) {
-    const handled = () => {
+  const global = commandFor("global", e);
+  if (global && (!typing || firesWhileTyping(e))) {
+    if (runGlobal(global, typing)) {
       e.preventDefault();
       e.stopPropagation();
-    };
-    switch (chordKey(e)) {
-      // while typing, Ctrl+Z/Y stay native (editor/input text undo)
-      case "z": if (typing) break; handled(); void (e.shiftKey ? act.redoLast() : act.undoLast()); return;
-      case "y": if (typing) break; handled(); void act.redoLast(); return;
-      case "k": handled(); act.openSearch(); return;
-      case "f": handled(); act.openFind(); return;
-      case "e": handled(); act.toggleMode(); return;
-      case "s": handled(); void act.saveNow(); return;
-      case "n": handled(); void (e.shiftKey ? act.newSection() : act.newPage()); return;
-      case "j": handled(); act.openInsertHelper(); return;
-      case "g": handled(); act.openSectionPicker(e.shiftKey ? "move" : "goto"); return;
-      case "o": handled(); void act.openNotebookModal(); return;
-      case "i": handled(); act.openImport(); return;
-      case "h": handled(); void act.openHistory(e.shiftKey ? "deleted" : "page"); return;
-      case ",": handled(); act.openModal("settings"); return;
-      case "1": handled(); act.focusPane("tree"); return;
-      case "2": handled(); act.focusPane("editor"); return;
-      case "3": handled(); act.focusTitle(); return;
-      case "PageUp": handled(); act.gotoSectionOffset(-1); return;
-      case "PageDown": handled(); act.gotoSectionOffset(1); return;
-      case "=": handled(); void act.zoomBy(0.1); return;
-      case "-": handled(); void act.zoomBy(-0.1); return;
-      case "0": handled(); void act.zoomReset(); return;
+      return;
     }
-  }
-
-  if (e.key === "F3") {
-    e.preventDefault();
-    const findCtl = act.activeFindCtl();
-    if (e.shiftKey) findCtl?.findPrev();
-    else findCtl?.findNext();
-    return;
   }
 
   if (e.key === "Escape") {
@@ -78,13 +58,7 @@ export function handleGlobal(e: KeyboardEvent) {
     return;
   }
 
-  if (isHelpChord(e) && !typing && !mod) {
-    e.preventDefault();
-    act.openModal("help");
-    return;
-  }
-
-  if (e.key === "Tab" && !mod && !e.altKey) {
+  if (e.key === "Tab" && !e.ctrlKey && !e.metaKey && !e.altKey) {
     // typing guard, except the search box which is part of the cycle ring
     const inSearchBox = !!target?.closest("[data-search-box]");
     if (!typing || inSearchBox) {
@@ -94,10 +68,11 @@ export function handleGlobal(e: KeyboardEvent) {
     return;
   }
 
-  if ((e.key === "PageUp" || e.key === "PageDown") && !mod) {
+  const pane = commandFor("pane", e);
+  if (pane && (!typing || firesWhileTyping(e))) {
     if (typing && target?.closest(".cm-editor")) return; // CM pages natively
     e.preventDefault();
-    act.scrollMain(e.key === "PageUp" ? -1 : 1);
+    act.scrollMain(pane === "pane.scrollUp" ? -1 : 1);
     return;
   }
 
@@ -107,4 +82,39 @@ export function handleGlobal(e: KeyboardEvent) {
   // 5. pane-local dispatch
   if (app.focus === "tree") treeKeys(e);
   else if (app.focus === "results" || app.focus === "search") resultsKeys(e);
+}
+
+/** Runs a global command; false means it declined and the key should fall through. */
+function runGlobal(id: string, typing: boolean): boolean {
+  switch (id) {
+    // while typing, undo/redo stay native (editor/input text undo)
+    case "app.undo": if (typing) return false; void act.undoLast(); return true;
+    case "app.redo": if (typing) return false; void act.redoLast(); return true;
+    case "app.search": act.openSearch(); return true;
+    case "app.find": act.openFind(); return true;
+    case "app.findNext": act.activeFindCtl()?.findNext(); return true;
+    case "app.findPrev": act.activeFindCtl()?.findPrev(); return true;
+    case "app.toggleMode": act.toggleMode(); return true;
+    case "app.save": void act.saveNow(); return true;
+    case "page.new": void act.newPage(); return true;
+    case "section.new": act.newSection(); return true;
+    case "app.insertHelper": act.openInsertHelper(); return true;
+    case "section.goto": act.openSectionPicker("goto"); return true;
+    case "page.moveToSection": act.openSectionPicker("move"); return true;
+    case "notebook.open": void act.openNotebookModal(); return true;
+    case "notebook.import": act.openImport(); return true;
+    case "history.open": void act.openHistory("page"); return true;
+    case "history.openDeleted": void act.openHistory("deleted"); return true;
+    case "app.settings": act.openModal("settings"); return true;
+    case "app.help": act.openModal("help"); return true;
+    case "focus.tree": act.focusPane("tree"); return true;
+    case "focus.editor": act.focusPane("editor"); return true;
+    case "focus.title": act.focusTitle(); return true;
+    case "section.prev": act.gotoSectionOffset(-1); return true;
+    case "section.next": act.gotoSectionOffset(1); return true;
+    case "app.zoomIn": void act.zoomBy(0.1); return true;
+    case "app.zoomOut": void act.zoomBy(-0.1); return true;
+    case "app.zoomReset": void act.zoomReset(); return true;
+  }
+  return false;
 }

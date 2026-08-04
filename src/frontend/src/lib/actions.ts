@@ -4,7 +4,7 @@ import { openUrl } from "@tauri-apps/plugin-opener";
 import { api, type NotebookInfo, type Section, type UndoOutcome } from "./api";
 import { editorCtl } from "./editorCtl";
 import type { FindCtl } from "./findCtl";
-import { MOD_LABEL } from "./keys/platform";
+import { labelOf } from "./keys/bindings";
 import { log } from "./log";
 import { peekCtl } from "./peekCtl";
 import { previewFindCtl } from "./previewFindCtl";
@@ -803,7 +803,7 @@ export function escapeModal() {
     app.modal = "insert";
     return;
   }
-  if (app.modal === "colors") {
+  if (app.modal === "colors" || app.modal === "keybindings") {
     app.modal = "settings";
     return;
   }
@@ -930,7 +930,7 @@ export async function openHistory(tab: "page" | "deleted") {
 
 export function restoreRevision(pageId: string, text: string, when: string) {
   askConfirm(
-    `Replace the current text of this page with the version from ${when}? ${MOD_LABEL}+Z undoes it.`,
+    `Replace the current text of this page with the version from ${when}? ${labelOf("app.undo")} undoes it.`,
     () => {
       if (app.currentPageId !== pageId) {
         flashStatus("the open page changed — restore cancelled");

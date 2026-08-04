@@ -3,7 +3,7 @@
   import { autofocusSelect } from "../../autofocus";
   import { app } from "../../state/app.svelte";
   import { countPages, sectionOfPage } from "../../treeUtils";
-  import { ALT_LABEL } from "../../keys/platform";
+  import { labelOf } from "../../keys/bindings";
 
   const moving = $derived(app.sectionPickerMode === "move");
 
@@ -146,6 +146,6 @@
         </div>
       {/each}
     </div>
-    <div class="hint">↑↓ select · {ALT_LABEL}+↑↓ reorder · Enter {moving ? "move here" : "open"} · F2 rename · Shift+Del delete section · Esc close</div>
+    <div class="hint">↑↓ select · {labelOf("tree.moveUp")}/{labelOf("tree.moveDown")} reorder · Enter {moving ? "move here" : "open"} · F2 rename · Shift+Del delete section · Esc close</div>
   </div>
 </div>

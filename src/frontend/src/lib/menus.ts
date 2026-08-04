@@ -1,12 +1,9 @@
 import * as act from "./actions";
 import { openContextMenu, type MenuEntry } from "./contextMenu.svelte";
-import { ALT_LABEL, MOD_LABEL, SHIFT_LABEL } from "./keys/platform";
+import { labelOf } from "./keys/bindings";
+import { MOD_LABEL } from "./keys/platform";
 import { app } from "./state/app.svelte";
 import { isTextEntry } from "./textEntry";
-
-const M = MOD_LABEL;
-const A = ALT_LABEL;
-const S = SHIFT_LABEL;
 
 const PAGE_LINK = /([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})\.md$/i;
 
@@ -25,26 +22,26 @@ function openTreeRowMenu(e: MouseEvent, id: string) {
   app.selectedId = id;
   app.focus = "tree";
   const entries: MenuEntry[] = [
-    { label: "New page", keys: `${M}+N`, run: () => void act.newPage() },
-    { label: "New subpage", keys: `${M}+Enter`, run: () => void act.newSubpage() },
+    { label: "New page", keys: labelOf("page.new"), run: () => void act.newPage() },
+    { label: "New subpage", keys: labelOf("tree.newSubpage"), run: () => void act.newSubpage() },
     "separator",
-    { label: "Rename", keys: "F2", run: () => act.startRename(id) },
-    { label: "Move up", keys: `${A}+↑`, run: () => void act.moveSelected(-1) },
-    { label: "Move down", keys: `${A}+↓`, run: () => void act.moveSelected(1) },
-    { label: "Demote", keys: `${M}+]`, run: () => void act.demoteSelected() },
-    { label: "Promote", keys: `${M}+[`, run: () => void act.promoteSelected() },
-    { label: "Move to section…", keys: `${M}+${S}+G`, run: () => act.openSectionPicker("move") },
+    { label: "Rename", keys: labelOf("tree.rename"), run: () => act.startRename(id) },
+    { label: "Move up", keys: labelOf("tree.moveUp"), run: () => void act.moveSelected(-1) },
+    { label: "Move down", keys: labelOf("tree.moveDown"), run: () => void act.moveSelected(1) },
+    { label: "Demote", keys: labelOf("tree.demote"), run: () => void act.demoteSelected() },
+    { label: "Promote", keys: labelOf("tree.promote"), run: () => void act.promoteSelected() },
+    { label: "Move to section…", keys: labelOf("page.moveToSection"), run: () => act.openSectionPicker("move") },
   ];
   if (app.git?.available) {
     entries.push("separator", {
       label: "Page history…",
-      keys: `${M}+H`,
+      keys: labelOf("history.open"),
       run: () => void act.openHistory("page"),
     });
   }
   entries.push("separator", {
     label: "Delete",
-    keys: "Del",
+    keys: labelOf("tree.delete"),
     danger: true,
     run: () => act.deleteSelected(),
   });
@@ -53,8 +50,8 @@ function openTreeRowMenu(e: MouseEvent, id: string) {
 
 function openTreeBlankMenu(e: MouseEvent) {
   openContextMenu(e, [
-    { label: "New page", keys: `${M}+N`, run: () => void act.newPage() },
-    { label: "New section", keys: `${M}+${S}+N`, run: () => act.newSection() },
+    { label: "New page", keys: labelOf("page.new"), run: () => void act.newPage() },
+    { label: "New section", keys: labelOf("section.new"), run: () => act.newSection() },
   ]);
 }
 
@@ -62,14 +59,14 @@ export function openSectionMenu(e: MouseEvent) {
   const section = act.currentSection();
   if (!section) {
     openContextMenu(e, [
-      { label: "New section", keys: `${M}+${S}+N`, run: () => act.newSection() },
+      { label: "New section", keys: labelOf("section.new"), run: () => act.newSection() },
     ]);
     return;
   }
   openContextMenu(e, [
-    { label: "New section", keys: `${M}+${S}+N`, run: () => act.newSection() },
+    { label: "New section", keys: labelOf("section.new"), run: () => act.newSection() },
     { label: "Rename section", run: () => act.startSectionRename() },
-    { label: "Go to section…", keys: `${M}+G`, run: () => act.openSectionPicker("goto") },
+    { label: "Go to section…", keys: labelOf("section.goto"), run: () => act.openSectionPicker("goto") },
     "separator",
     {
       label: "Delete section",
@@ -94,12 +91,13 @@ export function openPreviewMenu(e: MouseEvent) {
   }
   const selection = window.getSelection()?.toString() ?? "";
   if (selection) {
-    entries.push({ label: "Copy", keys: `${M}+C`, run: () => void act.copyText(selection) });
+    // the native clipboard chord, not one of ours — no registry entry to read
+    entries.push({ label: "Copy", keys: `${MOD_LABEL}+C`, run: () => void act.copyText(selection) });
   }
   if (entries.length) entries.push("separator");
   entries.push(
-    { label: "Edit page", keys: `${M}+E`, run: () => act.toggleMode() },
-    { label: "Find in page", keys: `${M}+F`, run: () => act.openFind() },
+    { label: "Edit page", keys: labelOf("app.toggleMode"), run: () => act.toggleMode() },
+    { label: "Find in page", keys: labelOf("app.find"), run: () => act.openFind() },
   );
   openContextMenu(e, entries);
 }
@@ -110,9 +108,9 @@ export function openResultsMenu(e: MouseEvent) {
   if (idx < 0) return;
   app.resultsSel = idx;
   openContextMenu(e, [
-    { label: "Open", keys: "Enter", run: () => act.openResult(idx) },
+    { label: "Open", keys: labelOf("results.open"), run: () => act.openResult(idx) },
     { label: "Open in editor", run: () => act.openResultInEditor(idx) },
     "separator",
-    { label: "Refine query", keys: "/", run: () => act.focusPane("search") },
+    { label: "Refine query", keys: labelOf("results.refine"), run: () => act.focusPane("search") },
   ]);
 }

@@ -3,7 +3,7 @@
   import { getVersion } from "@tauri-apps/api/app";
   import * as act from "../../actions";
   import { api, type GitStatus } from "../../api";
-  import { MOD_LABEL } from "../../keys/platform";
+  import { hintOf } from "../../keys/bindings";
   import { app } from "../../state/app.svelte";
 
   const RELEASES_URL = "https://github.com/ArthurVaiselbuh/MyNote/releases";
@@ -55,6 +55,10 @@
     <div class="settings-row">
       <span>Colors &amp; theme</span>
       <button onclick={() => (app.modal = "colors")}>Customize…</button>
+    </div>
+    <div class="settings-row">
+      <span>Keyboard shortcuts</span>
+      <button onclick={() => (app.modal = "keybindings")}>Customize…</button>
     </div>
     <div class="settings-row">
       <label for="set-scroll">Scroll speed</label>
@@ -115,7 +119,7 @@
       <div class="settings-path">{app.root || "(none open)"}</div>
 
       <div class="settings-row">
-        <span>Switch notebook ({MOD_LABEL}+O)</span>
+        <span>Switch notebook{hintOf("notebook.open")}</span>
         <button
           onclick={() => {
             act.closeModal();
@@ -152,18 +156,6 @@
           />
         </div>
       {/if}
-      {#if gitStatus?.available}
-        <div class="settings-row">
-          <span>Browse history ({MOD_LABEL}+H)</span>
-          <button
-            onclick={() => {
-              act.closeModal();
-              void act.openHistory("page");
-            }}>Open…</button
-          >
-        </div>
-      {/if}
-
       <div class="settings-row">
         <span>Reset AGENTS.md</span>
         <button onclick={() => act.overwriteAgentsMd()}>Overwrite…</button>

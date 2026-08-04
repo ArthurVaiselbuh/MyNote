@@ -31,7 +31,8 @@ test("page history: diff shows the whole file, restore is undoable", async ({ ap
 
   // ? opens the cheat sheet narrowed to history keys, and Esc comes back here
   await expect(app.page.locator(".history-layout .hint")).toHaveCount(0);
-  await app.page.keyboard.press("?");
+  // the help chord is Shift+the base "/" key — press("?") alone sends no shiftKey
+  await app.page.keyboard.press("Shift+Slash");
   const groups = app.page.locator(".help-group");
   await expect(groups).toHaveCount(1);
   await expect(groups.locator("h3")).toHaveText("History");
