@@ -104,6 +104,9 @@ export interface Settings {
   logLevel: string;
   minimizeToTray: boolean;
   startOnLogin: boolean;
+  // command id -> chord list; only commands the user changed. An empty list is
+  // an explicit "unassigned" — see keys/bindings.ts
+  keybindings: Record<string, string[]>;
   window: WindowGeom | null;
 }
 
@@ -176,6 +179,7 @@ export const defaultSettings: Settings = {
   logLevel: "info",
   minimizeToTray: false,
   startOnLogin: false,
+  keybindings: {},
   window: null,
 };
 

@@ -2,7 +2,7 @@
   import * as act from "../actions";
   import { autofocusSelect } from "../autofocus";
   import { dndCancel, dndDown, dndMove, dndUp } from "../dnd";
-  import { MOD_LABEL } from "../keys/platform";
+  import { labelOf } from "../keys/bindings";
   import { openTreeMenu } from "../menus";
   import { app } from "../state/app.svelte";
 
@@ -130,7 +130,7 @@
   {/each}
   {#if rows.length === 0}
     <div class="tree-empty">
-      {app.treeFilter ? "No matches" : `No pages — ${MOD_LABEL}+N to create one`}
+      {app.treeFilter ? "No matches" : `No pages — ${labelOf("page.new")} to create one`}
     </div>
   {/if}
 </div>

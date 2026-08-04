@@ -1,0 +1,133 @@
+import { beforeEach, describe, expect, it } from "vitest";
+import {
+  COMMANDS,
+  assignChord,
+  chordOf,
+  chordsOf,
+  commandFor,
+  conflictOf,
+  formatChord,
+  isTextChord,
+  labelOf,
+  parseChord,
+  resetAllToDefaults,
+  unassign,
+} from "./bindings";
+import { app } from "../state/app.svelte";
+
+function press(
+  key: string,
+  code: string,
+  mods: { ctrlKey?: boolean; shiftKey?: boolean; altKey?: boolean; metaKey?: boolean } = {},
+): KeyboardEvent {
+  return { key, code, ctrlKey: false, shiftKey: false, altKey: false, metaKey: false, ...mods } as KeyboardEvent;
+}
+
+beforeEach(() => resetAllToDefaults());
+
+describe("chordOf", () => {
+  it("names a chord layout-stably", () => {
+    expect(chordOf(press("k", "KeyK", { ctrlKey: true }))).toBe("Mod+k");
+    expect(chordOf(press("ל", "KeyK", { ctrlKey: true }))).toBe("Mod+k");
+    expect(chordOf(press("N", "KeyN", { ctrlKey: true, shiftKey: true }))).toBe("Mod+Shift+n");
+    expect(chordOf(press("ArrowUp", "ArrowUp", { altKey: true }))).toBe("Alt+ArrowUp");
+  });
+
+  it("ignores a modifier pressed on its own", () => {
+    expect(chordOf(press("Shift", "ShiftLeft", { shiftKey: true }))).toBe(null);
+  });
+
+  it("marks the secondary modifier so it can never match a binding", () => {
+    expect(chordOf(press("k", "KeyK", { ctrlKey: true, metaKey: true }))).toBe("Other+Mod+k");
+  });
+});
+
+describe("chord formatting", () => {
+  it("round-trips through parse", () => {
+    for (const chord of ["Mod+Shift+n", "Alt+ArrowLeft", "F3", "/", "Mod+,"]) {
+      const { mod, alt, shift, key } = parseChord(chord);
+      expect([mod, alt, shift, key]).toEqual([
+        chord.includes("Mod+"),
+        chord.includes("Alt+"),
+        chord.includes("Shift+"),
+        chord.split("+").pop(),
+      ]);
+    }
+  });
+
+  it("shows a bare shifted punctuation key as what it prints", () => {
+    expect(formatChord("Shift+/")).toBe("?");
+    expect(formatChord("Mod+Shift+/")).toBe("Ctrl+Shift+/");
+  });
+
+  it("uses arrows and short names for the named keys", () => {
+    expect(formatChord("Alt+ArrowUp")).toBe("Alt+↑");
+    expect(formatChord("Mod+PageDown")).toBe("Ctrl+PgDn");
+    expect(formatChord("Delete")).toBe("Del");
+  });
+});
+
+describe("defaults", () => {
+  it("resolves an event to its command per context", () => {
+    expect(commandFor("global", press("k", "KeyK", { ctrlKey: true }))).toBe("app.search");
+    expect(commandFor("tree", press("F2", "F2"))).toBe("tree.rename");
+    expect(commandFor("tree", press("k", "KeyK", { ctrlKey: true }))).toBe(null);
+    expect(commandFor("results", press("n", "KeyN"))).toBe("results.nextMatch");
+  });
+
+  it("keeps ? off the settings binding on a layout that moves the comma", () => {
+    expect(commandFor("global", press(",", "Slash", { shiftKey: true }))).toBe("app.help");
+    expect(commandFor("global", press("ת", "Comma", { ctrlKey: true }))).toBe("app.settings");
+  });
+
+  it("leaves no chord serving two commands that can both hear it", () => {
+    for (const command of COMMANDS) {
+      for (const chord of command.defaults) {
+        expect(conflictOf(command.id, chord)).toBe(null);
+      }
+    }
+  });
+});
+
+describe("overrides", () => {
+  it("rebinds a command and forgets its default", () => {
+    assignChord("app.search", "Mod+Shift+p");
+    expect(commandFor("global", press("p", "KeyP", { ctrlKey: true, shiftKey: true }))).toBe("app.search");
+    expect(commandFor("global", press("k", "KeyK", { ctrlKey: true }))).toBe(null);
+    expect(labelOf("app.search")).toBe("Ctrl+Shift+P");
+  });
+
+  it("takes a chord away from whatever held it", () => {
+    assignChord("app.search", "Mod+f");
+    expect(chordsOf("app.find")).toEqual([]);
+    expect(commandFor("global", press("f", "KeyF", { ctrlKey: true }))).toBe("app.search");
+  });
+
+  it("unassigns without falling back to the default", () => {
+    unassign("app.save");
+    expect(chordsOf("app.save")).toEqual([]);
+    expect(labelOf("app.save")).toBe("");
+    expect(commandFor("global", press("s", "KeyS", { ctrlKey: true }))).toBe(null);
+  });
+
+  it("stores only what changed, so new defaults still apply", () => {
+    unassign("app.save");
+    expect(Object.keys(app.settings.keybindings)).toEqual(["app.save"]);
+  });
+
+  it("lets two panes share a chord but not a pane and a global", () => {
+    expect(conflictOf("tree.open", "Enter")).toBe(null); // results.open also uses Enter
+    expect(conflictOf("tree.rename", "Mod+k")?.id).toBe("app.search");
+  });
+});
+
+describe("isTextChord", () => {
+  it("flags the chords a keystroke could be typing instead", () => {
+    expect(isTextChord("/")).toBe(true);
+    expect(isTextChord("Shift+/")).toBe(true);
+    expect(isTextChord("Enter")).toBe(true);
+    expect(isTextChord("Mod+k")).toBe(false);
+    expect(isTextChord("F3")).toBe(false);
+    expect(isTextChord("PageUp")).toBe(false); // pages the view even while typing
+  });
+});

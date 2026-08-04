@@ -58,7 +58,7 @@ are supported cross-platform builds off the same code.
   until clean close/notebook switch so tree undo can restore them. Only ids
   the app deleted in the current session are purged at close — unreferenced
   files it didn't delete are never touched.
-- App settings (theme colors, zoom, window geometry, etc.) live in
+- App settings (theme colors, zoom, window geometry, keybinding overrides, etc.) live in
   `<config>\MyNote\settings.json` (same `config_root()` as above), not in the
   notebook. Window geometry and the MRU are backend-owned: `set_settings`
   ignores the frontend's copies.
@@ -211,8 +211,10 @@ are supported cross-platform builds off the same code.
   Git is never on the data-safety path — every git failure is "skip and log".
 - **History pane** (Ctrl+H page revisions / Ctrl+Shift+H deleted pages,
   `history.rs`) reads those snapshots back and is **hidden entirely when git
-  isn't available** — both shortcuts and the Settings "Browse history…"
-  button gate on `GitStatus.available` (`app.git` in the frontend). It is a
+  isn't available** — both shortcuts gate on `GitStatus.available` (`app.git`
+  in the frontend), as do their rows in the `?` overlay and the keybindings
+  pane. Settings only carries the *snapshot* toggle, not an entry point into
+  history — browsing is a keyboard/context-menu action, not a setting. It is a
   **full-window pane, not a centered modal**: the revision rail takes over the
   tree's side and the diff the preview's, so diffs get the whole screen. It
   still lives in `app.modal` (so the keyboard-precedence rules above apply
@@ -260,11 +262,37 @@ app-managed state (`app.focus`), not raw DOM focus; the focused pane gets an
 outline of accent color at `--focus-alpha`.
 
 "Ctrl+X" below means the **primary modifier**: Ctrl on Windows/Linux, Cmd
-(⌘) on macOS. `keys/platform.ts` owns the seam — `modPressed(e)` gates the
-dispatcher (`dispatch.ts`, `treeKeys.ts`) and `MOD_LABEL`/`ALT_LABEL` feed the
-one shortcut table in `keys/shortcuts.ts` that both the help overlay and every
-tooltip render from. Intended as the basis for future user-configurable
-keybindings: change/extend chords in those two files, not scattered literals.
+(⌘) on macOS. `keys/platform.ts` owns the platform seam (`chordKey`, `MOD_LABEL`
+/`ALT_LABEL`/`SHIFT_LABEL`).
+
+**`keys/bindings.ts` is the single source of truth for every binding**: one
+`COMMANDS` table of `{id, ctx, desc, defaults}` that the dispatcher matches
+against, the `?` overlay and every tooltip/context menu render from
+(`labelOf`/`hintOf`), and the keybindings pane edits. Nothing else may carry a
+chord literal — adding a shortcut means adding a command there and a case in the
+matching handler. `keys/shortcuts.ts` is now only the help overlay's grouping of
+that table.
+
+A chord serializes as `"Mod+Alt+Shift+<key>"` in that fixed order, where `Mod`
+is the primary modifier and `<key>` is whatever `chordKey` yields — never the
+printed character. `chordOf(e)` folds the *secondary* modifier (Ctrl on macOS,
+Win elsewhere) into an `Other+` prefix no binding can carry, so Ctrl+K on a Mac
+stays inert instead of firing Cmd+K.
+
+**Bindings are user-configurable** (Settings → Keyboard shortcuts →
+Customize…, `KeybindingsModal.svelte`). Overrides live in
+`settings.json::keybindings` as command id → chord list, holding **only what the
+user changed** — so shortcuts added in a later version light up without touching
+their file — and an **empty list means deliberately unassigned** (distinct from
+absent, which means "use the default"). Assigning a chord that is taken moves it
+off the other command rather than creating a dead binding; `conflictOf` decides
+what "taken" means from each context's reach (global/pane reach every pane, two
+panes may share a chord, the history pane shares with nobody because it owns the
+keyboard outright). While the pane is recording a chord it sets
+`app.capturingChord` and the dispatcher returns early — otherwise the keys being
+recorded would also run their own commands. **Esc and Tab are deliberately not
+rebindable**: they drive the focus ladder and dismiss every modal, so rebinding
+them could strand the user; they are listed read-only via `FIXED_BINDINGS`.
 
 **Bindings never match on `e.key` directly** — they match on
 `platform.ts::chordKey(e)`, which is layout-stable: an ASCII letter is taken as
@@ -274,7 +302,7 @@ OS layout to a non-Latin one (Hebrew, Cyrillic, Greek) breaks every
 letter/punctuation shortcut — `e.key` for Ctrl+K becomes `ל`. Punctuation can't
 trust its printed character even when that is ASCII: Hebrew puts `,` on the
 Shift+`/` position, so the `?` help chord would otherwise open Settings. `?` is
-therefore expressed as `isHelpChord(e)` (Shift + base `/`), and shifted
+therefore stored as the chord `Shift+/`, and shifted
 punctuation normalizes to its unshifted base key. Named keys (Arrow\*, Enter,
 Esc, Tab, F2/F3, Delete, PageUp/Dn) are layout-independent and pass through, so
 components matching those need no seam.
@@ -284,9 +312,13 @@ One capture-phase window keydown listener dispatches with strict precedence:
 1. Open modal (picker/help/settings/confirm/insert helper) owns the keyboard;
    only Esc is handled globally (closes it; a stacked sub-modal steps back one
    layer instead — Esc in the color picker returns to the insert helper).
-2. Global shortcuts fire even while typing: Ctrl+K/F/E/S/N/Shift+N/1/2/3/
-   G/Shift+G/O/I/J/H/Shift+H/, · Ctrl+PgUp/Dn · Ctrl+=/−/0 · F3/Shift+F3 (`?`
-   only when not typing). Ctrl+G opens the section picker in go-to mode,
+2. Global shortcuts fire even while typing — but only chords that *can't be
+   text*: `isTextChord` suppresses an unmodified letter/punctuation binding
+   inside a text field, which is why `?` needs an empty editor while Ctrl+K and
+   F3 do not. PgUp/PgDn count as navigation, not text, so they still page the
+   main view from inside an input. Defaults: Ctrl+K/F/E/S/N/Shift+N/1/2/3/
+   G/Shift+G/O/I/J/H/Shift+H/, · Ctrl+PgUp/Dn · Ctrl+=/−/0 · F3/Shift+F3.
+   Ctrl+G opens the section picker in go-to mode,
    Ctrl+Shift+G in move-page mode; cross-section moves follow the page
    (switch to the target section with the page selected). Ctrl+H/Shift+H
    (page history / deleted pages) are inert when git isn't available.

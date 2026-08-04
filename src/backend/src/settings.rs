@@ -1,5 +1,6 @@
 use log::LevelFilter;
 use serde::{Deserialize, Serialize};
+use std::collections::BTreeMap;
 use std::fs;
 use std::path::PathBuf;
 
@@ -31,6 +32,10 @@ pub struct Settings {
     pub log_level: String,
     pub minimize_to_tray: bool,
     pub start_on_login: bool,
+    /// Command id -> chord list, holding only what the user changed; an empty
+    /// list means deliberately unassigned. The frontend owns the vocabulary
+    /// (see keys/bindings.ts) — the backend just round-trips it.
+    pub keybindings: BTreeMap<String, Vec<String>>,
     pub window: Option<WindowGeom>,
 }
 
@@ -52,6 +57,7 @@ impl Default for Settings {
             log_level: "info".into(),
             minimize_to_tray: false,
             start_on_login: false,
+            keybindings: BTreeMap::new(),
             window: None,
         }
     }

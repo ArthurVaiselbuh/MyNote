@@ -23,6 +23,7 @@
   import SectionPicker from "./lib/components/modals/SectionPicker.svelte";
   import SettingsModal from "./lib/components/modals/SettingsModal.svelte";
   import ColorsModal from "./lib/components/modals/ColorsModal.svelte";
+  import KeybindingsModal from "./lib/components/modals/KeybindingsModal.svelte";
   import Welcome from "./lib/components/Welcome.svelte";
 
   const s = $derived(app.settings);
@@ -175,6 +176,7 @@
   {#if app.modal === "help"}<HelpOverlay />{/if}
   {#if app.modal === "settings"}<SettingsModal />{/if}
   {#if app.modal === "colors"}<ColorsModal />{/if}
+  {#if app.modal === "keybindings"}<KeybindingsModal />{/if}
   {#if app.modal === "sectionPicker"}<SectionPicker />{/if}
   {#if app.modal === "confirm"}<ConfirmDialog />{/if}
   {#if app.modal === "insert"}<InsertHelper />{/if}

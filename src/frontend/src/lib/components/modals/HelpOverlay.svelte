@@ -1,33 +1,25 @@
 <script lang="ts">
   import { autofocusSelect } from "../../autofocus";
-  import {
-    EDITOR_SHORTCUTS,
-    GLOBAL_SHORTCUTS,
-    HISTORY_SHORTCUTS,
-    PANE_SHORTCUTS,
-    RESULTS_SHORTCUTS,
-    TREE_SHORTCUTS,
-    type Shortcut,
-  } from "../../keys/shortcuts";
+  import { editorRows, rowsFor, type HelpRow } from "../../keys/shortcuts";
   import { app } from "../../state/app.svelte";
 
   let filter = $state("");
 
   const inHistory = $derived(app.helpContext === "history");
 
-  const paneGroup = $derived.by((): { name: string; rows: Shortcut[] } => {
+  const paneGroup = $derived.by((): { name: string; rows: HelpRow[] } => {
     switch (app.focus) {
       case "tree":
-        return { name: "Tree", rows: TREE_SHORTCUTS };
+        return { name: "Tree", rows: rowsFor("tree") };
       case "results":
       case "search":
-        return { name: "Results", rows: RESULTS_SHORTCUTS };
+        return { name: "Results", rows: rowsFor("results") };
       default:
-        return { name: "Editor", rows: EDITOR_SHORTCUTS };
+        return { name: "Editor", rows: editorRows() };
     }
   });
 
-  function filtered(rows: Shortcut[]): Shortcut[] {
+  function filtered(rows: HelpRow[]): HelpRow[] {
     const f = filter.trim().toLowerCase();
     return rows
       .filter((r) => !r.gate || (r.gate === "git" && app.git?.available))
@@ -50,7 +42,7 @@
       {#if inHistory}
         <div class="help-group">
           <h3>History</h3>
-          {#each filtered(HISTORY_SHORTCUTS) as { keys, desc }}
+          {#each filtered(rowsFor("history")) as { keys, desc }}
             <div class="help-row"><span>{desc}</span><kbd>{keys}</kbd></div>
           {/each}
         </div>
@@ -63,18 +55,18 @@
         </div>
         <div class="help-group">
           <h3>Panes</h3>
-          {#each filtered(PANE_SHORTCUTS) as { keys, desc }}
+          {#each filtered(rowsFor("pane")) as { keys, desc }}
             <div class="help-row"><span>{desc}</span><kbd>{keys}</kbd></div>
           {/each}
         </div>
         <div class="help-group">
           <h3>Global</h3>
-          {#each filtered(GLOBAL_SHORTCUTS) as { keys, desc }}
+          {#each filtered(rowsFor("global")) as { keys, desc }}
             <div class="help-row"><span>{desc}</span><kbd>{keys}</kbd></div>
           {/each}
         </div>
       {/if}
     </div>
-    <div class="hint">{inHistory ? "Esc returns to history" : "Esc closes"}</div>
+    <div class="hint">{inHistory ? "Esc returns to history" : "Esc closes"} · rebind in Settings</div>
   </div>
 </div>

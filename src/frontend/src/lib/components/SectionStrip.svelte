@@ -2,7 +2,7 @@
   import * as act from "../actions";
   import { app } from "../state/app.svelte";
   import { autofocusSelect } from "../autofocus";
-  import { MOD_LABEL, SHIFT_LABEL } from "../keys/platform";
+  import { hintOf } from "../keys/bindings";
   import { openSectionMenu } from "../menus";
 
   const section = $derived(act.currentSection());
@@ -36,7 +36,7 @@
 
 <!-- svelte-ignore a11y_no_static_element_interactions -->
 <div class="section-strip" oncontextmenu={openSectionMenu}>
-  <button class="nav" title="Previous section ({MOD_LABEL}+PgUp)" onclick={() => act.gotoSectionOffset(-1)}>◀</button>
+  <button class="nav" title="Previous section{hintOf('section.prev')}" onclick={() => act.gotoSectionOffset(-1)}>◀</button>
   {#if editing}
     <input
       data-esc-local
@@ -49,13 +49,13 @@
   {:else}
     <button
       class="name"
-      title="Go to section ({MOD_LABEL}+G) — double-click to rename"
+      title="Go to section{hintOf('section.goto')} — double-click to rename"
       onclick={() => act.openSectionPicker("goto")}
       ondblclick={() => (app.renamingSection = true)}
     >
       {section?.name ?? "—"} <span style="opacity:.5">{position}</span>
     </button>
   {/if}
-  <button class="nav" title="Next section ({MOD_LABEL}+PgDn)" onclick={() => act.gotoSectionOffset(1)}>▶</button>
-  <button class="nav" title="New section ({MOD_LABEL}+{SHIFT_LABEL}+N)" onclick={() => act.newSection()}>＋</button>
+  <button class="nav" title="Next section{hintOf('section.next')}" onclick={() => act.gotoSectionOffset(1)}>▶</button>
+  <button class="nav" title="New section{hintOf('section.new')}" onclick={() => act.newSection()}>＋</button>
 </div>

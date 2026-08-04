@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { chordKey, isHelpChord } from "./platform";
+import { chordKey } from "./platform";
 
 function press(key: string, code: string, shiftKey = false): KeyboardEvent {
   return { key, code, shiftKey } as KeyboardEvent;
@@ -54,16 +54,5 @@ describe("chordKey — shifted punctuation normalizes to its base key", () => {
   it("keeps numpad +/- on the zoom bindings", () => {
     expect(chordKey(press("+", "NumpadAdd"))).toBe("=");
     expect(chordKey(press("-", "NumpadSubtract"))).toBe("-");
-  });
-});
-
-describe("isHelpChord", () => {
-  it("fires on Shift+/ whatever the layout prints", () => {
-    expect(isHelpChord(press("?", "Slash", true))).toBe(true);
-    expect(isHelpChord(press(".", "Slash", true))).toBe(true);
-  });
-
-  it("ignores an unshifted slash", () => {
-    expect(isHelpChord(press("/", "Slash"))).toBe(false);
   });
 });
