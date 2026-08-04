@@ -1,19 +1,21 @@
 import * as act from "../actions";
+import { contextMenu, contextMenuKeys } from "../contextMenu.svelte";
 import { app } from "../state/app.svelte";
+import { isTextEntry } from "../textEntry";
 import { modPressed } from "./platform";
 import { resultsKeys } from "./resultsKeys";
 import { treeKeys } from "./treeKeys";
 
-function isTyping(target: EventTarget | null): boolean {
-  if (!(target instanceof HTMLElement)) return false;
-  if (target instanceof HTMLInputElement || target instanceof HTMLTextAreaElement) return true;
-  if (target.isContentEditable) return true;
-  return target.closest(".cm-editor") !== null;
-}
-
 export function handleGlobal(e: KeyboardEvent) {
   const mod = modPressed(e);
   const target = e.target as HTMLElement | null;
+
+  // 0. an open context menu owns the keyboard, one layer above a modal — it can
+  // be raised over any pane, and every other key would act behind it
+  if (contextMenu.open) {
+    contextMenuKeys(e);
+    return;
+  }
 
   // 1+2. an open modal (incl. insert helper) owns the keyboard; only Esc is
   // global (closes it, or steps a stacked modal back one layer)
@@ -26,7 +28,7 @@ export function handleGlobal(e: KeyboardEvent) {
     return;
   }
 
-  const typing = isTyping(e.target);
+  const typing = isTextEntry(e.target);
 
   // 3. global shortcuts fire regardless of focus
   if (mod && !e.altKey) {

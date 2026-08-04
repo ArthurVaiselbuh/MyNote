@@ -4,6 +4,7 @@
   import { applyHighlights, clearHighlights } from "../highlight";
   import { modPressed } from "../keys/platform";
   import { renderBody } from "../markdown";
+  import { openPreviewMenu } from "../menus";
   import { previewFindCtl } from "../previewFindCtl";
   import { escapeRegExp } from "../regex";
   import type { FindPrefill } from "../state/app.svelte";
@@ -168,7 +169,13 @@
   {/if}
   <!-- svelte-ignore a11y_click_events_have_key_events -->
   <!-- svelte-ignore a11y_no_static_element_interactions -->
-  <div class="preview" id="preview-scroll" bind:this={containerEl} onclick={onClick}>
+  <div
+    class="preview"
+    id="preview-scroll"
+    bind:this={containerEl}
+    onclick={onClick}
+    oncontextmenu={openPreviewMenu}
+  >
     {@html html}
   </div>
 </div>

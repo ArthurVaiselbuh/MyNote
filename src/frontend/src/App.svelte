@@ -5,6 +5,8 @@
   import * as act from "./lib/actions";
   import { handleGlobal } from "./lib/keys/dispatch";
   import { app } from "./lib/state/app.svelte";
+  import { isTextEntry } from "./lib/textEntry";
+  import ContextMenu from "./lib/components/ContextMenu.svelte";
   import Editor from "./lib/components/Editor.svelte";
   import ResultPeek from "./lib/components/ResultPeek.svelte";
   import Results from "./lib/components/Results.svelte";
@@ -83,6 +85,16 @@
     };
     window.addEventListener("wheel", wheel, { passive: false });
 
+    // the webview's own menu (refresh / print / save as / send tab to your
+    // devices) is meaningless here, so panes raise their own via openContextMenu
+    // — but text fields keep the native one, the only place right-click paste
+    // and spell-check suggestions come from
+    const suppressWebviewMenu = (e: MouseEvent) => {
+      if (isTextEntry(e.target)) return;
+      e.preventDefault();
+    };
+    window.addEventListener("contextmenu", suppressWebviewMenu);
+
     const flushSave = () => void act.saveNow();
     window.addEventListener("blur", flushSave);
 
@@ -106,6 +118,7 @@
     return () => {
       window.removeEventListener("keydown", handleGlobal, true);
       window.removeEventListener("wheel", wheel);
+      window.removeEventListener("contextmenu", suppressWebviewMenu);
       window.removeEventListener("blur", flushSave);
       unlistenFlushAndClose?.();
       unlistenGitSnapshotFailed?.();
@@ -168,6 +181,7 @@
 
   <!-- always mounted: owns its own first-run trigger and visibility -->
   <Welcome />
+  <ContextMenu />
 
   {#if app.status}
     <div class="status-toast" class:error={app.statusIsError}>{app.status}</div>

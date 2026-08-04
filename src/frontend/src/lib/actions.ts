@@ -172,6 +172,12 @@ export async function createSectionNamed(name: string) {
   app.focus = "tree";
 }
 
+export function startSectionRename() {
+  if (!currentSection()) return;
+  app.creatingSection = false;
+  app.renamingSection = true;
+}
+
 export function cancelNewSection() {
   app.creatingSection = false;
   app.focus = "tree";
@@ -638,6 +644,12 @@ export function openResult(idx: number) {
   saveLastView();
 }
 
+export function openResultInEditor(idx: number) {
+  openResult(idx);
+  app.mode = "edit";
+  app.editorFocusReq++;
+}
+
 // ---------- focus / view ----------
 
 export function focusPane(pane: Pane) {
@@ -726,6 +738,16 @@ export function scrollMain(dir: number) {
   }
   if (el instanceof HTMLElement) {
     el.scrollBy({ top: dir * el.clientHeight * 0.85 });
+  }
+}
+
+export async function copyText(text: string) {
+  if (!text) return;
+  try {
+    await navigator.clipboard.writeText(text);
+    flashStatus("copied", 1500);
+  } catch (e) {
+    app.status = String(e);
   }
 }
 
