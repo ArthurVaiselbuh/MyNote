@@ -102,6 +102,8 @@ export interface Settings {
   treeWidth: number;
   peekWidth: number;
   logLevel: string;
+  minimizeToTray: boolean;
+  startOnLogin: boolean;
   window: WindowGeom | null;
 }
 
@@ -172,6 +174,8 @@ export const defaultSettings: Settings = {
   treeWidth: 300,
   peekWidth: 460,
   logLevel: "info",
+  minimizeToTray: false,
+  startOnLogin: false,
   window: null,
 };
 

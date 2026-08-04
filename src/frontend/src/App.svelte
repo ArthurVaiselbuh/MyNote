@@ -106,6 +106,11 @@
       unlistenFlushAndClose = un;
     });
 
+    let unlistenFlush: (() => void) | undefined;
+    void listen("mynote:flush", flushSave).then((un) => {
+      unlistenFlush = un;
+    });
+
     let unlistenGitSnapshotFailed: (() => void) | undefined;
     void listen<string>("mynote:git-snapshot-failed", (event) => {
       act.flashStatusError(event.payload);
@@ -121,6 +126,7 @@
       window.removeEventListener("contextmenu", suppressWebviewMenu);
       window.removeEventListener("blur", flushSave);
       unlistenFlushAndClose?.();
+      unlistenFlush?.();
       unlistenGitSnapshotFailed?.();
     };
   });

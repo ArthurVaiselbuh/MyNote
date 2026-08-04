@@ -81,6 +81,31 @@
     </div>
 
     <div class="settings-row">
+      <label for="set-tray">Minimize to tray instead of quitting(EXPERIMENTAL)</label>
+      <input
+        id="set-tray"
+        type="checkbox"
+        bind:checked={app.settings.minimizeToTray}
+        onchange={persist}
+      />
+    </div>
+
+    <div class="settings-row">
+      <label for="set-startup">Start Mynote on startup</label>
+      <input
+        id="set-startup"
+        type="checkbox"
+        bind:checked={app.settings.startOnLogin}
+        onchange={persist}
+      />
+    </div>
+    {#if app.settings.startOnLogin && !app.settings.minimizeToTray}
+      <div class="settings-path">
+        Turn on minimize to tray as well to have MyNote start out of the way.
+      </div>
+    {/if}
+
+    <div class="settings-row">
       <span>Welcome tour</span>
       <button onclick={() => (app.modal = "welcome")}>Show again</button>
     </div>
