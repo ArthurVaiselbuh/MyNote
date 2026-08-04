@@ -183,6 +183,22 @@ are supported cross-platform builds off the same code.
   - **No user content or personal data in logs:** never log note bodies,
     page/section titles, search query text, or filesystem paths. Log ids
     (UUIDs), counts, sizes, indices, and enum/pane names only.
+- **Tray icon and start-on-login** are two independent opt-ins in Settings
+  (`settings.json::minimizeToTray` / `startOnLogin`), both off by default.
+  `minimizeToTray` installs a tray icon (`tray.rs`, icon embedded with
+  `include_image!` so it doesn't depend on the disabled bundler) and turns the
+  window's close button into hide-to-tray; the tray's **Quit** item is the only
+  way past that guard — it sets `AppState::quitting` before closing, and the
+  guard also refuses to hide when the tray failed to install, so the window can
+  never become unreachable. Hiding persists window geometry and emits
+  `mynote:flush` (the webview's own `blur` flush is not guaranteed on `hide()`,
+  and losing keystrokes to the tray is not acceptable), which is why
+  `persist_on_close` only captures geometry while the window is still visible.
+  `startOnLogin` goes through `tauri-plugin-autostart` (the built-in Tauri
+  mechanism, per the logging precedent) and registers the exe with a `--hidden`
+  argument; MyNote starts without showing its window only when that argument is
+  present *and* the tray is enabled. Both settings are applied by `set_settings`
+  as well as at startup, so toggling takes effect without a restart.
 - **Autosave** debounces 3s after the last keystroke
 - **Per-notebook git snapshots** are an opt-in safety net (`notebook.json`'s
   `git.enabled`/`git.intervalSecs`, toggle in Settings), never a runtime

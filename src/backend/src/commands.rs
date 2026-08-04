@@ -12,7 +12,9 @@ use crate::import::{ImportOutcome, ImportPreview};
 use crate::{import_md, import_mht};
 use crate::search::{self, SearchResults};
 use crate::settings::{self, Settings};
+use crate::startup;
 use crate::store::{CloseInfo, Notebook, OpenError, PageNode, Section, Store, UndoOutcome};
+use crate::tray;
 
 const OPEN_SNAPSHOT_DEADLINE: Duration = Duration::from_secs(20);
 const CLOSE_SNAPSHOT_DEADLINE: Duration = Duration::from_secs(5);
@@ -21,6 +23,9 @@ pub struct AppState {
     pub store: Mutex<Option<Store>>,
     pub settings: Mutex<Settings>,
     pub closing: AtomicBool,
+    /// Set by the tray's Quit item so the close-to-tray guard lets that one
+    /// close through.
+    pub quitting: AtomicBool,
     pub git_gate: Mutex<()>,
     /// Signals the idle-snapshot ticker thread to stop.
     pub git_stop: Mutex<Option<mpsc::Sender<()>>>,
@@ -526,7 +531,11 @@ pub fn get_settings(state: State<'_, AppState>) -> Result<Settings, String> {
 }
 
 #[tauri::command]
-pub fn set_settings(state: State<'_, AppState>, settings: Settings) -> Result<(), String> {
+pub fn set_settings(
+    app: tauri::AppHandle,
+    state: State<'_, AppState>,
+    settings: Settings,
+) -> Result<(), String> {
     let mut guard = state.settings.lock().map_err(lock_err)?;
     let window = guard.window.clone();
     // window geometry and the recents MRU are backend-owned; ignore stale copies
@@ -538,5 +547,9 @@ pub fn set_settings(state: State<'_, AppState>, settings: Settings) -> Result<()
     }
     log::info!("settings updated (log level: {})", guard.log_level);
     guard.save();
+    let (tray_enabled, start_on_login) = (guard.minimize_to_tray, guard.start_on_login);
+    drop(guard);
+    tray::sync(&app, tray_enabled);
+    startup::sync(&app, start_on_login);
     Ok(())
 }

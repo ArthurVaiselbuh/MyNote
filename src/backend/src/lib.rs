@@ -8,7 +8,9 @@ mod import_mht;
 mod lock;
 mod search;
 mod settings;
+mod startup;
 mod store;
+mod tray;
 
 use commands::AppState;
 use percent_encoding::percent_decode_str;
@@ -28,11 +30,16 @@ pub fn run() {
         .plugin(build_log_plugin(&settings))
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_opener::init())
+        .plugin(tauri_plugin_autostart::init(
+            tauri_plugin_autostart::MacosLauncher::LaunchAgent,
+            Some(vec![startup::HIDDEN_ARG]),
+        ))
         .plugin(navigation_guard())
         .manage(AppState {
             store: Mutex::new(None),
             settings: Mutex::new(settings),
             closing: AtomicBool::new(false),
+            quitting: AtomicBool::new(false),
             git_gate: Mutex::new(()),
             git_stop: Mutex::new(None),
             history_gate: Mutex::new(()),
@@ -98,12 +105,11 @@ pub fn run() {
             }
             let win = builder.build()?;
 
-            let geom = app
-                .state::<AppState>()
-                .settings
-                .lock()
-                .ok()
-                .and_then(|s| s.window.clone());
+            let (geom, tray_enabled, start_on_login) = {
+                let state = app.state::<AppState>();
+                let s = state.settings.lock().map_err(|_| "settings lock poisoned")?;
+                (s.window.clone(), s.minimize_to_tray, s.start_on_login)
+            };
             if let Some(g) = geom.filter(|g| g.width > 0 && g.height > 0) {
                 let _ = win.set_position(tauri::PhysicalPosition::new(g.x, g.y));
                 let _ = win.set_size(tauri::PhysicalSize::new(g.width, g.height));
@@ -111,7 +117,11 @@ pub fn run() {
                     let _ = win.maximize();
                 }
             }
-            let _ = win.show();
+            tray::sync(app.handle(), tray_enabled);
+            startup::sync(app.handle(), start_on_login);
+            if !(tray_enabled && startup::launched_hidden()) {
+                let _ = win.show();
+            }
 
             let tx = spawn_git_ticker(app.handle().clone());
             if let Ok(mut stop) = app.state::<AppState>().git_stop.lock() {
@@ -122,6 +132,10 @@ pub fn run() {
         .on_window_event(|window, event| {
             if let tauri::WindowEvent::CloseRequested { api, .. } = event {
                 let state = window.state::<AppState>();
+                if hide_to_tray(window, &state) {
+                    api.prevent_close();
+                    return;
+                }
                 if !state.closing.swap(true, Ordering::SeqCst) {
                     api.prevent_close();
                     let _ = window.emit("mynote:flush-and-close", ());
@@ -190,21 +204,52 @@ fn persist_on_close(window: &tauri::Window) {
     }
     let settings_lock = state.settings.lock();
     if let Ok(mut s) = settings_lock {
-        if !window.is_minimized().unwrap_or(false) {
-            let maximized = window.is_maximized().unwrap_or(false);
-            if let (Ok(pos), Ok(size)) = (window.outer_position(), window.inner_size()) {
-                if size.width > 0 && size.height > 0 {
-                    s.window = Some(settings::WindowGeom {
-                        x: pos.x,
-                        y: pos.y,
-                        width: size.width,
-                        height: size.height,
-                        maximized,
-                    });
-                }
-            }
+        if window.is_visible().unwrap_or(true) {
+            capture_geometry(window, &mut s);
         }
         s.save();
+    }
+}
+
+/// Closing with `minimizeToTray` on parks the app in the tray instead of
+/// quitting; only the tray's Quit item, which sets `quitting`, gets past this.
+fn hide_to_tray(window: &tauri::Window, state: &tauri::State<'_, AppState>) -> bool {
+    if state.quitting.load(Ordering::SeqCst) || state.closing.load(Ordering::SeqCst) {
+        return false;
+    }
+    if !state
+        .settings
+        .lock()
+        .is_ok_and(|s| s.minimize_to_tray && window.app_handle().tray_by_id(tray::ID).is_some())
+    {
+        return false;
+    }
+    log::trace!("close requested — hiding to tray");
+    if let Ok(mut s) = state.settings.lock() {
+        capture_geometry(window, &mut s);
+        s.save();
+    }
+    let _ = window.hide();
+    let _ = window.emit("mynote:flush", ());
+    true
+}
+
+fn capture_geometry(window: &tauri::Window, settings: &mut Settings) {
+    if window.is_minimized().unwrap_or(false) {
+        return;
+    }
+    let maximized = window.is_maximized().unwrap_or(false);
+    let (Ok(pos), Ok(size)) = (window.outer_position(), window.inner_size()) else {
+        return;
+    };
+    if size.width > 0 && size.height > 0 {
+        settings.window = Some(settings::WindowGeom {
+            x: pos.x,
+            y: pos.y,
+            width: size.width,
+            height: size.height,
+            maximized,
+        });
     }
 }
 

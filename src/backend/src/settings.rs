@@ -29,6 +29,8 @@ pub struct Settings {
     pub tree_width: u32,
     pub peek_width: u32,
     pub log_level: String,
+    pub minimize_to_tray: bool,
+    pub start_on_login: bool,
     pub window: Option<WindowGeom>,
 }
 
@@ -48,6 +50,8 @@ impl Default for Settings {
             tree_width: 300,
             peek_width: 460,
             log_level: "info".into(),
+            minimize_to_tray: false,
+            start_on_login: false,
             window: None,
         }
     }
