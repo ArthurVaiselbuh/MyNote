@@ -45,6 +45,7 @@ fn acquire_exclusive(path: &Path) -> Result<File, LockError> {
 
 #[cfg(unix)]
 fn acquire_exclusive(path: &Path) -> Result<File, LockError> {
+    use std::io::ErrorKind;
     use std::os::unix::io::AsRawFd;
     // Declared by hand rather than pulling in the `libc` crate: flock(2) is
     // part of the platform C library every unix target already links.
@@ -58,9 +59,15 @@ fn acquire_exclusive(path: &Path) -> Result<File, LockError> {
         .write(true)
         .open(path)
         .map_err(|e| LockError::Io(e.to_string()))?;
-    let rc = unsafe { flock(file.as_raw_fd(), LOCK_EX | LOCK_NB) };
-    if rc != 0 {
-        return Err(LockError::HeldElsewhere);
+    loop {
+        if unsafe { flock(file.as_raw_fd(), LOCK_EX | LOCK_NB) } == 0 {
+            return Ok(file);
+        }
+        let e = std::io::Error::last_os_error();
+        match e.kind() {
+            ErrorKind::Interrupted => continue,
+            ErrorKind::WouldBlock => return Err(LockError::HeldElsewhere),
+            _ => return Err(LockError::Io(format!("flock: {e}"))),
+        }
     }
-    Ok(file)
 }
