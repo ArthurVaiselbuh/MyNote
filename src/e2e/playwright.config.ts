@@ -10,5 +10,8 @@ export default defineConfig({
   // real cold start — the budget has to cover that on a loaded CI runner
   timeout: 180_000,
   expect: { timeout: 10_000 },
-  reporter: [["list"]],
+  retries: process.env.CI ? 1 : 0,
+  reporter: process.env.CI
+    ? [["list"], ["github"], ["json", { outputFile: "test-results/results.json" }]]
+    : [["list"]],
 });

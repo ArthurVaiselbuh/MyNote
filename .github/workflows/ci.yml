@@ -81,8 +81,32 @@ jobs:
       - name: Run Playwright e2e
         working-directory: src/e2e
         run: npx playwright test
-      - name: Upload e2e artifacts on failure
+      - name: Collect app log
         if: failure()
+        shell: pwsh
+        run: |
+          $log = Join-Path $env:APPDATA "MyNote/MyNote.log"
+          if (Test-Path $log) {
+            New-Item -ItemType Directory -Force src/e2e/test-results | Out-Null
+            Copy-Item $log src/e2e/test-results/
+          }
+      - name: Flag flaky tests
+        id: flaky
+        if: always()
+        shell: bash
+        working-directory: src/e2e
+        run: |
+          [ -f test-results/results.json ] || exit 0
+          flaky=$(jq -r '[.. | objects | select(has("tests")) | . as $s | $s.tests[]? | select(.status == "flaky") | $s.title] | .[]' test-results/results.json)
+          [ -n "$flaky" ] || exit 0
+          echo "found=true" >> "$GITHUB_OUTPUT"
+          echo "## Flaky e2e tests (passed only on retry)" >> "$GITHUB_STEP_SUMMARY"
+          while IFS= read -r t; do
+            echo "::warning title=Flaky e2e test::$t passed only on retry"
+            echo "- $t" >> "$GITHUB_STEP_SUMMARY"
+          done <<< "$flaky"
+      - name: Upload e2e artifacts
+        if: failure() || steps.flaky.outputs.found == 'true'
         uses: actions/upload-artifact@v7
         with:
           name: e2e-results
