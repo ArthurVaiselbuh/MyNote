@@ -1,6 +1,7 @@
 <script lang="ts">
   import * as act from "../actions";
   import type { SearchHit } from "../api";
+  import { openResultsMenu } from "../menus";
   import { app } from "../state/app.svelte";
 
   interface Segment {
@@ -32,7 +33,13 @@
   });
 </script>
 
-<div class="results pane-focusable" id="results-scroll" class:focused={app.focus === "results"}>
+<!-- svelte-ignore a11y_no_static_element_interactions -->
+<div
+  class="results pane-focusable"
+  id="results-scroll"
+  class:focused={app.focus === "results"}
+  oncontextmenu={openResultsMenu}
+>
   {#each app.results as hit, i (i)}
     <!-- svelte-ignore a11y_click_events_have_key_events -->
     <!-- svelte-ignore a11y_no_static_element_interactions -->

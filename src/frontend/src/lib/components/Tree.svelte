@@ -3,6 +3,7 @@
   import { autofocusSelect } from "../autofocus";
   import { dndCancel, dndDown, dndMove, dndUp } from "../dnd";
   import { MOD_LABEL } from "../keys/platform";
+  import { openTreeMenu } from "../menus";
   import { app } from "../state/app.svelte";
 
   let filterInput: HTMLInputElement | undefined = $state();
@@ -68,6 +69,7 @@
   onpointermove={dndMove}
   onpointerup={dndUp}
   onpointercancel={dndCancel}
+  oncontextmenu={openTreeMenu}
 >
   {#if app.filterActive || app.treeFilter}
     <input

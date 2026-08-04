@@ -3,6 +3,7 @@
   import { app } from "../state/app.svelte";
   import { autofocusSelect } from "../autofocus";
   import { MOD_LABEL, SHIFT_LABEL } from "../keys/platform";
+  import { openSectionMenu } from "../menus";
 
   const section = $derived(act.currentSection());
   const editing = $derived(app.creatingSection || app.renamingSection);
@@ -33,7 +34,8 @@
   }
 </script>
 
-<div class="section-strip">
+<!-- svelte-ignore a11y_no_static_element_interactions -->
+<div class="section-strip" oncontextmenu={openSectionMenu}>
   <button class="nav" title="Previous section ({MOD_LABEL}+PgUp)" onclick={() => act.gotoSectionOffset(-1)}>◀</button>
   {#if editing}
     <input
