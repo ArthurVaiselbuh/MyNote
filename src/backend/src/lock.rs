@@ -1,5 +1,7 @@
 use std::fs::{File, OpenOptions};
 use std::path::Path;
+#[cfg(unix)]
+use std::time::{Duration, Instant};
 
 pub const LOCK_FILE_NAME: &str = ".mynote.lock";
 
@@ -59,15 +61,27 @@ fn acquire_exclusive(path: &Path) -> Result<File, LockError> {
         .write(true)
         .open(path)
         .map_err(|e| LockError::Io(e.to_string()))?;
+    let deadline = Instant::now() + FORK_RACE_BUDGET;
     loop {
         if unsafe { flock(file.as_raw_fd(), LOCK_EX | LOCK_NB) } == 0 {
             return Ok(file);
         }
+
         let e = std::io::Error::last_os_error();
+        if Instant::now() >= deadline {
+            return match e.kind() {
+                ErrorKind::WouldBlock => Err(LockError::HeldElsewhere),
+                _ => Err(LockError::Io(format!("flock: {e}"))),
+            };
+        }
         match e.kind() {
             ErrorKind::Interrupted => continue,
-            ErrorKind::WouldBlock => return Err(LockError::HeldElsewhere),
+            ErrorKind::WouldBlock => std::thread::sleep(RETRY_PAUSE),
             _ => return Err(LockError::Io(format!("flock: {e}"))),
         }
     }
 }
+#[cfg(unix)]
+const FORK_RACE_BUDGET: Duration = Duration::from_millis(500);
+#[cfg(unix)]
+const RETRY_PAUSE: Duration = Duration::from_millis(2);
