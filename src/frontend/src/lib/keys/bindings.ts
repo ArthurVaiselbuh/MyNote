@@ -337,14 +337,15 @@ export function matches(id: string, e: KeyboardEvent): boolean {
 
 // Global and pane bindings reach every pane, so a pane-local chord that repeats
 // one of them would never fire. Two panes may safely share a chord; the history
-// pane owns the keyboard outright and shares with nobody.
+// pane owns the keyboard outright, so globals don't reach it — only the pane
+// scroll keys, which it pages itself.
 const REACH: Record<BindingContext, BindingContext[]> = {
   global: ["global", "system", "pane", "tree", "results"],
   system: ["global", "system", "pane", "tree", "results", "history"],
-  pane: ["global", "system", "pane", "tree", "results"],
+  pane: ["global", "system", "pane", "tree", "results", "history"],
   tree: ["global", "system", "pane", "tree"],
   results: ["global", "system", "pane", "results"],
-  history: ["system", "history"],
+  history: ["system", "pane", "history"],
 };
 
 export function rejectionOf(id: string, chord: string): string | null {

@@ -65,6 +65,31 @@ test("page history: diff shows the whole file, restore is undoable", async ({ ap
   await expect(cm).toContainText("v2 line");
 });
 
+test("PgUp / PgDn page the diff, which the modal would otherwise swallow", async ({ app }) => {
+  await app.enableGitSnapshots();
+  const long = Array.from({ length: 80 }, (_, i) => `line ${i} of filler`).join("\n");
+  await app.newPageWithBody("Long", `v1 line\n${long}`, 1);
+  // close snapshot commits v1
+  await app.relaunch();
+
+  await app.setBody(`v2 line\n${long}`);
+
+  await app.page.keyboard.press("Control+h");
+  await expect(app.page.locator(".history-rail .picker-item")).toHaveCount(2, { timeout: 10_000 });
+  await expect(app.page.locator(".diff.split")).toBeVisible();
+
+  const scrollTop = () => app.page.locator(".history-content").evaluate((el) => el.scrollTop);
+  expect(await scrollTop()).toBe(0);
+  await app.page.keyboard.press("PageDown");
+  await expect.poll(scrollTop).toBeGreaterThan(0);
+  await app.page.keyboard.press("PageUp");
+  await expect.poll(scrollTop).toBe(0);
+
+  // the keys are on the history cheat sheet, not just the app-wide one
+  await app.page.keyboard.press("Shift+Slash");
+  await expect(app.page.locator(".help-group .help-row", { hasText: "Scroll active view down" })).toHaveCount(1);
+});
+
 test("page history from results view: restore lands in a live editor", async ({ app }) => {
   await app.enableGitSnapshots();
   await app.newPageWithBody("Doc", "v1 line\nkeep me", 1);
