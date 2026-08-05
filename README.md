@@ -51,7 +51,7 @@ Running MyNote requires nothing — it's a single exe on top of Windows' preinst
 Building it needs Rust and Node:
 
 ```
-build.bat   # release build → output\mynote.exe
-dev.bat     # hot-reload dev build
-test.bat    # Rust tests + Playwright e2e against the real exe
+scripts\build.ps1   # release build → output\MyNote.exe
+scripts\dev.ps1     # hot-reload dev build
+scripts\test.ps1    # Rust tests + Playwright e2e against the real exe
 ```

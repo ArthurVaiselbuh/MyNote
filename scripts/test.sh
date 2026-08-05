@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-root="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 
 echo "=== MyNote tests ==="
 
@@ -18,6 +18,6 @@ echo "[3/3] cargo test"
 cargo test
 
 # e2e drives the real exe over WebView2's CDP endpoint, which only exists on
-# Windows — run test.bat there for the full suite.
+# Windows — run test.ps1 there for the full suite.
 echo
-echo "Backend + frontend checks passed (e2e is Windows-only; see test.bat)."
+echo "Backend + frontend checks passed (e2e is Windows-only; see scripts/test.ps1)."

@@ -51,6 +51,8 @@ jobs:
     runs-on: windows-latest
     steps:
       - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
       - uses: actions/setup-node@v7
         with:
           node-version: 24
@@ -58,17 +60,14 @@ jobs:
       - uses: Swatinem/rust-cache@v2
         with:
           workspaces: src/backend
-      - name: Stamp PR version (base-pr<number>-<run>)
+      - name: Stamp PR version (major.minor.commits-since-stamp-pr<number>-<run>)
         shell: bash
         run: |
-          base=$(jq -r .version src/backend/tauri.conf.json)
-          version="${base}-pr${{ github.event.pull_request.number || 0 }}-${{ github.run_number }}"
-          echo "Building version $version"
-          tmp=$(mktemp)
-          jq --arg v "$version" '.version = $v' src/backend/tauri.conf.json > "$tmp" && mv "$tmp" src/backend/tauri.conf.json
+          version="$(bash scripts/ci_version.sh)-pr${{ github.event.pull_request.number || 0 }}-${{ github.run_number }}"
+          bash scripts/stamp_version.sh "$version"
       - name: Build release exe
-        run: build.bat
-        shell: cmd
+        run: ./scripts/build.ps1
+        shell: pwsh
       - name: Publish build artifact
         uses: actions/upload-artifact@v7
         with:

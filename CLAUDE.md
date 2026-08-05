@@ -30,12 +30,18 @@ are supported cross-platform builds off the same code.
 
 - Single `src/` folder: `src/frontend` (Svelte 5 runes + Vite + CodeMirror 6),
   `src/backend` (Tauri v2 Rust crate), wired via `src/backend/tauri.conf.json`.
-- Root scripts: `build.bat`/`build.sh`, `dev.bat`/`dev.sh`, `test.bat`/`test.sh`.
+- All scripts live in `scripts/`: `build`/`dev`/`test` as `.ps1` (Windows) and
+  `.sh` (macOS/Linux); each derives the repo root from its own location.
   Builds must go through the tauri CLI (`tauri build --no-bundle`): a plain
   `cargo build --release` yields a dev-mode binary that loads the vite devUrl
   and shows a blank window.
 - Builds copy the exe to a root-level `output\` folder (`MyNote.exe`,
   `mynote-macos`, `mynote-linux`).
+- **Versioning:** `scripts/version_stamp.ps1` is the only thing that edits the
+  committed `major.minor` (bumps the minor across tauri.conf.json, Cargo.toml
+  and Cargo.lock; local builds keep patch `9999`). CI's patch component counts
+  commits since that stamp commit — `scripts/ci_version.sh` finds it by pickaxing
+  the version line's history, so CI jobs need `fetch-depth: 0`.
 - The config/data dir is per-platform and derived in
   `settings.rs::config_root()` — no code hardcodes `%APPDATA%`.
 
@@ -258,10 +264,10 @@ never cycle through the tree.
   undo/redo, and asset/file pruning — keep it green and extend it for new
   backend logic. This is the cross-platform bar: CI runs it on all three OSes.
 - E2e regression suite: Windows only — Playwright in `src/e2e` (`npm test`
-  there, or root `test.bat`). It attaches to the real release exe over CDP via
+  there, or `scripts\test.ps1`). It attaches to the real release exe over CDP via
   `WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS=--remote-debugging-port=9222` — no
   browser downloads, no webdriver, so the no-runtime-network rule holds. CDP
-  over WebView2 has no macOS/Linux equivalent, so `test.sh` runs backend +
+  over WebView2 has no macOS/Linux equivalent, so `scripts/test.sh` runs backend +
   svelte-check only. Each test gets a scratch notebook and isolated webview
   profile, with the user's `settings.json` swapped and restored by the fixture.
   Serial only (one exe, one port), and the suite refuses to run while MyNote is
