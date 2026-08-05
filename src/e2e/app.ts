@@ -398,7 +398,7 @@ export const test = base.extend<{ app: App }>({
   // eslint-disable-next-line no-empty-pattern
   app: async ({}, use, testInfo) => {
     if (!fs.existsSync(EXE)) {
-      throw new Error(`missing ${EXE} — run build.bat first`);
+      throw new Error(`missing ${EXE} — run scripts/build.ps1 first`);
     }
     if (mynoteRunning()) {
       throw new Error("MyNote is already running — close it before running the e2e suite");

@@ -30,6 +30,8 @@ jobs:
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
       - uses: actions/setup-node@v7
         with:
           node-version: 24
@@ -55,23 +57,18 @@ jobs:
         working-directory: src/backend
         run: cargo test --locked
 
-      - name: Stamp version (base.run_number)
+      - name: Stamp version (major.minor.commits-since-stamp)
         shell: bash
-        run: |
-          base=$(jq -r .version src/backend/tauri.conf.json | cut -d. -f1,2)
-          version="${base}.${{ github.run_number }}"
-          echo "Building version $version"
-          tmp=$(mktemp)
-          jq --arg v "$version" '.version = $v' src/backend/tauri.conf.json > "$tmp" && mv "$tmp" src/backend/tauri.conf.json
+        run: bash scripts/stamp_version.sh "$(bash scripts/ci_version.sh)"
 
       - name: Build release (Windows)
         if: runner.os == 'Windows'
-        run: build.bat
-        shell: cmd
+        run: ./scripts/build.ps1
+        shell: pwsh
 
       - name: Build release (Unix)
         if: runner.os != 'Windows'
-        run: ./build.sh
+        run: bash ./scripts/build.sh
 
       - name: Run Playwright e2e (Windows only)
         if: runner.os == 'Windows'
@@ -111,11 +108,9 @@ jobs:
           path: dist
           merge-multiple: true
 
-      - name: Compute release version (base.run_number)
+      - name: Compute release version (major.minor.commits-since-stamp)
         id: ver
-        run: |
-          base=$(jq -r .version src/backend/tauri.conf.json | cut -d. -f1,2)
-          echo "version=${base}.${{ github.run_number }}" >> "$GITHUB_OUTPUT"
+        run: echo "version=$(bash scripts/ci_version.sh)" >> "$GITHUB_OUTPUT"
 
       - name: Changelog since last release
         run: |
