@@ -1,6 +1,6 @@
 <script lang="ts">
   import { autofocusSelect } from "../../autofocus";
-  import { editorRows, rowsFor, type HelpRow } from "../../keys/shortcuts";
+  import { editorRows, historyRows, rowsFor, type HelpRow } from "../../keys/shortcuts";
   import { app } from "../../state/app.svelte";
 
   let filter = $state("");
@@ -42,7 +42,7 @@
       {#if inHistory}
         <div class="help-group">
           <h3>History</h3>
-          {#each filtered(rowsFor("history")) as { keys, desc }}
+          {#each filtered(historyRows()) as { keys, desc }}
             <div class="help-row"><span>{desc}</span><kbd>{keys}</kbd></div>
           {/each}
         </div>

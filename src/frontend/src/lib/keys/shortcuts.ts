@@ -25,8 +25,17 @@ function fixedRows(ctx: BindingContext): HelpRow[] {
   return FIXED_BINDINGS.filter((b) => b.ctx === ctx).map(({ keys, desc }) => ({ keys, desc }));
 }
 
+function commandRows(ctx: BindingContext): HelpRow[] {
+  return COMMANDS.filter((c) => c.ctx === ctx).map(row);
+}
+
 export function rowsFor(ctx: BindingContext): HelpRow[] {
-  return [...COMMANDS.filter((c) => c.ctx === ctx).map(row), ...fixedRows(ctx)];
+  return [...commandRows(ctx), ...fixedRows(ctx)];
+}
+
+// the history pane pages its own content, so the scroll keys belong on its sheet
+export function historyRows(): HelpRow[] {
+  return [...commandRows("history"), ...commandRows("pane"), ...fixedRows("history")];
 }
 
 // The editor pane has no keys of its own — the ones that matter while writing

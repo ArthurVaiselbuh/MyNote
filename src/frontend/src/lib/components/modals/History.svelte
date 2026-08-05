@@ -155,6 +155,11 @@
     });
   }
 
+  function scrollContent(dir: number) {
+    if (!contentEl) return;
+    contentEl.scrollBy({ top: dir * contentEl.clientHeight * 0.85 });
+  }
+
   function moveRailSel(delta: number) {
     app.historyRevSel = Math.min(railCount - 1, Math.max(0, app.historyRevSel + delta));
   }
@@ -379,8 +384,13 @@
       case "history.restore":
         doRestore();
         break;
-      default:
-        return;
+      default: {
+        // the pane owns the keyboard outright, so PgUp/PgDn can't reach the
+        // global dispatcher — page the diff here instead
+        const scroll = commandFor("pane", e);
+        if (!scroll) return;
+        scrollContent(scroll === "pane.scrollUp" ? -1 : 1);
+      }
     }
     e.preventDefault();
   }
@@ -582,7 +592,7 @@
           {#if deletedPreviewTruncated}
             <div class="history-note">this page is too large to show in full</div>
           {/if}
-          <div class="history-content">
+          <div class="history-content" bind:this={contentEl}>
             {#if deletedPreviewBusy}
               <div class="history-note">Loading…</div>
             {:else if deletedMode === "rendered"}
