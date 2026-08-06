@@ -114,30 +114,55 @@ md.inline.ruler.push("image_width", imageWidth);
 md.inline.ruler.push("color_span", colorSpan);
 
 // markdown collapses blank-line runs into one paragraph break; the preview keeps
-// them as nbsp spacer paragraphs so typed vertical gaps match the editor
-function preserveBlankRuns(body: string): string {
+// them as nbsp spacer paragraphs so typed vertical gaps match the editor. The
+// spacers shift every following line, so the rewrite hands back the body line
+// each rendered line came from \u2014 that map is what LINE_ATTR reports to the DOM.
+function preserveBlankRuns(body: string): { text: string; bodyLines: number[] } {
   const out: string[] = [];
+  const bodyLines: number[] = [];
+  const emit = (line: string, bodyLine: number) => {
+    out.push(line);
+    bodyLines.push(bodyLine);
+  };
   let inFence = false;
   let blanks = 0;
+  let blankStart = 0;
   const flushBlanks = () => {
     if (blanks === 0) return;
-    out.push("");
-    for (let i = 1; i < blanks; i++) out.push("\u00a0", "");
+    emit("", blankStart);
+    for (let i = 1; i < blanks; i++) {
+      emit("\u00a0", blankStart + i);
+      emit("", blankStart + i);
+    }
     blanks = 0;
   };
-  for (const line of body.split("\n")) {
+  body.split("\n").forEach((line, bodyLine) => {
     if (!inFence && line.trim() === "") {
+      if (blanks === 0) blankStart = bodyLine;
       blanks++;
-      continue;
+      return;
     }
     flushBlanks();
     if (/^\s*(```|~~~)/.test(line)) inFence = !inFence;
-    out.push(line);
-  }
+    emit(line, bodyLine);
+  });
   flushBlanks();
-  return out.join("\n");
+  return { text: out.join("\n"), bodyLines };
 }
 
+/** Block elements carry the 0-based body line they start on, so the preview and
+ * the editor can be pointed at the same place in the page. */
+export const LINE_ATTR = "data-line";
+
+md.core.ruler.push("body_line", (state) => {
+  const { bodyLines } = state.env as { bodyLines: number[] };
+  for (const token of state.tokens) {
+    if (!token.map || !token.tag || token.nesting < 0) continue;
+    token.attrSet(LINE_ATTR, String(bodyLines[token.map[0]]));
+  }
+});
+
 export function renderBody(body: string): string {
-  return md.render(preserveBlankRuns(body));
+  const { text, bodyLines } = preserveBlankRuns(body);
+  return md.render(text, { bodyLines });
 }

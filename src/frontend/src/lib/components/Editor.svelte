@@ -24,6 +24,7 @@
   import { hintOf, labelOf } from "../keys/bindings";
   import { app, type FindPrefill } from "../state/app.svelte";
   import { findNode } from "../treeUtils";
+  import { takeModeAnchor, viewPosChanged, viewPosOf, type ModeAnchor } from "../viewPos";
   import Preview from "./Preview.svelte";
 
   let host: HTMLElement | undefined = $state();
@@ -115,6 +116,7 @@
 
   async function save() {
     clearTimeout(saveTimer);
+    rememberEditorPos();
     if (!view || !loadedId || !dirty) return;
     dirty = false;
     const id = loadedId;
@@ -131,6 +133,65 @@
 
   function setDoc(body: string) {
     view?.setState(EditorState.create({ doc: body, extensions }));
+  }
+
+  function heightAtViewportTop(): number {
+    return view!.scrollDOM.getBoundingClientRect().top - view!.documentTop;
+  }
+
+  function editorAnchor(): ModeAnchor | null {
+    if (!view || !loadedId) return null;
+    const heightAtTop = heightAtViewportTop();
+    const block = view.lineBlockAtHeight(Math.max(0, heightAtTop));
+    return {
+      pageId: loadedId,
+      bodyLine: view.state.doc.lineAt(block.from).number - 1,
+      offsetFromTop: block.top - heightAtTop,
+    };
+  }
+
+  function rememberEditorPos() {
+    if (!view || !loadedId) return;
+    const pos = viewPosOf(loadedId);
+    pos.editorCursor = view.state.selection.main.head;
+    // in preview the host is display:none, so its scrollTop is not the one the
+    // user left behind — that was recorded when the mode flipped
+    if (app.mode === "edit") pos.editorScrollTop = view.scrollDOM.scrollTop;
+    viewPosChanged(loadedId);
+  }
+
+  function cursorAtAnchor(anchor: ModeAnchor): number {
+    const doc = view!.state.doc;
+    const line = doc.line(Math.min(anchor.bodyLine + 1, doc.lines));
+    const column = anchor.text ? line.text.toLowerCase().indexOf(anchor.text.toLowerCase()) : -1;
+    return column < 0 ? line.from : line.from + column;
+  }
+
+  function restoreEditorPos(pageId: string) {
+    if (!view) return;
+    const pos = viewPosOf(pageId);
+    const cursor = Math.min(pos.editorCursor, view.state.doc.length);
+    const scrollTop = pos.editorScrollTop;
+    view.dispatch({ selection: { anchor: cursor } });
+    requestAnimationFrame(() => {
+      if (view) view.scrollDOM.scrollTop = scrollTop;
+    });
+  }
+
+  // only a deliberate mode flip carries an anchor; entering the editor any other
+  // way (insert helper, revision restore) keeps the position that path chose
+  function landOnModeAnchor(pageId: string) {
+    const anchor = takeModeAnchor(pageId);
+    if (!view || !anchor) return;
+    const cursor = cursorAtAnchor(anchor);
+    viewPosOf(pageId).editorCursor = cursor;
+    viewPosChanged(pageId);
+    view.dispatch({ selection: { anchor: cursor } });
+    requestAnimationFrame(() => {
+      if (!view) return;
+      view.scrollDOM.scrollTop +=
+        view.lineBlockAt(cursor).top - anchor.offsetFromTop - heightAtViewportTop();
+    });
   }
 
   async function switchTo(id: string | null) {
@@ -155,6 +216,9 @@
       setDoc(parsed.body);
       previewText = parsed.body;
       dirty = false;
+      // in preview the editor is hidden and unmeasurable — its position is
+      // restored when the mode flips back
+      if (app.mode === "edit") restoreEditorPos(id);
       if (app.findPrefill) {
         const prefill = app.findPrefill;
         app.findPrefill = null;
@@ -242,10 +306,16 @@
     }
   });
 
+  let shownMode = app.mode;
   $effect(() => {
-    if (app.mode === "preview" && view) {
+    const mode = app.mode;
+    if (!view || mode === shownMode) return;
+    shownMode = mode;
+    if (mode === "preview") {
       previewText = view.state.doc.toString();
       void save();
+    } else if (loadedId) {
+      landOnModeAnchor(loadedId);
     }
   });
 
@@ -263,6 +333,7 @@
     });
     editorCtl.current = {
       save,
+      anchor: editorAnchor,
       openFind: ctlOpenFind,
       closeFind() {
         if (view && searchPanelOpen(view.state)) {

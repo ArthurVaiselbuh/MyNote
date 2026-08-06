@@ -1,7 +1,10 @@
 import type { FindCtl } from "./findCtl";
+import type { ModeAnchor } from "./viewPos";
 
 export interface EditorCtl extends FindCtl {
   save(): Promise<void>;
+  /** The line the editor is showing at its top edge, for the preview to land on. */
+  anchor(): ModeAnchor | null;
   insert(before: string, after?: string): void;
   setTitle(title: string): void;
   /** Replaces the whole buffer as one normal edit (undoable via Ctrl+Z,

@@ -5,9 +5,11 @@
   import { modPressed } from "../keys/platform";
   import { renderBody } from "../markdown";
   import { openPreviewMenu } from "../menus";
-  import { previewFindCtl } from "../previewFindCtl";
+  import { previewCtl } from "../previewCtl";
+  import { previewPositionAt, scrollPreviewToBodyLine } from "../previewLines";
   import { escapeRegExp } from "../regex";
-  import type { FindPrefill } from "../state/app.svelte";
+  import { app, type FindPrefill } from "../state/app.svelte";
+  import { takeModeAnchor, viewPosChanged, viewPosOf } from "../viewPos";
 
   let { body }: { body: string } = $props();
 
@@ -84,14 +86,44 @@
     runSearch();
   });
 
-  // switching pages while staying in preview keeps this component mounted —
-  // close find rather than re-searching into content the query never applied to
-  let mounted = false;
+  // switching pages while staying in preview keeps this component mounted, so a
+  // page change shows up as a new body: close find rather than re-searching into
+  // content the query never applied to, and resume that page's own scroll
+  let shownPageId: string | null = null;
+  let shownBody: string | null = null;
   $effect(() => {
-    void body;
-    if (mounted) open = false;
-    mounted = true;
+    if (body === shownBody) return;
+    if (shownBody !== null) open = false;
+    // adopt the new page as soon as it is current, so scroll events from the
+    // re-render are recorded against the page they belong to; the position is
+    // only restored once its body has actually arrived
+    shownPageId = app.currentPageId;
+    shownBody = body;
+    restoreScroll(shownPageId);
   });
+
+  function rememberScroll() {
+    if (!containerEl || !shownPageId) return;
+    viewPosOf(shownPageId).previewScrollTop = containerEl.scrollTop;
+    viewPosChanged(shownPageId);
+  }
+
+  function restoreScroll(pageId: string | null) {
+    if (!pageId) return;
+    const anchor = takeModeAnchor(pageId);
+    requestAnimationFrame(() => {
+      // a find match owns the scroll — opening a search result lands here
+      if (!containerEl || currentMatch()) return;
+      const pos = viewPosOf(pageId);
+      if (anchor) scrollPreviewToBodyLine(containerEl, anchor.bodyLine, anchor.offsetFromTop);
+      else containerEl.scrollTop = pos.previewScrollTop;
+      pos.previewScrollTop = containerEl.scrollTop;
+    });
+  }
+
+  function currentMatch(): HTMLElement | null {
+    return (open && matches[currentIdx]) || null;
+  }
 
   function keys(e: KeyboardEvent) {
     if (e.key === "Enter") {
@@ -102,7 +134,7 @@
   }
 
   onMount(() => {
-    previewFindCtl.current = {
+    previewCtl.current = {
       openFind(prefill?: FindPrefill | null) {
         open = true;
         if (prefill?.text) {
@@ -123,9 +155,17 @@
       findOpen: () => open,
       findNext: next,
       findPrev: prev,
+      anchor() {
+        const pageId = app.currentPageId;
+        if (!containerEl || !pageId) return null;
+        const match = currentMatch();
+        const position = previewPositionAt(containerEl, match);
+        if (!position) return null;
+        return { pageId, ...position, text: match?.textContent ?? undefined };
+      },
     };
     return () => {
-      previewFindCtl.current = null;
+      previewCtl.current = null;
     };
   });
 
@@ -174,6 +214,7 @@
     id="preview-scroll"
     bind:this={containerEl}
     onclick={onClick}
+    onscroll={rememberScroll}
     oncontextmenu={openPreviewMenu}
   >
     {@html html}

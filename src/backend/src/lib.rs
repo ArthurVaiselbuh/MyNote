@@ -68,6 +68,8 @@ pub fn run() {
             commands::redo,
             commands::set_expanded,
             commands::set_last_view,
+            commands::get_view_positions,
+            commands::set_view_positions,
             commands::search_pages,
             commands::save_image,
             commands::inspect_mht,

@@ -1,4 +1,5 @@
 use serde::Serialize;
+use std::collections::BTreeMap;
 use std::path::PathBuf;
 use std::sync::atomic::AtomicBool;
 use std::sync::{mpsc, Mutex};
@@ -14,7 +15,7 @@ use crate::{import_md, import_mht};
 use crate::search::{self, SearchResults};
 use crate::settings::{self, Settings};
 use crate::startup;
-use crate::store::{CloseInfo, Notebook, OpenError, PageNode, Section, Store, UndoOutcome};
+use crate::store::{CloseInfo, Notebook, OpenError, PageNode, Section, Store, UndoOutcome, ViewPos};
 use crate::tray;
 
 const OPEN_SNAPSHOT_DEADLINE: Duration = Duration::from_secs(20);
@@ -332,6 +333,19 @@ pub fn redo(state: State<'_, AppState>) -> Result<Option<UndoOutcome>, String> {
 pub fn set_expanded(state: State<'_, AppState>, id: String, expanded: bool) -> Result<(), String> {
     log::trace!("set expanded {id} = {expanded}");
     with_store(&state, |s| s.set_expanded(&id, expanded))
+}
+
+#[tauri::command]
+pub fn get_view_positions(state: State<'_, AppState>) -> Result<BTreeMap<String, ViewPos>, String> {
+    with_store(&state, |s| Ok(s.view_positions().clone()))
+}
+
+#[tauri::command]
+pub fn set_view_positions(
+    state: State<'_, AppState>,
+    entries: Vec<(String, ViewPos)>,
+) -> Result<(), String> {
+    with_store(&state, |s| s.set_view_positions(entries))
 }
 
 #[tauri::command]

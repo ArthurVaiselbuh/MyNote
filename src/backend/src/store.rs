@@ -1,6 +1,6 @@
 use serde::{Deserialize, Serialize};
 use std::cell::RefCell;
-use std::collections::HashSet;
+use std::collections::{BTreeMap, HashSet};
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -178,6 +178,19 @@ fn stored_pages(list: &[PageNode]) -> Vec<StoredPage<'_>> {
         .collect()
 }
 
+/// Where the reader was on one page, in both view modes. Scroll offsets are
+/// device pixels, the cursor a character offset into the body.
+#[derive(Serialize, Deserialize, Clone, Debug, Default, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct ViewPos {
+    #[serde(default)]
+    pub editor_scroll_top: f64,
+    #[serde(default)]
+    pub editor_cursor: usize,
+    #[serde(default)]
+    pub preview_scroll_top: f64,
+}
+
 #[derive(Serialize, Deserialize, Clone, Debug, Default)]
 #[serde(rename_all = "camelCase")]
 struct UserState {
@@ -185,6 +198,8 @@ struct UserState {
     last_view: LastView,
     #[serde(default)]
     collapsed: Vec<String>,
+    #[serde(default)]
+    view_positions: BTreeMap<String, ViewPos>,
 }
 
 fn collect_collapsed(list: &[PageNode], out: &mut Vec<String>) {
@@ -272,6 +287,7 @@ pub struct Store {
     undo_stack: Vec<UndoOp>,
     redo_stack: Vec<UndoOp>,
     session_deleted: HashSet<String>,
+    view_positions: BTreeMap<String, ViewPos>,
     #[allow(dead_code)]
     lock: NotebookLock,
 
@@ -292,12 +308,23 @@ impl Store {
             LockError::Io(msg) => OpenError::Other(msg),
         })?;
         let mut notebook = load_notebook(root).map_err(OpenError::Other)?;
+        let mut view_positions = BTreeMap::new();
         if let Some(user) = load_user_state(root) {
             notebook.last_view = user.last_view;
             let collapsed: HashSet<String> = user.collapsed.into_iter().collect();
             for section in notebook.sections.iter_mut() {
                 apply_collapsed(&mut section.pages, &collapsed);
             }
+            // pages that went away between sessions would otherwise accumulate
+            let live: HashSet<&str> = flatten_pages(&notebook)
+                .iter()
+                .map(|(_, page)| page.id.as_str())
+                .collect();
+            view_positions = user
+                .view_positions
+                .into_iter()
+                .filter(|(id, _)| live.contains(id.as_str()))
+                .collect();
         }
         let mut store = Store {
             root: root.to_path_buf(),
@@ -305,6 +332,7 @@ impl Store {
             undo_stack: vec![],
             redo_stack: vec![],
             session_deleted: HashSet::new(),
+            view_positions,
             lock,
             session: NEXT_SESSION.fetch_add(1, Ordering::Relaxed),
             change_seq: AtomicU64::new(0),
@@ -361,6 +389,7 @@ impl Store {
         let state = UserState {
             last_view: self.notebook.last_view.clone(),
             collapsed,
+            view_positions: self.view_positions.clone(),
         };
         let json = serde_json::to_string_pretty(&state).map_err(err)?;
         if *self.last_saved_user_json.borrow() == json {
@@ -642,6 +671,19 @@ impl Store {
     pub fn set_expanded(&mut self, id: &str, expanded: bool) -> Result<(), String> {
         let node = self.find_page_mut(id).ok_or("page not found")?;
         node.expanded = expanded;
+        self.save_view_state()
+    }
+
+    pub fn view_positions(&self) -> &BTreeMap<String, ViewPos> {
+        &self.view_positions
+    }
+
+    pub fn set_view_positions(&mut self, entries: Vec<(String, ViewPos)>) -> Result<(), String> {
+        for (page_id, pos) in entries {
+            if self.find_page(&page_id).is_some() {
+                self.view_positions.insert(page_id, pos);
+            }
+        }
         self.save_view_state()
     }
 
@@ -1351,6 +1393,44 @@ mod tests {
         assert!(store.find_page(&open_id).unwrap().expanded);
         assert_eq!(store.notebook.last_view.section_id.as_deref(), Some(sid.as_str()));
         assert_eq!(store.notebook.last_view.page_id.as_deref(), Some(open_id.as_str()));
+    }
+
+    #[test]
+    fn view_positions_survive_a_reopen_and_drop_pages_that_went_away() {
+        let dir = tempdir().unwrap();
+        let kept_id;
+        let gone_id;
+        {
+            let mut store = Store::open(dir.path()).unwrap();
+            let sid = section_id(&store);
+            kept_id = store.create_page(&sid, None, None).unwrap().id;
+            gone_id = store.create_page(&sid, None, None).unwrap().id;
+            let pos = ViewPos {
+                editor_scroll_top: 120.5,
+                editor_cursor: 42,
+                preview_scroll_top: 300.0,
+            };
+            store
+                .set_view_positions(vec![
+                    (kept_id.clone(), pos.clone()),
+                    (gone_id.clone(), pos),
+                    ("never-existed".to_string(), ViewPos::default()),
+                ])
+                .unwrap();
+            store.delete_page(&gone_id).unwrap();
+        }
+        let user_json = fs::read_to_string(dir.path().join(USER_STATE_FILE)).unwrap();
+        assert!(user_json.contains("viewPositions"));
+        assert!(!user_json.contains("never-existed"));
+        let notebook_json = fs::read_to_string(dir.path().join("notebook.json")).unwrap();
+        assert!(!notebook_json.contains("viewPositions"));
+
+        let store = Store::open(dir.path()).unwrap();
+        assert_eq!(store.view_positions().len(), 1);
+        let kept = store.view_positions().get(&kept_id).unwrap();
+        assert_eq!(kept.editor_cursor, 42);
+        assert_eq!(kept.editor_scroll_top, 120.5);
+        assert_eq!(kept.preview_scroll_top, 300.0);
     }
 
     #[test]

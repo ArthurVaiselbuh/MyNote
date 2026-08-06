@@ -95,8 +95,7 @@ are supported cross-platform builds off the same code.
 - **The results view peeks the selected hit** (`ResultPeek.svelte`) beside the
   list, behind its own splitter. It is inert — no `app.focus` target, no find
   panel, dead links — so the focus model and the Esc ladder are unchanged. It
-  scrolls to the first highlighted term rather than the hit's line number,
-  because the preview's blank-line spacers break any source-line-to-DOM mapping.
+  scrolls to the first highlighted term rather than the hit's line number.
 - **Theme:** dark only, but colors, focus alpha, and scroll speed are
   configurable in Settings and applied as CSS variables on the app root.
 - **Blank lines are WYSIWYG in the preview:** files keep the exact newlines
