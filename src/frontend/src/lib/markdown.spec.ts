@@ -19,7 +19,7 @@ describe("image width {width=N}", () => {
     const html = renderBody(
       "| A | B |\n| --- | --- |\n| ![i](x.png){width=99} | y |",
     );
-    expect(html).toContain("<table>");
+    expect(html).toContain("<table");
     expect(html).toContain('width="99"');
     expect((html.match(/<td>/g) ?? []).length).toBe(2);
   });
@@ -117,6 +117,27 @@ describe("color span [text]{...}", () => {
     const html = renderBody("[[x]{.red}](url)");
     expect(html).toContain('<a href="url">');
     expect(html).toContain(`color:${COLOR_PALETTE.red}`);
+  });
+});
+
+describe("body line attributes", () => {
+  const lineOf = (html: string, tag: string) =>
+    Number(new RegExp(`<${tag} data-line="(\\d+)"`).exec(html)?.[1] ?? -1);
+
+  it("reports the line each block starts on", () => {
+    const html = renderBody("first\n\nsecond\n\n# head");
+    expect(lineOf(html, "p")).toBe(0);
+    expect(lineOf(html, "h1")).toBe(4);
+  });
+
+  it("reports body lines, not the lines the spacer paragraphs shifted to", () => {
+    const html = renderBody("first\n\n\n\nlast");
+    expect(html).toContain('<p data-line="4">last</p>');
+  });
+
+  it("counts lines inside fences as written", () => {
+    const html = renderBody("```\na\n\n\nb\n```\n\nafter");
+    expect(html).toContain('<p data-line="7">after</p>');
   });
 });
 

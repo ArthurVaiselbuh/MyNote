@@ -155,6 +155,10 @@ export class App {
     return fs.existsSync(this.mdPath(id));
   }
 
+  get userStatePath() {
+    return path.join(this.notebookDir, "notebook.user.json");
+  }
+
   readNotebookJson(): unknown {
     return JSON.parse(fs.readFileSync(path.join(this.notebookDir, "notebook.json"), "utf8"));
   }

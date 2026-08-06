@@ -18,6 +18,12 @@ export interface LastView {
   pageId: string | null;
 }
 
+export interface ViewPos {
+  editorScrollTop: number;
+  editorCursor: number;
+  previewScrollTop: number;
+}
+
 export interface Notebook {
   sections: Section[];
   lastView: LastView;
@@ -212,6 +218,9 @@ export const api = {
     invoke<void>("set_expanded", { id, expanded }),
   setLastView: (sectionId: string | null, pageId: string | null) =>
     invoke<void>("set_last_view", { sectionId, pageId }),
+  getViewPositions: () => invoke<Record<string, ViewPos>>("get_view_positions"),
+  setViewPositions: (entries: [string, ViewPos][]) =>
+    invoke<void>("set_view_positions", { entries }),
   searchPages: (query: string, mode: "fuzzy" | "regex") =>
     invoke<SearchResults>("search_pages", { query, mode }),
   saveImage: (pageId: string, data: string, ext: string) =>

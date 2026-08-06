@@ -7,10 +7,11 @@ import type { FindCtl } from "./findCtl";
 import { labelOf } from "./keys/bindings";
 import { log } from "./log";
 import { peekCtl } from "./peekCtl";
-import { previewFindCtl } from "./previewFindCtl";
+import { previewCtl } from "./previewCtl";
 import { escapeRegExp } from "./regex";
 import { app, type FindPrefill, type ModalName, type Pane } from "./state/app.svelte";
 import { countPages, countSubtree, findNode, flatten, locate, sectionOfPage } from "./treeUtils";
+import { loadViewPositions, persistViewPositions, setModeAnchor } from "./viewPos";
 
 // the editor's CodeMirror find and the preview's DOM-highlight find are
 // mutually exclusive with the page view mode, so callers dispatch to whichever
@@ -18,7 +19,7 @@ import { countPages, countSubtree, findNode, flatten, locate, sectionOfPage } fr
 // so the peek's term highlights are what F3 steps through
 export function activeFindCtl(): FindCtl | null {
   if (app.view === "results") return peekCtl.current;
-  return app.mode === "preview" ? previewFindCtl.current : editorCtl.current;
+  return app.mode === "preview" ? previewCtl.current : editorCtl.current;
 }
 
 // ---------- notebook / boot ----------
@@ -32,6 +33,7 @@ export async function boot() {
   }
   try {
     const info = await api.openNotebook();
+    await loadViewPositions();
     applyNotebook(info);
   } catch (e) {
     app.status = String(e);
@@ -71,9 +73,12 @@ export async function openNotebookModal() {
 
 async function switchNotebook(open: () => Promise<NotebookInfo>) {
   await editorCtl.current?.save();
+  // while the store still belongs to the notebook being left
+  await persistViewPositions();
   const info = await open();
   closeModal();
   app.currentPageId = null;
+  await loadViewPositions();
   applyNotebook(info);
   try {
     app.git = await api.getGitStatus();
@@ -682,6 +687,11 @@ export function cycleFocus(dir: number) {
 
 export function toggleMode() {
   if (app.view !== "page" || !app.currentPageId) return;
+  // captured before the flip so the mode being entered can land on the spot the
+  // mode being left was showing
+  setModeAnchor(
+    (app.mode === "preview" ? previewCtl.current?.anchor() : editorCtl.current?.anchor()) ?? null,
+  );
   app.mode = app.mode === "edit" ? "preview" : "edit";
   app.focus = "editor";
   if (app.mode === "edit") app.editorFocusReq++;
@@ -695,6 +705,7 @@ export function openFind() {
 
 export async function saveNow() {
   await editorCtl.current?.save();
+  await persistViewPositions();
   flashStatus("saved", 1500);
 }
 

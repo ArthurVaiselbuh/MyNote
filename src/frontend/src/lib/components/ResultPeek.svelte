@@ -99,9 +99,9 @@
     else container.scrollTop = 0;
   }
 
-  // the peek can't scroll to the hit's own line: renderBody's blank-line spacer
-  // paragraphs break any source-line-to-DOM mapping. Landing on the first match
-  // is both cheaper and closer to what the reader is looking for.
+  // landing on the first match rather than the hit's own line is deliberate:
+  // it is what the reader searched for, and it holds even when the hit sits
+  // outside the range the line number would have scrolled to.
   function goTo(idx: number) {
     matches[currentIdx]?.classList.remove("current");
     if (!matches.length) {
