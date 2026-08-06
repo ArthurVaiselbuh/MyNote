@@ -1,13 +1,15 @@
 <script lang="ts">
   import { onMount, tick } from "svelte";
   import * as act from "../actions";
-  import { applyHighlights, clearHighlights } from "../highlight";
+  import { focusSelect } from "../autofocus";
+  import { applyHighlights, clearHighlights, setCurrentMatch } from "../highlight";
   import { modPressed } from "../keys/platform";
+  import { wrapIndex } from "../listIndex";
   import { renderBody } from "../markdown";
   import { openPreviewMenu } from "../menus";
-  import { previewCtl } from "../previewCtl";
+  import { previewCtl } from "../paneCtl";
   import { previewPositionAt, scrollPreviewToBodyLine } from "../previewLines";
-  import { escapeRegExp } from "../regex";
+  import { pageIdFromHref, searchRegex } from "../regex";
   import { app, type FindPrefill } from "../state/app.svelte";
   import { takeModeAnchor, viewPosChanged, viewPosOf } from "../viewPos";
 
@@ -22,68 +24,38 @@
   let query = $state("");
   let caseSensitive = $state(false);
   let regexMode = $state(false);
-  let error = $state("");
   let matchCount = $state(0);
-  // plain (non-reactive): goTo() reads the previous value to unhighlight it,
-  // then writes the new one — as $state that read+write in the same pass
-  // that runSearch() runs under would make the search $effect depend on and
-  // mutate its own dependency, looping. displayIdx below is the read-only
-  // reactive mirror the template renders from.
-  let currentIdx = -1;
-  let displayIdx = $state(-1);
+  let currentIdx = $state(-1);
+  // plain (non-reactive): showMatches() runs inside the search $effect and reads
+  // both back in the same pass, so as $state the effect would depend on its own
+  // writes and loop. currentIdx is write-only there, so it stays reactive for
+  // the template.
   let matches: HTMLElement[] = [];
+  let currentEl: HTMLElement | null = null;
 
-  function buildRegex(): RegExp | null {
-    if (!query) return null;
-    try {
-      return new RegExp(regexMode ? query : escapeRegExp(query), caseSensitive ? "g" : "gi");
-    } catch {
-      return null;
-    }
-  }
+  const findRe = $derived(open ? searchRegex(query, regexMode, caseSensitive) : null);
+  const error = $derived(open && query && !findRe ? "Invalid regex" : "");
 
-  function runSearch() {
+  function showMatches(re: RegExp | null) {
     if (containerEl) clearHighlights(containerEl);
-    matches = [];
-    matchCount = 0;
+    currentEl = null;
     currentIdx = -1;
-    displayIdx = -1;
-    error = "";
-    if (!open || !query || !containerEl) return;
-    const re = buildRegex();
-    if (!re) {
-      error = "Invalid regex";
-      return;
-    }
-    matches = applyHighlights(containerEl, re);
+    matches = re && containerEl ? applyHighlights(containerEl, re) : [];
     matchCount = matches.length;
     if (matches.length) goTo(0);
   }
 
   function goTo(idx: number) {
-    matches[currentIdx]?.classList.remove("current");
     currentIdx = idx;
-    displayIdx = idx;
-    const m = matches[currentIdx];
-    if (m) {
-      m.classList.add("current");
-      m.scrollIntoView({ block: "center" });
-    }
+    currentEl = setCurrentMatch(currentEl, matches[idx] ?? null);
   }
 
-  function next() {
-    if (matches.length) goTo((currentIdx + 1) % matches.length);
-  }
-  function prev() {
-    if (matches.length) goTo((currentIdx - 1 + matches.length) % matches.length);
+  function step(delta: number) {
+    if (matches.length) goTo(wrapIndex(currentIdx + delta, matches.length));
   }
 
   $effect(() => {
-    void query;
-    void caseSensitive;
-    void regexMode;
-    void open;
-    runSearch();
+    showMatches(findRe);
   });
 
   // switching pages while staying in preview keeps this component mounted, so a
@@ -122,47 +94,50 @@
   }
 
   function currentMatch(): HTMLElement | null {
-    return (open && matches[currentIdx]) || null;
+    return open ? currentEl : null;
   }
 
-  function keys(e: KeyboardEvent) {
+  function onFindKeydown(e: KeyboardEvent) {
     if (e.key === "Enter") {
       e.preventDefault();
-      if (e.shiftKey) prev();
-      else next();
+      step(e.shiftKey ? -1 : 1);
     }
+  }
+
+  function openFind(prefill?: FindPrefill | null) {
+    open = true;
+    if (prefill?.text) {
+      query = prefill.text;
+      regexMode = prefill.regex;
+      caseSensitive = false;
+    }
+    void tick().then(() => focusSelect(inputEl));
+  }
+
+  function closeFind() {
+    const was = open;
+    open = false;
+    return was;
+  }
+
+  function anchor() {
+    const pageId = app.currentPageId;
+    if (!containerEl || !pageId) return null;
+    const match = currentMatch();
+    const position = previewPositionAt(containerEl, match);
+    if (!position) return null;
+    return { pageId, ...position, text: match?.textContent ?? undefined };
   }
 
   onMount(() => {
     previewCtl.current = {
-      openFind(prefill?: FindPrefill | null) {
-        open = true;
-        if (prefill?.text) {
-          query = prefill.text;
-          regexMode = prefill.regex;
-          caseSensitive = false;
-        }
-        void tick().then(() => {
-          inputEl?.focus();
-          inputEl?.select();
-        });
-      },
-      closeFind() {
-        const was = open;
-        open = false;
-        return was;
-      },
+      openFind,
+      closeFind,
       findOpen: () => open,
-      findNext: next,
-      findPrev: prev,
-      anchor() {
-        const pageId = app.currentPageId;
-        if (!containerEl || !pageId) return null;
-        const match = currentMatch();
-        const position = previewPositionAt(containerEl, match);
-        if (!position) return null;
-        return { pageId, ...position, text: match?.textContent ?? undefined };
-      },
+      findNext: () => step(1),
+      findPrev: () => step(-1),
+      scroller: () => containerEl ?? null,
+      anchor,
     };
     return () => {
       previewCtl.current = null;
@@ -174,8 +149,8 @@
     if (!link) return;
     e.preventDefault();
     const href = link.getAttribute("href") ?? "";
-    const match = href.match(/([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})\.md$/i);
-    if (match) act.openPageById(match[1]);
+    const pageId = pageIdFromHref(href);
+    if (pageId) act.openPageById(pageId);
     else if (modPressed(e)) act.openExternalLink(href);
   }
 </script>
@@ -183,7 +158,7 @@
 <div class="preview-wrap">
   {#if open}
     <div class="preview-find">
-      <input placeholder="Find…" bind:this={inputEl} bind:value={query} onkeydown={keys} />
+      <input placeholder="Find…" bind:this={inputEl} bind:value={query} onkeydown={onFindKeydown} />
       <button
         class="mode"
         class:active={caseSensitive}
@@ -203,7 +178,7 @@
       {#if error}
         <span class="count error">{error}</span>
       {:else}
-        <span class="count">{matchCount ? `${displayIdx + 1}/${matchCount}` : "0 hits"}</span>
+        <span class="count">{matchCount ? `${currentIdx + 1}/${matchCount}` : "0 hits"}</span>
       {/if}
     </div>
   {/if}

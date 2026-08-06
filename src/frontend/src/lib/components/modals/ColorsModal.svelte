@@ -1,18 +1,21 @@
 <script lang="ts">
   import * as act from "../../actions";
-  import { defaultSettings } from "../../api";
-  import { app } from "../../state/app.svelte";
+  import { app, defaultSettings } from "../../state/app.svelte";
 
   function persist() {
     void act.persistSettings();
   }
 
+  const COLOR_ROWS = [
+    { key: "textColor", id: "set-text", label: "Text color" },
+    { key: "backgroundColor", id: "set-bg", label: "Background color" },
+    { key: "panelColor", id: "set-panel", label: "Panel color" },
+    { key: "accentColor", id: "set-accent", label: "Accent color" },
+    { key: "headingColor", id: "set-heading", label: "Heading color" },
+  ] as const;
+
   function resetColors() {
-    app.settings.textColor = defaultSettings.textColor;
-    app.settings.backgroundColor = defaultSettings.backgroundColor;
-    app.settings.panelColor = defaultSettings.panelColor;
-    app.settings.accentColor = defaultSettings.accentColor;
-    app.settings.headingColor = defaultSettings.headingColor;
+    for (const row of COLOR_ROWS) app.settings[row.key] = defaultSettings[row.key];
     app.settings.focusAlpha = defaultSettings.focusAlpha;
     persist();
   }
@@ -22,26 +25,12 @@
   <div class="modal" style:width="480px" role="dialog">
     <div class="modal-title">Colors &amp; theme</div>
 
-    <div class="settings-row">
-      <label for="set-text">Text color</label>
-      <input id="set-text" type="color" bind:value={app.settings.textColor} onchange={persist} />
-    </div>
-    <div class="settings-row">
-      <label for="set-bg">Background color</label>
-      <input id="set-bg" type="color" bind:value={app.settings.backgroundColor} onchange={persist} />
-    </div>
-    <div class="settings-row">
-      <label for="set-panel">Panel color</label>
-      <input id="set-panel" type="color" bind:value={app.settings.panelColor} onchange={persist} />
-    </div>
-    <div class="settings-row">
-      <label for="set-accent">Accent color</label>
-      <input id="set-accent" type="color" bind:value={app.settings.accentColor} onchange={persist} />
-    </div>
-    <div class="settings-row">
-      <label for="set-heading">Heading color</label>
-      <input id="set-heading" type="color" bind:value={app.settings.headingColor} onchange={persist} />
-    </div>
+    {#each COLOR_ROWS as row (row.key)}
+      <div class="settings-row">
+        <label for={row.id}>{row.label}</label>
+        <input id={row.id} type="color" bind:value={app.settings[row.key]} onchange={persist} />
+      </div>
+    {/each}
     <div class="settings-row">
       <label for="set-alpha">Focus highlight ({app.settings.focusAlpha.toFixed(2)})</label>
       <input
@@ -59,7 +48,7 @@
     </div>
 
     <div class="modal-buttons">
-      <button class="primary" onclick={() => (app.modal = "settings")}>Back</button>
+      <button class="primary" onclick={() => act.escapeModal()}>Back</button>
     </div>
   </div>
 </div>

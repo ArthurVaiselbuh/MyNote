@@ -1,8 +1,22 @@
 import { describe, expect, it } from "vitest";
-import { diffText } from "./diff";
+import { LCS_CELL_CAP, diffText, type Span } from "./diff";
 
-function lineCount(text: string): number {
-  return text === "" ? 0 : text.split("\n").length;
+function textOf(spans: Span[] | null | undefined): string | null {
+  return spans ? spans.map((s) => s.text).join("") : null;
+}
+
+function marksOf(spans: Span[] | null | undefined): [string, boolean][] | undefined {
+  return spans?.map((s): [string, boolean] => [s.text, s.hl]);
+}
+
+function numberedLines(count: number, prefix: string): string[] {
+  return Array.from({ length: count }, (_, i) => `${prefix}${i}`);
+}
+
+function expectStrictlyIncreasing(values: number[]): void {
+  for (let i = 1; i < values.length; i++) {
+    expect(values[i]).toBeGreaterThan(values[i - 1]);
+  }
 }
 
 describe("diffText — identical / trivial input", () => {
@@ -23,7 +37,7 @@ describe("diffText — identical / trivial input", () => {
   it("empty left is all additions, covering every line", () => {
     const res = diffText("", "x\ny\nz");
     expect(res.rows.every((r) => r.kind === "add")).toBe(true);
-    expect(res.rows.map((r) => r.right?.[0].text)).toEqual(["x", "y", "z"]);
+    expect(res.rows.map((r) => textOf(r.right))).toEqual(["x", "y", "z"]);
     expect(res.stats.added).toBe(3);
   });
 });
@@ -31,21 +45,21 @@ describe("diffText — identical / trivial input", () => {
 describe("diffText — whole-file coverage (never folded)", () => {
   it("pure insertion at the end keeps every original line present", () => {
     const res = diffText("a\nb\nc", "a\nb\nc\nd\ne");
-    const leftLines = res.rows.filter((r) => r.leftNo !== null).map((r) => r.left?.[0].text);
+    const leftLines = res.rows.filter((r) => r.leftNo !== null).map((r) => textOf(r.left));
     expect(leftLines).toEqual(["a", "b", "c"]);
-    const rightLines = res.rows.map((r) => r.right?.map((s) => s.text).join("") ?? null).filter((x) => x !== null);
+    const rightLines = res.rows.map((r) => textOf(r.right)).filter((text) => text !== null);
     expect(rightLines).toEqual(["a", "b", "c", "d", "e"]);
   });
 
   it("pure deletion at the start keeps every remaining line present", () => {
     const res = diffText("x\ny\na\nb", "a\nb");
-    const rightLines = res.rows.filter((r) => r.rightNo !== null).map((r) => r.right?.[0].text);
+    const rightLines = res.rows.filter((r) => r.rightNo !== null).map((r) => textOf(r.right));
     expect(rightLines).toEqual(["a", "b"]);
     expect(res.stats.removed).toBe(2);
   });
 
   it("a change deep inside a large file reports correct line numbers on both sides", () => {
-    const base = Array.from({ length: 1000 }, (_, i) => `line ${i}`);
+    const base = numberedLines(1000, "line ");
     const left = base.join("\n");
     const modified = [...base];
     modified[500] = "CHANGED";
@@ -68,12 +82,12 @@ describe("diffText — word-level highlighting", () => {
     const res = diffText("the quick fox", "the slow fox");
     expect(res.stats.changed).toBe(1);
     const row = res.rows.find((r) => r.kind === "change")!;
-    expect(row.left?.map((s) => [s.text, s.hl])).toEqual([
+    expect(marksOf(row.left)).toEqual([
       ["the ", false],
       ["quick", true],
       [" fox", false],
     ]);
-    expect(row.right?.map((s) => [s.text, s.hl])).toEqual([
+    expect(marksOf(row.right)).toEqual([
       ["the ", false],
       ["slow", true],
       [" fox", false],
@@ -123,12 +137,13 @@ describe("diffText — trailing newline / CRLF", () => {
 
 describe("diffText — degraded fallback", () => {
   it("still returns every line of both sides when the LCS cap is exceeded", () => {
-    const left = Array.from({ length: 3000 }, (_, i) => `left-only-${i}`).join("\n");
-    const right = Array.from({ length: 3000 }, (_, i) => `right-only-${i}`).join("\n");
+    const sideLength = Math.ceil(Math.sqrt(LCS_CELL_CAP)) + 1;
+    const left = numberedLines(sideLength, "left-only-").join("\n");
+    const right = numberedLines(sideLength, "right-only-").join("\n");
     const res = diffText(left, right);
     expect(res.degraded).toBe(true);
-    expect(res.rows.filter((r) => r.leftNo !== null).length).toBe(lineCount(left));
-    expect(res.rows.filter((r) => r.rightNo !== null).length).toBe(lineCount(right));
+    expect(res.rows.filter((r) => r.leftNo !== null).length).toBe(sideLength);
+    expect(res.rows.filter((r) => r.rightNo !== null).length).toBe(sideLength);
   });
 });
 
@@ -142,12 +157,8 @@ describe("diffText — unified rows", () => {
   it("anchors point at run starts and are strictly increasing", () => {
     const res = diffText("a\nb\nc\nd\ne\nf", "a\nX\nc\nd\nY\nf");
     expect(res.anchors.length).toBe(2);
-    for (let i = 1; i < res.anchors.length; i++) {
-      expect(res.anchors[i]).toBeGreaterThan(res.anchors[i - 1]);
-    }
+    expectStrictlyIncreasing(res.anchors);
     expect(res.unifiedAnchors.length).toBe(2);
-    for (let i = 1; i < res.unifiedAnchors.length; i++) {
-      expect(res.unifiedAnchors[i]).toBeGreaterThan(res.unifiedAnchors[i - 1]);
-    }
+    expectStrictlyIncreasing(res.unifiedAnchors);
   });
 });

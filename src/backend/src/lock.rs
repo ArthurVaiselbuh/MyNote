@@ -46,6 +46,11 @@ fn acquire_exclusive(path: &Path) -> Result<File, LockError> {
 }
 
 #[cfg(unix)]
+const FORK_RACE_BUDGET: Duration = Duration::from_millis(500);
+#[cfg(unix)]
+const RETRY_PAUSE: Duration = Duration::from_millis(2);
+
+#[cfg(unix)]
 fn acquire_exclusive(path: &Path) -> Result<File, LockError> {
     use std::io::ErrorKind;
     use std::os::unix::io::AsRawFd;
@@ -68,20 +73,12 @@ fn acquire_exclusive(path: &Path) -> Result<File, LockError> {
         }
 
         let e = std::io::Error::last_os_error();
-        if Instant::now() >= deadline {
-            return match e.kind() {
-                ErrorKind::WouldBlock => Err(LockError::HeldElsewhere),
-                _ => Err(LockError::Io(format!("flock: {e}"))),
-            };
-        }
+        let within_budget = Instant::now() < deadline;
         match e.kind() {
-            ErrorKind::Interrupted => continue,
-            ErrorKind::WouldBlock => std::thread::sleep(RETRY_PAUSE),
+            ErrorKind::Interrupted if within_budget => continue,
+            ErrorKind::WouldBlock if within_budget => std::thread::sleep(RETRY_PAUSE),
+            ErrorKind::WouldBlock => return Err(LockError::HeldElsewhere),
             _ => return Err(LockError::Io(format!("flock: {e}"))),
         }
     }
 }
-#[cfg(unix)]
-const FORK_RACE_BUDGET: Duration = Duration::from_millis(500);
-#[cfg(unix)]
-const RETRY_PAUSE: Duration = Duration::from_millis(2);

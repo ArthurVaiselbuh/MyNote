@@ -2,6 +2,7 @@
   import * as act from "../../actions";
   import type { RecentNotebook } from "../../api";
   import { autofocus } from "../../autofocus";
+  import { clampIndex } from "../../listIndex";
   import { app } from "../../state/app.svelte";
 
   type Item =
@@ -9,7 +10,7 @@
     | { kind: "new" }
     | { kind: "browse" };
 
-  const items = $derived.by((): Item[] => [
+  const items = $derived<Item[]>([
     ...app.recentNotebooks.map((nb): Item => ({ kind: "recent", nb })),
     { kind: "new" },
     { kind: "browse" },
@@ -18,7 +19,7 @@
   let sel = $state(0);
 
   $effect(() => {
-    if (sel >= items.length) sel = Math.max(0, items.length - 1);
+    if (sel >= items.length) sel = clampIndex(sel, items.length);
   });
 
   function choose(item: Item) {
@@ -34,12 +35,9 @@
   }
 
   function keys(e: KeyboardEvent) {
-    if (e.key === "ArrowDown") {
+    if (e.key === "ArrowDown" || e.key === "ArrowUp") {
       e.preventDefault();
-      sel = Math.min(items.length - 1, sel + 1);
-    } else if (e.key === "ArrowUp") {
-      e.preventDefault();
-      sel = Math.max(0, sel - 1);
+      sel = clampIndex(sel + (e.key === "ArrowDown" ? 1 : -1), items.length);
     } else if (e.key === "Enter") {
       e.preventDefault();
       if (items[sel]) choose(items[sel]);

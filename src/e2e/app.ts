@@ -1,4 +1,11 @@
-import { chromium, expect, test as base, type Browser, type Page } from "@playwright/test";
+import {
+  chromium,
+  expect,
+  test as base,
+  type Browser,
+  type Page,
+  type TestInfo,
+} from "@playwright/test";
 import { execFileSync, execSync, spawn, type ChildProcess } from "node:child_process";
 import fs from "node:fs";
 import net from "node:net";
@@ -9,8 +16,17 @@ const SETTINGS = path.join(process.env.APPDATA!, "MyNote", "settings.json");
 const SETTINGS_BAK = `${SETTINGS}.e2e-bak`;
 const CDP_PORT = 9222;
 const CDP_URL = `http://127.0.0.1:${CDP_PORT}`;
+/** 1x1 PNG — the smallest thing the note-asset protocol can be asked to serve. */
+const TINY_PNG = Buffer.from(
+  "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg==",
+  "base64",
+);
 
-const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
+export const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
+
+/** `line 0 of filler` … — a body long enough to scroll. */
+export const fillerBody = (lines: number) =>
+  Array.from({ length: lines }, (_, i) => `line ${i} of filler`).join("\n");
 
 export class App {
   page!: Page;
@@ -18,7 +34,7 @@ export class App {
   private readonly dataDir: string;
   private child: ChildProcess | null = null;
   private browser: Browser | null = null;
-  private exited: Promise<void> = Promise.resolve();
+  private exited: Promise<Exit> = Promise.resolve({ code: 0, signal: null });
   private closing = false;
   /** Set when the exe dies on its own. Every Playwright call then fails with a
    * bare "Target page… has been closed", which names the assertion that
@@ -35,7 +51,7 @@ export class App {
     const webviewLogFile = path.join(this.dataDir, "webview2-chrome-debug.log");
     fs.mkdirSync(this.dataDir, { recursive: true });
     let stderr = "";
-    this.child = spawn(EXE, [], {
+    const child = spawn(EXE, [], {
       env: {
         ...process.env,
         // wry always sets WebView2's AdditionalBrowserArguments COM option itself
@@ -48,10 +64,11 @@ export class App {
       },
       stdio: ["ignore", "ignore", "pipe"],
     });
-    this.child.stderr!.on("data", (chunk: Buffer) => (stderr += chunk.toString()));
+    this.child = child;
+    child.stderr!.on("data", (chunk: Buffer) => (stderr += chunk.toString()));
     this.closing = false;
-    const exited = new Promise<{ code: number | null; signal: NodeJS.Signals | null }>((resolve) =>
-      this.child!.once("exit", (code, signal) => {
+    this.exited = new Promise<Exit>((resolve) =>
+      child.once("exit", (code, signal) => {
         if (!this.closing) {
           this.unexpectedExit =
             `mynote.exe exited on its own mid-test (code ${code}, signal ${signal})` +
@@ -60,14 +77,13 @@ export class App {
         resolve({ code, signal });
       }),
     );
-    this.exited = exited.then(() => {});
     try {
       // Race the CDP attach against the process exiting early — a crash-on-launch
       // otherwise looks identical to a slow-to-start exe (both time out on connect),
       // hiding the exit code/stderr that would tell them apart.
       this.browser = await Promise.race([
         connectWithRetry(),
-        exited.then(({ code, signal }) => {
+        this.exited.then(({ code, signal }) => {
           throw new Error(
             `mynote.exe exited before opening a CDP port (code ${code}, signal ${signal})` +
               (stderr ? `\nstderr:\n${stderr}` : ""),
@@ -83,16 +99,13 @@ export class App {
       if (m.type() === "error") console.log(`[console.error] ${m.text()}`);
     });
     // "Notes" (not "—") means the notebook finished loading, not just the shell
-    await expect(this.page.locator(".section-strip .name")).toContainText("Notes", {
-      timeout: 45_000,
-    });
+    await expect(this.sectionName).toContainText("Notes", { timeout: 45_000 });
     await this.dismissWelcome();
   }
 
-  /** First run pops the onboarding tour, which would eat keystrokes — mark it
-   * seen (survives relaunch in the shared data dir) and close it. */
+  /** First run pops the onboarding tour, which would eat keystrokes. Closing it
+   * is also what marks it seen, so a relaunch in the same data dir stays clear. */
   private async dismissWelcome() {
-    await this.page.evaluate(() => localStorage.setItem("mynote.welcome.v1", "1"));
     const welcome = this.page.locator(".welcome-backdrop");
     if (await welcome.count()) {
       await this.page.keyboard.press("Escape");
@@ -135,16 +148,77 @@ export class App {
     await this.launch();
   }
 
+  get rows() {
+    return this.page.locator(".tree .row");
+  }
+
+  get rowTitles() {
+    return this.page.locator(".tree .row .title");
+  }
+
+  get selectedTitle() {
+    return this.page.locator(".tree .row.selected .title");
+  }
+
+  get titleInput() {
+    return this.page.locator(".title-input");
+  }
+
+  get editorBody() {
+    return this.page.locator(".cm-content");
+  }
+
+  get sectionName() {
+    return this.page.locator(".section-strip .name");
+  }
+
+  get modal() {
+    return this.page.locator(".modal");
+  }
+
+  get modalBackdrop() {
+    return this.page.locator(".modal-backdrop");
+  }
+
+  /** A renaming row shows an input instead of its title, so it can no longer be
+   * found by text — only one rename is ever open at a time. */
+  get renameInput() {
+    return this.page.locator(".tree .row input.rename");
+  }
+
+  row(title: string) {
+    return this.page.locator(".tree .row", { hasText: title });
+  }
+
   treeIds(): Promise<string[]> {
-    return this.page
-      .locator(".tree .row")
-      .evaluateAll((rows) => rows.map((r) => (r as HTMLElement).dataset.id!));
+    return this.rows.evaluateAll((rows) => rows.map((r) => (r as HTMLElement).dataset.id!));
   }
 
   treeDepths(): Promise<number[]> {
-    return this.page
-      .locator(".tree .row")
-      .evaluateAll((rows) => rows.map((r) => r.querySelectorAll(".guide").length));
+    return this.rows.evaluateAll((rows) => rows.map((r) => r.querySelectorAll(".guide").length));
+  }
+
+  /** Text of the editor line the primary caret currently sits on. */
+  caretLineText(): Promise<string> {
+    return this.page.locator(".cm-editor").evaluate((root) => {
+      const caret = root.querySelector(".cm-cursor-primary");
+      if (!caret) return "";
+      const y = caret.getBoundingClientRect().top + 1;
+      return (
+        [...root.querySelectorAll<HTMLElement>(".cm-line")].find((line) => {
+          const box = line.getBoundingClientRect();
+          return box.top <= y && box.bottom >= y;
+        })?.textContent ?? ""
+      );
+    });
+  }
+
+  scrollTopOf(scroller: string): Promise<number> {
+    return this.page.locator(scroller).evaluate((el) => el.scrollTop);
+  }
+
+  scrollTo(scroller: string, top: number) {
+    return this.page.locator(scroller).evaluate((el, to) => (el.scrollTop = to), top);
   }
 
   mdPath(id: string) {
@@ -155,12 +229,33 @@ export class App {
     return fs.existsSync(this.mdPath(id));
   }
 
-  get userStatePath() {
-    return path.join(this.notebookDir, "notebook.user.json");
+  /** Drops a real image into a page's asset dir, returning its path on disk. */
+  writeAsset(pageId: string, name: string): string {
+    const dir = path.join(this.notebookDir, "assets", pageId);
+    fs.mkdirSync(dir, { recursive: true });
+    const file = path.join(dir, name);
+    fs.writeFileSync(file, TINY_PNG);
+    return file;
+  }
+
+  get agentsPath() {
+    return path.join(this.notebookDir, "AGENTS.md");
+  }
+
+  readMd(id: string): string {
+    return fs.readFileSync(this.mdPath(id), "utf8");
   }
 
   readNotebookJson(): unknown {
-    return JSON.parse(fs.readFileSync(path.join(this.notebookDir, "notebook.json"), "utf8"));
+    return this.readJson("notebook.json");
+  }
+
+  readUserJson(): { viewPositions?: Record<string, Record<string, number>> } {
+    return this.readJson("notebook.user.json");
+  }
+
+  private readJson<T>(name: string): T {
+    return JSON.parse(fs.readFileSync(path.join(this.notebookDir, name), "utf8")) as T;
   }
 
   /** Waits for the confirm dialog and accepts it via its autofocused button. */
@@ -172,48 +267,127 @@ export class App {
 
   /** Ctrl+N, wait for the row to appear, Esc back to the tree. */
   async newPageToTree(expectedCount: number) {
-    await this.page.keyboard.press("Control+n");
-    await expect(this.page.locator(".tree .row")).toHaveCount(expectedCount);
-    // the title input grabs focus via rAF — let it land before Esc, or the
-    // next keypress races it and gets eaten by the typing guard
-    const title = this.page.locator(".title-input");
-    await expect(title).toBeFocused();
+    await this.startPage("Control+n", expectedCount);
     await this.page.keyboard.press("Escape");
-    await expect(title).not.toBeFocused();
+    await expect(this.titleInput).not.toBeFocused();
   }
 
   /** Ctrl+N with a real title, committed to tree + disk; ends in the tree. */
-  async newTitledPage(title: string, expectedCount: number) {
-    await this.page.keyboard.press("Control+n");
-    await expect(this.page.locator(".tree .row")).toHaveCount(expectedCount);
-    const input = this.page.locator(".title-input");
-    await expect(input).toBeFocused();
-    // the async page load resets the bound value to "Untitled" and collapses
-    // the auto-selection — wait for it to land or typing races the reset
-    await expect(input).toHaveValue("Untitled");
+  newTitledPage(title: string, expectedCount: number, typeDelay?: number) {
+    return this.createTitledPage("Control+n", title, expectedCount, typeDelay);
+  }
+
+  /** Ctrl+Enter with a real title, nested under the selection; ends in the tree. */
+  newTitledSubpage(title: string, expectedCount: number, typeDelay?: number) {
+    return this.createTitledPage("Control+Enter", title, expectedCount, typeDelay);
+  }
+
+  private async createTitledPage(
+    chord: string,
+    title: string,
+    expectedCount: number,
+    typeDelay?: number,
+  ) {
+    await this.startPage(chord, expectedCount);
     await this.page.keyboard.press("Control+a");
-    await this.page.keyboard.type(title);
+    await this.page.keyboard.type(title, { delay: typeDelay });
     await this.page.keyboard.press("Control+s");
-    await expect(this.page.locator(".tree .row.selected .title")).toHaveText(title);
+    await expect(this.selectedTitle).toHaveText(title);
     await this.page.keyboard.press("Escape");
-    await expect(input).not.toBeFocused();
+    await expect(this.titleInput).not.toBeFocused();
+  }
+
+  /** Creates a page and leaves the caret in its title input, settled. */
+  private async startPage(chord: string, expectedCount: number) {
+    await this.page.keyboard.press(chord);
+    await expect(this.rows).toHaveCount(expectedCount);
+    // the title input grabs focus via rAF — let it land before the next key, or
+    // that key races it and gets eaten by the typing guard
+    await expect(this.titleInput).toBeFocused();
+    // the async page load then resets the bound value to "Untitled" and
+    // collapses the auto-selection — wait for it or typing races the reset
+    await expect(this.titleInput).toHaveValue("Untitled");
+  }
+
+  /** Ctrl+2 into the body with everything selected, ready to be overtyped. */
+  async selectWholeBody() {
+    await this.page.keyboard.press("Control+2");
+    await expect(this.editorBody).toBeFocused();
+    await this.page.keyboard.press("Control+a");
   }
 
   /** Replaces the whole body of the current page and saves; ends in the tree. */
   async setBody(body: string) {
-    await this.page.keyboard.press("Control+2");
-    const cm = this.page.locator(".cm-content");
-    await expect(cm).toBeFocused();
-    await this.page.keyboard.press("Control+a");
+    await this.selectWholeBody();
     await this.page.keyboard.type(body);
     await this.page.keyboard.press("Control+s");
     await this.page.keyboard.press("Escape");
-    await expect(cm).not.toBeFocused();
+    await expect(this.editorBody).not.toBeFocused();
   }
 
   async newPageWithBody(title: string, body: string, expectedCount: number) {
     await this.newTitledPage(title, expectedCount);
     await this.setBody(body);
+  }
+
+  /** Ctrl+Shift+N, name the section (bare Enter keeps "New Section"); ends in
+   * the new section with it current. */
+  async newSection(name?: string, typeDelay?: number) {
+    await this.page.keyboard.press("Control+Shift+N");
+    await expect(this.page.locator(".section-strip input")).toBeFocused();
+    if (name) await this.page.keyboard.type(name, { delay: typeDelay });
+    await this.page.keyboard.press("Enter");
+    await expect(this.sectionName).toContainText(name ?? "New Section");
+  }
+
+  /** Opens the page whose tree row carries `title`, in whatever view is up. */
+  async openPage(title: string) {
+    await this.row(title).click();
+    await expect(this.titleInput).toHaveValue(title);
+  }
+
+  /** Ctrl+K, run `query`, and wait for the results view to answer. */
+  async search(query: string) {
+    await this.page.keyboard.press("Control+k");
+    await expect(this.page.locator(".search-bar input")).toBeFocused();
+    await this.page.keyboard.type(query);
+    await this.page.keyboard.press("Enter");
+  }
+
+  /** The `?` overlay. The chord is Shift+the base "/" key — `press("?")` alone
+   * sends no shiftKey, so the dispatcher never sees the binding. */
+  async openHelp() {
+    await this.page.keyboard.press("Shift+Slash");
+    await expect(this.page.locator(".help-group").first()).toBeVisible();
+  }
+
+  /** Ctrl+, → Keyboard shortcuts → Customize…; ends on the binding list. */
+  async openKeybindings() {
+    await this.page.keyboard.press("Control+,");
+    await this.page
+      .locator(".settings-row", { hasText: "Keyboard shortcuts" })
+      .getByRole("button")
+      .click();
+    await expect(this.page.locator(".keybind-list")).toBeVisible();
+  }
+
+  keybindRow(commandLabel: string) {
+    return this.page.locator(".keybind-row", { hasText: commandLabel }).first();
+  }
+
+  /** Captures `chord` onto a command from the open keybindings pane. */
+  async rebind(commandLabel: string, chord: string, shownAs: string) {
+    const row = this.keybindRow(commandLabel);
+    await row.getByRole("button", { name: "Change…" }).click();
+    await this.page.keyboard.press(chord);
+    await expect(row.locator("kbd")).toHaveText(shownAs);
+  }
+
+  /** Esc out of the settings stack (keybindings → settings → closed). */
+  async closeSettings() {
+    await this.page.keyboard.press("Escape");
+    await this.page.keyboard.press("Escape");
+    await expect(this.modalBackdrop).toHaveCount(0);
   }
 
   /** Ctrl+, → tick "Version history" → wait for the interval field → close.
@@ -227,7 +401,7 @@ export class App {
     }
     await expect(this.page.locator("#set-git-interval")).toBeVisible();
     await this.page.keyboard.press("Escape");
-    await expect(this.page.locator(".modal-backdrop")).toHaveCount(0);
+    await expect(this.modalBackdrop).toHaveCount(0);
   }
 }
 
@@ -242,6 +416,10 @@ export function hasGit(): boolean {
     return false;
   }
 }
+
+export const NO_GIT_REASON = "git not found on PATH — history is inert without it";
+
+type Exit = { code: number | null; signal: NodeJS.Signals | null };
 
 function quietly(cmd: string) {
   try {
@@ -271,7 +449,8 @@ function portIsOpen(): Promise<boolean> {
   });
 }
 
-function portHolder(): { pid: number; name: string; parent: string } | null {
+/** Names the process listening on the CDP port, for the "still in use" error. */
+function portHolder(): { pid: number; description: string } | null {
   try {
     const script =
       `$owner = @(Get-NetTCPConnection -LocalPort ${CDP_PORT} -State Listen -ErrorAction SilentlyContinue)[0].OwningProcess; ` +
@@ -284,25 +463,29 @@ function portHolder(): { pid: number; name: string; parent: string } | null {
     }).trim();
     if (!out) return null;
     const [pid, name, parent] = out.split("|");
-    return { pid: Number(pid), name: name || "unknown process", parent: parent || "" };
+    return {
+      pid: Number(pid),
+      description: `${name || "unknown process"} (pid ${pid}${parent ? `, parent ${parent}` : ""})`,
+    };
   } catch {
     return null;
   }
 }
 
+const PORT_FREE_POLLS = 50;
+const PORT_FREE_POLL_MS = 200;
+
 async function waitForPortFree() {
-  for (let i = 0; i < 50; i++) {
+  for (let i = 0; i < PORT_FREE_POLLS; i++) {
     if (!(await portIsOpen())) return;
-    await sleep(200);
+    await sleep(PORT_FREE_POLL_MS);
   }
   const holder = portHolder();
-  const parent = holder?.parent ? `, parent ${holder.parent}` : "";
-  const who = holder ? `${holder.name} (pid ${holder.pid}${parent})` : "an unidentified process";
-  const pid = holder ? String(holder.pid) : "<pid>";
   throw new Error(
-    `CDP port ${CDP_PORT} is still in use by ${who} after 10s — likely an orphaned ` +
+    `CDP port ${CDP_PORT} is still in use by ${holder?.description ?? "an unidentified process"} ` +
+      `after ${(PORT_FREE_POLLS * PORT_FREE_POLL_MS) / 1000}s — likely an orphaned ` +
       `WebView2/mynote from a killed run. Close it and retry, e.g.:\n` +
-      `  powershell -Command "Stop-Process -Id ${pid} -Force"`,
+      `  powershell -Command "Stop-Process -Id ${holder?.pid ?? "<pid>"} -Force"`,
   );
 }
 
@@ -331,13 +514,17 @@ function runDiagnostic(cmd: string): string {
   }
 }
 
-/** Last ~8000 chars of the chromium `--log-file` WebView2 was launched with —
- * that log records DevTools server bind attempts/failures directly, which is
- * a more definitive signal than inferring from process/socket state alone. */
-function readLogTail(file: string, maxChars = 8_000): string {
+const LOG_TAIL_CHARS = 8_000;
+
+/** Tail of the chromium `--log-file` WebView2 was launched with — that log
+ * records DevTools server bind attempts/failures directly, which is a more
+ * definitive signal than inferring from process/socket state alone. */
+function readLogTail(file: string): string {
   try {
     const content = fs.readFileSync(file, "utf8");
-    return content.length > maxChars ? `…(truncated)…\n${content.slice(-maxChars)}` : content;
+    return content.length > LOG_TAIL_CHARS
+      ? `…(truncated)…\n${content.slice(-LOG_TAIL_CHARS)}`
+      : content;
   } catch (e) {
     return `<could not read: ${(e as Error).message}>`;
   }
@@ -374,7 +561,7 @@ function mynoteRunning(): boolean {
   return out.toLowerCase().includes("mynote.exe");
 }
 
-function swapSettingsToScratch(notebookDir: string) {
+function swapSettingsToScratch(notebookDir: string, overrides: object) {
   fs.mkdirSync(path.dirname(SETTINGS), { recursive: true });
   // a leftover backup means a previous run crashed before restoring — the
   // live file is scratch junk, the backup is the user's real settings
@@ -385,7 +572,7 @@ function swapSettingsToScratch(notebookDir: string) {
   if (fs.existsSync(SETTINGS)) fs.copyFileSync(SETTINGS, SETTINGS_BAK);
   fs.writeFileSync(
     SETTINGS,
-    JSON.stringify({ notebookPath: notebookDir, window: null, logLevel: "verbose" }),
+    JSON.stringify({ notebookPath: notebookDir, window: null, logLevel: "verbose", ...overrides }),
   );
 }
 
@@ -398,32 +585,40 @@ function restoreSettings() {
   }
 }
 
+/** Runs one test against a freshly launched exe over a scratch notebook, with
+ * the user's own `settings.json` swapped out and restored around it. */
+export async function withScratchApp(
+  testInfo: TestInfo,
+  use: (app: App) => Promise<void>,
+  settingsOverrides: object = {},
+) {
+  if (!fs.existsSync(EXE)) {
+    throw new Error(`missing ${EXE} — run scripts/build.ps1 first`);
+  }
+  if (mynoteRunning()) {
+    throw new Error("MyNote is already running — close it before running the e2e suite");
+  }
+  const notebookDir = testInfo.outputPath("notebook");
+  const dataDir = testInfo.outputPath("wv2-data");
+  fs.mkdirSync(notebookDir, { recursive: true });
+  swapSettingsToScratch(notebookDir, settingsOverrides);
+  const app = new App(notebookDir, dataDir);
+  try {
+    await app.launch();
+    await use(app);
+  } finally {
+    if (app.unexpectedExit) {
+      console.log(`\n--- app died during this test ---\n${app.unexpectedExit}`);
+    }
+    // a test must never hand the next one a live app or a bound CDP port
+    await app.close().catch((e) => console.log(`[fixture] close failed: ${(e as Error).message}`));
+    restoreSettings();
+  }
+}
+
 export const test = base.extend<{ app: App }>({
   // eslint-disable-next-line no-empty-pattern
-  app: async ({}, use, testInfo) => {
-    if (!fs.existsSync(EXE)) {
-      throw new Error(`missing ${EXE} — run scripts/build.ps1 first`);
-    }
-    if (mynoteRunning()) {
-      throw new Error("MyNote is already running — close it before running the e2e suite");
-    }
-    const notebookDir = testInfo.outputPath("notebook");
-    const dataDir = testInfo.outputPath("wv2-data");
-    fs.mkdirSync(notebookDir, { recursive: true });
-    swapSettingsToScratch(notebookDir);
-    const app = new App(notebookDir, dataDir);
-    try {
-      await app.launch();
-      await use(app);
-    } finally {
-      if (app.unexpectedExit) {
-        console.log(`\n--- app died during this test ---\n${app.unexpectedExit}`);
-      }
-      // a test must never hand the next one a live app or a bound CDP port
-      await app.close().catch((e) => console.log(`[fixture] close failed: ${(e as Error).message}`));
-      restoreSettings();
-    }
-  },
+  app: ({}, use, testInfo) => withScratchApp(testInfo, use),
 });
 
 export { expect };

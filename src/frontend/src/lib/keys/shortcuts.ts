@@ -1,6 +1,7 @@
 import {
   COMMANDS,
   FIXED_BINDINGS,
+  commandOf,
   labelsOf,
   type BindingContext,
   type Command,
@@ -43,7 +44,6 @@ export function historyRows(): HelpRow[] {
 const EDITOR_ROW_IDS = ["app.find", "app.findNext", "app.findPrev", "app.insertHelper", "app.toggleMode"];
 
 export function editorRows(): HelpRow[] {
-  const byId = new Map(COMMANDS.map((c) => [c.id, c]));
-  const rows = EDITOR_ROW_IDS.map((id) => byId.get(id)).filter((c): c is Command => !!c).map(row);
+  const rows = EDITOR_ROW_IDS.map(commandOf).filter((c): c is Command => !!c).map(row);
   return [...rows, { keys: "Esc", desc: "Close find / focus tree" }];
 }

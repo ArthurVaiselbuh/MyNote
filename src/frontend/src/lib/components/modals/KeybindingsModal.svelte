@@ -27,21 +27,34 @@
 
   const CONTEXT_ORDER: BindingContext[] = ["global", "system", "pane", "tree", "results", "history"];
 
-  function visible(command: Command): boolean {
-    if (command.gate === "git" && !app.git?.available) return false;
-    const f = filter.trim().toLowerCase();
-    if (!f) return true;
-    const chords = chordsOf(command.id).map(formatChord).join(" ");
-    return `${command.desc} ${chords} ${command.search ?? ""}`.toLowerCase().includes(f);
+  type Row = { command: Command; chords: string[]; haystack: string };
+
+  const query = $derived(filter.trim().toLowerCase());
+
+  const rows = $derived(
+    COMMANDS.map((command): Row => {
+      const chords = chordsOf(command.id);
+      const chordText = chords.map(formatChord).join(" ");
+      return {
+        command,
+        chords,
+        haystack: `${command.desc} ${chordText} ${command.search ?? ""}`.toLowerCase(),
+      };
+    }),
+  );
+
+  function visible(row: Row): boolean {
+    if (row.command.gate === "git" && !app.git?.available) return false;
+    return !query || row.haystack.includes(query);
   }
 
   const groups = $derived(
     CONTEXT_ORDER.map((ctx) => ({
       ctx,
       label: CONTEXT_LABELS[ctx],
-      commands: COMMANDS.filter((c) => c.ctx === ctx && visible(c)),
+      rows: rows.filter((row) => row.command.ctx === ctx && visible(row)),
       fixed: FIXED_BINDINGS.filter((b) => b.ctx === ctx),
-    })).filter((g) => g.commands.length),
+    })).filter((g) => g.rows.length),
   );
 
   function startCapture(id: string) {
@@ -64,26 +77,15 @@
       stopCapture();
       return;
     }
-    if (e.key === "Tab") {
-      // Tab drives the focus ladder everywhere and can't be reassigned —
-      // capturing it here would let a global command swallow it (see bindings.ts)
-      captureNote = "Tab can't be reassigned — it drives focus everywhere.";
-      return;
-    }
     const chord = chordOf(e);
     if (!chord) return; // a modifier on its own — wait for the real key
-    if (chord.startsWith("Other+")) {
-      captureNote = "That modifier isn't usable in a shortcut.";
-      return;
-    }
     const rejection = rejectionOf(capturing, chord);
     if (rejection) {
       captureNote = rejection;
       return;
     }
     const stolen = conflictOf(capturing, chord);
-    const id = capturing;
-    assignChord(id, chord);
+    assignChord(capturing, chord);
     stopCapture();
     if (stolen) app.status = `${formatChord(chord)} taken from “${stolen.desc}”`;
     void act.persistSettings();
@@ -119,8 +121,7 @@
     <div class="keybind-list">
       {#each groups as group (group.ctx)}
         <div class="settings-section-label">{group.label}</div>
-        {#each group.commands as command (command.id)}
-          {@const chords = chordsOf(command.id)}
+        {#each group.rows as { command, chords } (command.id)}
           <div class="keybind-row" class:capturing={capturing === command.id}>
             <span class="keybind-desc">{command.desc}</span>
             <span class="keybind-chords">
@@ -139,7 +140,7 @@
             </span>
           </div>
         {/each}
-        {#if !filter.trim()}
+        {#if !query}
           {#each group.fixed as fixed (fixed.desc + fixed.keys)}
             <div class="keybind-row fixed">
               <span class="keybind-desc">{fixed.desc}</span>

@@ -2,10 +2,9 @@ import * as act from "./actions";
 import { openContextMenu, type MenuEntry } from "./contextMenu.svelte";
 import { labelOf } from "./keys/bindings";
 import { MOD_LABEL } from "./keys/platform";
+import { isExternalHref, pageIdFromHref } from "./regex";
 import { app } from "./state/app.svelte";
 import { isTextEntry } from "./textEntry";
-
-const PAGE_LINK = /([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})\.md$/i;
 
 // the openers select what was clicked before showing the menu, so they bail on
 // a rename/filter input the same way openContextMenu does
@@ -56,34 +55,33 @@ function openTreeBlankMenu(e: MouseEvent) {
 }
 
 export function openSectionMenu(e: MouseEvent) {
-  const section = act.currentSection();
-  if (!section) {
-    openContextMenu(e, [
-      { label: "New section", keys: labelOf("section.new"), run: () => act.newSection() },
-    ]);
-    return;
-  }
-  openContextMenu(e, [
+  const entries: MenuEntry[] = [
     { label: "New section", keys: labelOf("section.new"), run: () => act.newSection() },
-    { label: "Rename section", run: () => act.startSectionRename() },
-    { label: "Go to section…", keys: labelOf("section.goto"), run: () => act.openSectionPicker("goto") },
-    "separator",
-    {
-      label: "Delete section",
-      danger: true,
-      run: () => act.deleteSectionWithConfirm(section.id),
-    },
-  ]);
+  ];
+  const section = act.currentSection();
+  if (section) {
+    entries.push(
+      { label: "Rename section", run: () => act.startSectionRename() },
+      { label: "Go to section…", keys: labelOf("section.goto"), run: () => act.openSectionPicker("goto") },
+      "separator",
+      {
+        label: "Delete section",
+        danger: true,
+        run: () => act.deleteSectionWithConfirm(section.id),
+      },
+    );
+  }
+  openContextMenu(e, entries);
 }
 
 export function openPreviewMenu(e: MouseEvent) {
   const entries: MenuEntry[] = [];
   const link = (e.target as HTMLElement).closest("a");
   const href = link?.getAttribute("href") ?? "";
-  const pageLink = href.match(PAGE_LINK);
-  if (pageLink) {
-    entries.push({ label: "Open page", run: () => act.openPageById(pageLink[1]) });
-  } else if (/^https?:\/\//i.test(href)) {
+  const pageId = pageIdFromHref(href);
+  if (pageId) {
+    entries.push({ label: "Open page", run: () => act.openPageById(pageId) });
+  } else if (isExternalHref(href)) {
     entries.push({ label: "Open link in browser", run: () => act.openExternalLink(href) });
   }
   if (href) {

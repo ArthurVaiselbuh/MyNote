@@ -3,8 +3,9 @@
   import { listen } from "@tauri-apps/api/event";
   import { getCurrentWindow } from "@tauri-apps/api/window";
   import * as act from "./lib/actions";
+  import type { SplitPane } from "./lib/actions";
   import { handleGlobal } from "./lib/keys/dispatch";
-  import { app } from "./lib/state/app.svelte";
+  import { app, modalParentOf } from "./lib/state/app.svelte";
   import { isTextEntry } from "./lib/textEntry";
   import ContextMenu from "./lib/components/ContextMenu.svelte";
   import Editor from "./lib/components/Editor.svelte";
@@ -30,52 +31,50 @@
 
   // the history pane stays mounted behind the modals it opens itself, so backing
   // out of them lands on an intact pane instead of a flash of the editor
-  const historyOpen = $derived(
-    app.modal === "history" ||
-      (app.modal === "help" && app.helpContext === "history") ||
-      app.confirm?.returnTo === "history",
-  );
+  const historyOpen = $derived(app.modal === "history" || modalParentOf() === "history");
 
-  let draggingSplitter = $state<"tree" | "peek" | null>(null);
+  let draggingSplitter = $state<SplitPane | null>(null);
 
   // the tree grows rightward from the left edge, the peek leftward from the
   // right one, so each maps the pointer to its own width
-  function dragSplitter(e: PointerEvent, which: "tree" | "peek") {
+  const WIDTH_AT: Record<SplitPane, (x: number) => number> = {
+    tree: (x) => x,
+    peek: (x) => window.innerWidth - x,
+  };
+
+  function dragSplitter(e: PointerEvent, pane: SplitPane) {
     const splitter = e.currentTarget as HTMLElement;
-    const widthAt = (x: number) => (which === "tree" ? x : window.innerWidth - x);
-    const setWidth = which === "tree" ? act.setTreeWidth : act.setPeekWidth;
-    const grabbed = app.settings[which === "tree" ? "treeWidth" : "peekWidth"] - widthAt(e.clientX);
-    splitter.setPointerCapture(e.pointerId);
-    draggingSplitter = which;
-    const move = (ev: PointerEvent) => setWidth(widthAt(ev.clientX) + grabbed);
+    const widthAt = WIDTH_AT[pane];
+    const grabbed = act.paneWidth(pane) - widthAt(e.clientX);
+    const drag = new AbortController();
     const stop = () => {
-      splitter.removeEventListener("pointermove", move);
-      splitter.removeEventListener("pointerup", stop);
-      splitter.removeEventListener("pointercancel", stop);
+      drag.abort();
       draggingSplitter = null;
       void act.persistSettings();
     };
-    splitter.addEventListener("pointermove", move);
-    splitter.addEventListener("pointerup", stop);
-    splitter.addEventListener("pointercancel", stop);
+    splitter.setPointerCapture(e.pointerId);
+    draggingSplitter = pane;
+    splitter.addEventListener(
+      "pointermove",
+      (ev: PointerEvent) => act.setPaneWidth(pane, widthAt(ev.clientX) + grabbed),
+      { signal: drag.signal },
+    );
+    splitter.addEventListener("pointerup", stop, { signal: drag.signal });
+    splitter.addEventListener("pointercancel", stop, { signal: drag.signal });
   }
 
-  function resetTreeWidth() {
-    act.setTreeWidth(act.TREE_WIDTH_DEFAULT);
+  function resetWidth(pane: SplitPane) {
+    act.resetPaneWidth(pane);
     void act.persistSettings();
   }
 
-  function resetPeekWidth() {
-    act.setPeekWidth(act.PEEK_WIDTH_DEFAULT);
-    void act.persistSettings();
-  }
-
-  onMount(() => {
-    window.addEventListener("keydown", handleGlobal, true);
-
+  // registered only while it will act: a non-passive wheel listener costs the
+  // compositor its scroll fast path even when the handler returns immediately
+  $effect(() => {
+    const speed = app.settings.scrollSpeed;
+    if (speed === 1) return;
     const wheel = (e: WheelEvent) => {
-      const speed = app.settings.scrollSpeed;
-      if (speed === 1 || e.ctrlKey) return;
+      if (e.ctrlKey) return;
       const scroller = (e.target as HTMLElement | null)?.closest(
         ".cm-scroller, .preview, .tree, .results",
       );
@@ -85,6 +84,11 @@
       }
     };
     window.addEventListener("wheel", wheel, { passive: false });
+    return () => window.removeEventListener("wheel", wheel);
+  });
+
+  onMount(() => {
+    window.addEventListener("keydown", handleGlobal, true);
 
     // the webview's own menu (refresh / print / save as / send tab to your
     // devices) is meaningless here, so panes raise their own via openContextMenu
@@ -99,81 +103,63 @@
     const flushSave = () => void act.saveNow();
     window.addEventListener("blur", flushSave);
 
-    let unlistenFlushAndClose: (() => void) | undefined;
-    void listen("mynote:flush-and-close", async () => {
-      await act.saveNow();
-      await getCurrentWindow().close();
-    }).then((un) => {
-      unlistenFlushAndClose = un;
-    });
+    const unlisteners: (() => void)[] = [];
+    const subscribe = (pending: Promise<() => void>) =>
+      void pending.then((un) => unlisteners.push(un));
+    const flashPayload = (event: { payload: string }) => act.flashStatusError(event.payload);
 
-    let unlistenFlush: (() => void) | undefined;
-    void listen("mynote:flush", flushSave).then((un) => {
-      unlistenFlush = un;
-    });
-
-    let unlistenGitSnapshotFailed: (() => void) | undefined;
-    void listen<string>("mynote:git-snapshot-failed", (event) => {
-      act.flashStatusError(event.payload);
-    }).then((un) => {
-      unlistenGitSnapshotFailed = un;
-    });
-
-    let unlistenHotkeyUnavailable: (() => void) | undefined;
-    void listen<string>("mynote:hotkey-unavailable", (event) => {
-      act.flashStatusError(event.payload);
-    }).then((un) => {
-      unlistenHotkeyUnavailable = un;
-    });
+    subscribe(
+      listen("mynote:flush-and-close", async () => {
+        await act.saveNow();
+        await getCurrentWindow().close();
+      }),
+    );
+    subscribe(listen("mynote:flush", flushSave));
+    subscribe(listen<string>("mynote:git-snapshot-failed", flashPayload));
+    subscribe(listen<string>("mynote:hotkey-unavailable", flashPayload));
 
     void act.boot();
 
     return () => {
       window.removeEventListener("keydown", handleGlobal, true);
-      window.removeEventListener("wheel", wheel);
       window.removeEventListener("contextmenu", suppressWebviewMenu);
       window.removeEventListener("blur", flushSave);
-      unlistenFlushAndClose?.();
-      unlistenFlush?.();
-      unlistenGitSnapshotFailed?.();
-      unlistenHotkeyUnavailable?.();
+      for (const unlisten of unlisteners) unlisten();
     };
   });
 </script>
 
+{#snippet splitter(pane: SplitPane)}
+  <div
+    class="splitter"
+    class:dragging={draggingSplitter === pane}
+    role="separator"
+    aria-orientation="vertical"
+    onpointerdown={(e) => dragSplitter(e, pane)}
+    ondblclick={() => resetWidth(pane)}
+  ></div>
+{/snippet}
+
 <div
   class="app"
-  style="--text:{s.textColor}; --bg:{s.backgroundColor}; --panel:{s.panelColor}; --accent:{s.accentColor}; --heading:{s.headingColor}; --focus-alpha:{s.focusAlpha}"
+  style:--text={s.textColor}
+  style:--bg={s.backgroundColor}
+  style:--panel={s.panelColor}
+  style:--accent={s.accentColor}
+  style:--heading={s.headingColor}
+  style:--focus-alpha={s.focusAlpha}
 >
-  <aside
-    class="tree-pane"
-    class:focused={app.focus === "tree"}
-    style:width="{s.treeWidth}px"
-  >
+  <aside class="tree-pane" class:focused={app.focus === "tree"} style:width="{s.treeWidth}px">
     <SectionStrip />
     <Tree />
   </aside>
-  <div
-    class="splitter"
-    class:dragging={draggingSplitter === "tree"}
-    role="separator"
-    aria-orientation="vertical"
-    onpointerdown={(e) => dragSplitter(e, "tree")}
-    ondblclick={resetTreeWidth}
-  ></div>
+  {@render splitter("tree")}
   <main class="main-pane">
     {#if app.view === "results"}
       <SearchBar />
       <div class="results-split">
         <Results />
-        <div
-          class="splitter"
-          class:dragging={draggingSplitter === "peek"}
-          role="separator"
-          aria-orientation="vertical"
-          onpointerdown={(e) => dragSplitter(e, "peek")}
-          ondblclick={resetPeekWidth}
-        ></div>
+        {@render splitter("peek")}
         <ResultPeek />
       </div>
     {:else}

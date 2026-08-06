@@ -2,22 +2,34 @@ import { getCurrentWebview } from "@tauri-apps/api/webview";
 import { open as openDialog } from "@tauri-apps/plugin-dialog";
 import { openUrl } from "@tauri-apps/plugin-opener";
 import { api, type NotebookInfo, type Section, type UndoOutcome } from "./api";
-import { editorCtl } from "./editorCtl";
-import type { FindCtl } from "./findCtl";
 import { labelOf } from "./keys/bindings";
+import { wrapIndex } from "./listIndex";
 import { log } from "./log";
-import { peekCtl } from "./peekCtl";
-import { previewCtl } from "./previewCtl";
-import { escapeRegExp } from "./regex";
-import { app, type FindPrefill, type ModalName, type Pane } from "./state/app.svelte";
-import { countPages, countSubtree, findNode, flatten, locate, sectionOfPage } from "./treeUtils";
+import { editorCtl, peekCtl, previewCtl, type PaneCtl } from "./paneCtl";
+import { escapeRegExp, isExternalHref } from "./regex";
+import {
+  app,
+  modalParentOf,
+  type FindPrefill,
+  type ModalName,
+  type Pane,
+} from "./state/app.svelte";
+import {
+  countPages,
+  countSubtree,
+  findNode,
+  flatten,
+  hasDescendant,
+  locate,
+  sectionOfPage,
+  type Located,
+} from "./treeUtils";
 import { loadViewPositions, persistViewPositions, setModeAnchor } from "./viewPos";
 
-// the editor's CodeMirror find and the preview's DOM-highlight find are
-// mutually exclusive with the page view mode, so callers dispatch to whichever
-// backs the mode currently on screen — and in results view neither is mounted,
-// so the peek's term highlights are what F3 steps through
-export function activeFindCtl(): FindCtl | null {
+// the editor and the preview are mutually exclusive with the page view mode, so
+// callers dispatch to whichever backs the mode currently on screen — and in
+// results view neither is mounted, so the peek is what F3 and PgUp/PgDn reach
+export function activePaneCtl(): PaneCtl | null {
   if (app.view === "results") return peekCtl.current;
   return app.mode === "preview" ? previewCtl.current : editorCtl.current;
 }
@@ -39,6 +51,10 @@ export async function boot() {
     app.status = String(e);
     await openNotebookModal();
   }
+  await refreshGitStatus();
+}
+
+async function refreshGitStatus() {
   try {
     app.git = await api.getGitStatus();
   } catch {
@@ -80,11 +96,7 @@ async function switchNotebook(open: () => Promise<NotebookInfo>) {
   app.currentPageId = null;
   await loadViewPositions();
   applyNotebook(info);
-  try {
-    app.git = await api.getGitStatus();
-  } catch {
-    app.git = null;
-  }
+  await refreshGitStatus();
 }
 
 export async function openNotebookAt(path: string) {
@@ -137,19 +149,18 @@ export function currentSection(): Section | null {
   return app.notebook?.sections[app.sectionIdx] ?? null;
 }
 
-function wrapIndex(idx: number, length: number): number {
-  return ((idx % length) + length) % length;
+// a section that vanished under us (deleted elsewhere, undone away) leaves the
+// current index alone rather than jumping the user somewhere arbitrary
+function showSection(id: string | null | undefined) {
+  const idx = app.notebook?.sections.findIndex((s) => s.id === id) ?? -1;
+  if (idx >= 0) app.sectionIdx = idx;
 }
 
 export function gotoSection(idx: number) {
   const sections = app.notebook?.sections ?? [];
   if (sections.length === 0) return;
   app.sectionIdx = wrapIndex(idx, sections.length);
-  const first = currentSection()?.pages[0] ?? null;
-  app.selectedId = first?.id ?? null;
-  app.currentPageId = first?.id ?? null;
-  app.view = "page";
-  saveLastView();
+  selectAndOpen(currentSection()?.pages[0]?.id ?? null);
 }
 
 export function gotoSectionOffset(offset: number) {
@@ -167,10 +178,8 @@ export async function createSectionNamed(name: string) {
   try {
     const section = await api.createSection(name.trim() || "New Section");
     await refreshTree();
-    const idx = app.notebook?.sections.findIndex((s) => s.id === section.id) ?? -1;
-    if (idx >= 0) app.sectionIdx = idx;
-    app.currentPageId = null;
-    app.selectedId = null;
+    showSection(section.id);
+    clearSelection();
   } catch (e) {
     app.status = String(e);
   }
@@ -202,10 +211,7 @@ export async function moveSection(id: string, index: number) {
   try {
     await api.moveSection(id, index);
     await refreshTree();
-    if (keepId) {
-      const idx = app.notebook?.sections.findIndex((s) => s.id === keepId) ?? -1;
-      if (idx >= 0) app.sectionIdx = idx;
-    }
+    showSection(keepId);
   } catch (e) {
     app.status = String(e);
   }
@@ -218,8 +224,7 @@ export function deleteSectionWithConfirm(id: string) {
     `Delete section "${section.name}" and its ${countPages(section)} page(s)?`,
     async () => {
       if (app.currentPageId && sectionOfPage(app.notebook!, app.currentPageId)?.id === id) {
-        app.currentPageId = null;
-        app.selectedId = null;
+        clearSelection();
       }
       await api.deleteSection(id);
       await refreshTree();
@@ -231,9 +236,7 @@ export function deleteSectionWithConfirm(id: string) {
 
 export function openImport() {
   log.verbose("open import pane");
-  app.importPreview = null;
-  app.importSource = "";
-  app.importPaths = [];
+  clearImportPick();
   app.importBusy = false;
   app.modal = "import";
 }
@@ -241,6 +244,10 @@ export function openImport() {
 export function setImportMode(mode: "mht" | "md") {
   if (app.importMode === mode) return;
   app.importMode = mode;
+  clearImportPick();
+}
+
+function clearImportPick() {
   app.importPreview = null;
   app.importSource = "";
   app.importPaths = [];
@@ -299,19 +306,21 @@ export async function runImport() {
 }
 
 function flashStatus(message: string, durationMs = 4000) {
-  app.status = message;
-  app.statusIsError = false;
-  clearStatusAfter(message, durationMs);
+  flash(message, false, durationMs);
 }
 
 export function flashStatusError(message: string) {
-  app.status = message;
-  app.statusIsError = true;
-  clearStatusAfter(message, 8000);
+  flash(message, true, 8000);
 }
 
-function clearStatusAfter(message: string, durationMs: number) {
-  setTimeout(() => {
+let statusTimer: ReturnType<typeof setTimeout> | undefined;
+
+function flash(message: string, isError: boolean, durationMs: number) {
+  app.status = message;
+  app.statusIsError = isError;
+  clearTimeout(statusTimer);
+  statusTimer = setTimeout(() => {
+    // a bare app.status assignment elsewhere outlives the flash that scheduled this
     if (app.status !== message) return;
     app.status = "";
     app.statusIsError = false;
@@ -320,11 +329,20 @@ function clearStatusAfter(message: string, durationMs: number) {
 
 // ---------- pages ----------
 
-export function selectAndOpen(id: string) {
+function selectPage(id: string | null) {
   app.selectedId = id;
   app.currentPageId = id;
-  app.view = "page";
   saveLastView();
+}
+
+function clearSelection() {
+  app.currentPageId = null;
+  app.selectedId = null;
+}
+
+export function selectAndOpen(id: string | null) {
+  selectPage(id);
+  app.view = "page";
 }
 
 export function openPageById(pageId: string) {
@@ -336,7 +354,7 @@ export function openPageById(pageId: string) {
 }
 
 export function openExternalLink(href: string) {
-  if (!/^https?:\/\//i.test(href)) return;
+  if (!isExternalHref(href)) return;
   log.verbose("open external link in system browser");
   openUrl(href).catch((e) => (app.status = String(e)));
 }
@@ -398,24 +416,22 @@ export async function commitRename(id: string, value: string) {
 }
 
 export function deleteSelected() {
-  const section = currentSection();
-  if (!section || !app.selectedId) return;
-  const found = locate(section.pages, app.selectedId);
-  if (!found) return;
-  const count = countSubtree(found.node);
+  const selected = selectedInSection();
+  if (!selected) return;
+  const doomed = selected.found.node;
+  const count = countSubtree(doomed);
   const suffix = count > 1 ? ` and ${count - 1} subpage(s)` : "";
-  askConfirm(`Delete "${found.node.title}"${suffix}?`, async () => {
+  askConfirm(`Delete "${doomed.title}"${suffix}?`, async () => {
     const rows = visibleRows();
-    const pos = rows.findIndex((r) => r.node.id === found.node.id);
+    const pos = rows.findIndex((r) => r.node.id === doomed.id);
+    const survives = (id: string) => !hasDescendant(doomed, id);
     const neighbor =
-      rows
-        .slice(pos + 1)
-        .find((r) => !findNode([found.node], r.node.id))?.node.id ??
+      rows.slice(pos + 1).find((r) => survives(r.node.id))?.node.id ??
       rows[pos - 1]?.node.id ??
       null;
-    await api.deletePage(found.node.id);
+    await api.deletePage(doomed.id);
     await refreshTree();
-    if (app.currentPageId === found.node.id) app.currentPageId = neighbor;
+    if (app.currentPageId === doomed.id) app.currentPageId = neighbor;
     app.selectedId = neighbor;
     if (neighbor) saveLastView();
   });
@@ -459,13 +475,9 @@ async function applyHistory(
     await refreshTree();
     const notebook = app.notebook;
     if (notebook) {
-      const idx = outcome.sectionId
-        ? notebook.sections.findIndex((s) => s.id === outcome.sectionId)
-        : -1;
-      if (idx >= 0) app.sectionIdx = idx;
+      showSection(outcome.sectionId);
       if (app.currentPageId && !sectionOfPage(notebook, app.currentPageId)) {
-        app.currentPageId = null;
-        app.selectedId = null;
+        clearSelection();
       }
       if (outcome.pageId && sectionOfPage(notebook, outcome.pageId)) {
         selectAndOpen(outcome.pageId);
@@ -484,16 +496,24 @@ export function visibleRows() {
   return section ? flatten(section.pages, app.treeFilter) : [];
 }
 
+// reordering against a filtered tree would move the page relative to siblings
+// the user can't see, so those actions ask for an unfiltered tree
+function selectedInSection(
+  opts: { unfilteredOnly?: boolean } = {},
+): { section: Section; found: Located } | null {
+  const section = currentSection();
+  if (!section || !app.selectedId) return null;
+  if (opts.unfilteredOnly && app.treeFilter) return null;
+  const found = locate(section.pages, app.selectedId);
+  return found ? { section, found } : null;
+}
+
 export function selectOffset(offset: number) {
   const rows = visibleRows();
   if (rows.length === 0) return;
   const pos = rows.findIndex((r) => r.node.id === app.selectedId);
   const next = pos < 0 ? 0 : Math.min(rows.length - 1, Math.max(0, pos + offset));
-  const id = rows[next].node.id;
-  app.selectedId = id;
-  app.currentPageId = id;
-  app.view = "page";
-  saveLastView();
+  selectAndOpen(rows[next].node.id);
 }
 
 export function activateSelected() {
@@ -516,41 +536,34 @@ export async function toggleExpand(id: string) {
 }
 
 export async function collapseOrParent() {
-  const section = currentSection();
-  if (!section || !app.selectedId) return;
-  const found = locate(section.pages, app.selectedId);
-  if (!found) return;
-  if (found.node.expanded && found.node.children.length > 0) {
-    found.node.expanded = false;
-    await api.setExpanded(found.node.id, false).catch(() => {});
-  } else if (found.parentId) {
-    app.selectedId = found.parentId;
-    app.currentPageId = found.parentId;
-    saveLastView();
+  const selected = selectedInSection();
+  if (!selected) return;
+  const { node, parentId } = selected.found;
+  if (node.expanded && node.children.length > 0) {
+    node.expanded = false;
+    await api.setExpanded(node.id, false).catch(() => {});
+  } else if (parentId) {
+    selectPage(parentId);
   }
 }
 
 export async function expandOrChild() {
-  const section = currentSection();
-  if (!section || !app.selectedId) return;
-  const found = locate(section.pages, app.selectedId);
-  if (!found || found.node.children.length === 0) return;
-  if (!found.node.expanded) {
-    found.node.expanded = true;
-    await api.setExpanded(found.node.id, true).catch(() => {});
+  const selected = selectedInSection();
+  if (!selected) return;
+  const { node } = selected.found;
+  if (node.children.length === 0) return;
+  if (!node.expanded) {
+    node.expanded = true;
+    await api.setExpanded(node.id, true).catch(() => {});
   } else {
-    const child = found.node.children[0];
-    app.selectedId = child.id;
-    app.currentPageId = child.id;
-    saveLastView();
+    selectPage(node.children[0].id);
   }
 }
 
 export async function moveSelected(offset: number) {
-  const section = currentSection();
-  if (!section || !app.selectedId || app.treeFilter) return;
-  const found = locate(section.pages, app.selectedId);
-  if (!found) return;
+  const selected = selectedInSection({ unfilteredOnly: true });
+  if (!selected) return;
+  const { section, found } = selected;
   const target = found.index + offset;
   if (target < 0 || target >= found.siblings.length) return;
   // index is interpreted after detach, so moving down keeps the raw target
@@ -558,19 +571,19 @@ export async function moveSelected(offset: number) {
 }
 
 export async function demoteSelected() {
-  const section = currentSection();
-  if (!section || !app.selectedId || app.treeFilter) return;
-  const found = locate(section.pages, app.selectedId);
-  if (!found || found.index === 0) return;
+  const selected = selectedInSection({ unfilteredOnly: true });
+  if (!selected) return;
+  const { section, found } = selected;
+  if (found.index === 0) return;
   const newParent = found.siblings[found.index - 1];
   await movePage(found.node.id, section.id, newParent.id, newParent.children.length);
 }
 
 export async function promoteSelected() {
-  const section = currentSection();
-  if (!section || !app.selectedId || app.treeFilter) return;
-  const found = locate(section.pages, app.selectedId);
-  if (!found || !found.parentId) return;
+  const selected = selectedInSection({ unfilteredOnly: true });
+  if (!selected) return;
+  const { section, found } = selected;
+  if (!found.parentId) return;
   const parent = locate(section.pages, found.parentId);
   if (!parent) return;
   await movePage(found.node.id, section.id, parent.parentId, parent.index + 1);
@@ -578,13 +591,17 @@ export async function promoteSelected() {
 
 export async function moveSelectedToSection(target: Section) {
   const id = app.selectedId;
-  if (!id || !app.notebook) return;
-  const source = sectionOfPage(app.notebook, id);
+  const notebook = app.notebook;
+  if (!id || !notebook) return;
+  const source = sectionOfPage(notebook, id);
   if (!source || source.id === target.id) return;
   await movePage(id, target.id, null, target.pages.length);
-  const landed = app.notebook ? sectionOfPage(app.notebook, id) : null;
+  // movePage refetched the tree, so the page's new home comes from the new one
+  const moved = app.notebook;
+  if (!moved) return;
+  const landed = sectionOfPage(moved, id);
   if (!landed) return;
-  app.sectionIdx = app.notebook!.sections.indexOf(landed);
+  app.sectionIdx = moved.sections.indexOf(landed);
   selectAndOpen(id);
 }
 
@@ -642,11 +659,8 @@ export function openResult(idx: number) {
   // the editor remounts when leaving the results view and consumes the prefill on load
   app.findPrefill = resultFindPrefill();
   app.mode = "preview";
-  app.view = "page";
-  app.selectedId = hit.pageId;
-  app.currentPageId = hit.pageId;
+  selectAndOpen(hit.pageId);
   app.focus = "editor";
-  saveLastView();
 }
 
 export function openResultInEditor(idx: number) {
@@ -661,9 +675,9 @@ export function focusPane(pane: Pane) {
   log.verbose(`focus ${pane}`);
   // only the editor forces the page view — focusing the tree must not kick
   // the user out of results, or the results Tab ring could never cycle
-  if (pane === "editor") app.view = "page";
   app.focus = pane;
   if (pane === "editor") {
+    app.view = "page";
     if (app.mode === "edit") app.editorFocusReq++;
   } else if (pane === "search") {
     app.searchFocusReq++;
@@ -700,7 +714,7 @@ export function toggleMode() {
 export function openFind() {
   if (app.view !== "page" || !app.currentPageId) return;
   app.focus = "editor";
-  activeFindCtl()?.openFind();
+  activePaneCtl()?.openFind();
 }
 
 export async function saveNow() {
@@ -714,9 +728,9 @@ export function closeCurrent() {
     closeModal();
     return;
   }
-  const findCtl = activeFindCtl();
-  if (findCtl?.findOpen()) {
-    findCtl.closeFind();
+  const pane = activePaneCtl();
+  if (pane?.findOpen()) {
+    pane.closeFind();
     if (app.mode === "edit") app.editorFocusReq++;
     return;
   }
@@ -737,19 +751,11 @@ export function closeCurrent() {
 }
 
 export function scrollMain(dir: number) {
-  let el: Element | null = null;
-  if (app.view === "results") {
-    // the peek is the only thing worth paging in results view — the list itself
-    // follows the selection, which the arrow keys already drive
-    el = document.getElementById("peek-scroll") ?? document.getElementById("results-scroll");
-  } else if (app.mode === "preview") {
-    el = document.getElementById("preview-scroll");
-  } else {
-    el = document.querySelector(".cm-scroller");
-  }
-  if (el instanceof HTMLElement) {
-    el.scrollBy({ top: dir * el.clientHeight * 0.85 });
-  }
+  // in results view the pane is the peek, which is the only thing worth paging
+  // there — the list follows the selection, so it only steps in when the peek
+  // has no body to show
+  const el = activePaneCtl()?.scroller() ?? document.getElementById("results-scroll");
+  el?.scrollBy({ top: dir * el.clientHeight * 0.85 });
 }
 
 export async function copyText(text: string) {
@@ -799,26 +805,14 @@ export function escapeModal() {
     app.sectionPickerRenaming = null;
     return;
   }
-  if (app.modal === "help" && app.helpContext === "history") {
-    app.helpContext = "app";
-    app.modal = "history";
+  const parent = modalParentOf();
+  if (!parent) {
+    closeModal();
     return;
   }
-  if (app.modal === "confirm" && app.confirm?.returnTo) {
-    const back = app.confirm.returnTo;
-    app.confirm = null;
-    app.modal = back;
-    return;
-  }
-  if (app.modal === "colorPicker") {
-    app.modal = "insert";
-    return;
-  }
-  if (app.modal === "colors" || app.modal === "keybindings") {
-    app.modal = "settings";
-    return;
-  }
-  closeModal();
+  if (app.modal === "help") app.helpContext = "app";
+  if (app.modal === "confirm") app.confirm = null;
+  app.modal = parent;
 }
 
 export function closeModal() {
@@ -880,31 +874,38 @@ export async function applyZoom() {
 }
 
 export async function zoomBy(delta: number) {
-  app.settings.zoom = Math.min(2.5, Math.max(0.5, +(app.settings.zoom + delta).toFixed(2)));
-  await applyZoom();
-  await persistSettings();
-}
-
-export const TREE_WIDTH_DEFAULT = 300;
-const TREE_WIDTH_MIN = 160;
-
-export function setTreeWidth(width: number) {
-  const max = Math.max(TREE_WIDTH_MIN, window.innerWidth * 0.6);
-  app.settings.treeWidth = Math.round(Math.min(max, Math.max(TREE_WIDTH_MIN, width)));
-}
-
-export const PEEK_WIDTH_DEFAULT = 460;
-const PEEK_WIDTH_MIN = 220;
-
-export function setPeekWidth(width: number) {
-  const max = Math.max(PEEK_WIDTH_MIN, window.innerWidth * 0.7);
-  app.settings.peekWidth = Math.round(Math.min(max, Math.max(PEEK_WIDTH_MIN, width)));
+  await setZoom(Math.min(2.5, Math.max(0.5, +(app.settings.zoom + delta).toFixed(2))));
 }
 
 export async function zoomReset() {
-  app.settings.zoom = 1.0;
+  await setZoom(1.0);
+}
+
+async function setZoom(zoom: number) {
+  app.settings.zoom = zoom;
   await applyZoom();
   await persistSettings();
+}
+
+const PANE_WIDTHS = {
+  tree: { key: "treeWidth", defaultWidth: 300, min: 160, maxFraction: 0.6 },
+  peek: { key: "peekWidth", defaultWidth: 460, min: 220, maxFraction: 0.7 },
+} as const;
+
+export type SplitPane = keyof typeof PANE_WIDTHS;
+
+export function paneWidth(pane: SplitPane): number {
+  return app.settings[PANE_WIDTHS[pane].key];
+}
+
+export function setPaneWidth(pane: SplitPane, width: number) {
+  const { key, min, maxFraction } = PANE_WIDTHS[pane];
+  const max = Math.max(min, window.innerWidth * maxFraction);
+  app.settings[key] = Math.round(Math.min(max, Math.max(min, width)));
+}
+
+export function resetPaneWidth(pane: SplitPane) {
+  setPaneWidth(pane, PANE_WIDTHS[pane].defaultWidth);
 }
 
 // ---------- misc ----------
@@ -955,15 +956,14 @@ export function restoreRevision(pageId: string, text: string, when: string) {
   );
 }
 
-export function recoverDeletedPage(sha: string, id: string, label: string, count: number) {
+export function recoverDeletedPage(id: string, sha: string, label: string, count: number) {
   askConfirm(
     `Recover "${label}"${count > 1 ? ` and ${count - 1} more page(s)` : ""}?`,
     async () => {
       try {
-        const outcome = await api.restoreDeletedPage(sha, id, currentSection()?.id ?? null);
+        const outcome = await api.restoreDeletedPage(id, sha, currentSection()?.id ?? null);
         await refreshTree();
-        const idx = app.notebook?.sections.findIndex((s) => s.id === outcome.sectionId) ?? -1;
-        if (idx >= 0) app.sectionIdx = idx;
+        showSection(outcome.sectionId);
         selectAndOpen(outcome.pageId);
         flashStatus(
           outcome.renamed

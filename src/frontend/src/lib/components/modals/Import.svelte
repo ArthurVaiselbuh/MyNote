@@ -1,8 +1,9 @@
 <script lang="ts">
   import * as act from "../../actions";
-  import type { PagePreview, SectionPreview } from "../../api";
+  import type { PagePreview } from "../../api";
   import { autofocus } from "../../autofocus";
   import { app } from "../../state/app.svelte";
+  import { countPages } from "../../treeUtils";
 
   const preview = $derived(app.importPreview);
   const canImport = $derived((preview?.pageCount ?? 0) > 0);
@@ -11,14 +12,6 @@
   $effect(() => {
     if (canImport && primaryBtn) primaryBtn.focus();
   });
-
-  function countPages(pages: PagePreview[]): number {
-    return pages.reduce((n, p) => n + 1 + countPages(p.children), 0);
-  }
-
-  function sectionCount(section: SectionPreview): number {
-    return countPages(section.pages);
-  }
 
   function keys(e: KeyboardEvent) {
     if (e.key !== "Enter") return;
@@ -83,7 +76,7 @@
                 {#if section.error}
                   <span class="import-warn">{section.error}</span>
                 {:else}
-                  <span class="import-count">{sectionCount(section)} page(s) → new section</span>
+                  <span class="import-count">{countPages(section)} page(s) → new section</span>
                   {#if section.exists}
                     <span class="import-warn">a section with this name already exists</span>
                   {/if}

@@ -12,24 +12,26 @@
   );
 
   function commit(value: string) {
-    if (app.creatingSection) {
-      void act.createSectionNamed(value);
-      return;
+    if (app.creatingSection) void act.createSectionNamed(value);
+    else if (app.renamingSection && section) {
+      app.renamingSection = false;
+      void act.renameSection(section.id, value.trim() || "Untitled Section");
     }
-    if (!app.renamingSection || !section) return;
-    app.renamingSection = false;
-    void act.renameSection(section.id, value.trim() || "Untitled Section");
   }
 
-  function renameKeys(e: KeyboardEvent) {
-    if (e.key === "Enter") (e.currentTarget as HTMLInputElement).blur();
-    if (e.key === "Escape") {
+  function cancel() {
+    if (app.creatingSection) act.cancelNewSection();
+    else {
+      app.renamingSection = false;
+      app.focus = "tree";
+    }
+  }
+
+  function renameKeys(e: KeyboardEvent & { currentTarget: HTMLInputElement }) {
+    if (e.key === "Enter") e.currentTarget.blur();
+    else if (e.key === "Escape") {
       e.stopPropagation();
-      if (app.creatingSection) act.cancelNewSection();
-      else {
-        app.renamingSection = false;
-        app.focus = "tree";
-      }
+      cancel();
     }
   }
 </script>

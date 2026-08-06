@@ -5,28 +5,39 @@
 
   let filter = $state("");
 
+  const query = $derived(filter.trim().toLowerCase());
   const inHistory = $derived(app.helpContext === "history");
 
-  const paneGroup = $derived.by((): { name: string; rows: HelpRow[] } => {
+  const focusedPane = $derived.by((): { name: string; rows: HelpRow[] } => {
     switch (app.focus) {
       case "tree":
-        return { name: "Tree", rows: rowsFor("tree") };
+        return { name: "Tree (focused pane)", rows: rowsFor("tree") };
       case "results":
       case "search":
-        return { name: "Results", rows: rowsFor("results") };
+        return { name: "Results (focused pane)", rows: rowsFor("results") };
       default:
-        return { name: "Editor", rows: editorRows() };
+        return { name: "Editor (focused pane)", rows: editorRows() };
     }
   });
 
-  function filtered(rows: HelpRow[]): HelpRow[] {
-    const f = filter.trim().toLowerCase();
-    return rows
-      .filter((r) => !r.gate || (r.gate === "git" && app.git?.available))
-      .filter(
-        ({ keys, desc, search }) => !f || (keys + " " + desc + " " + (search ?? "")).toLowerCase().includes(f),
-      );
+  function visible(rows: HelpRow[]): HelpRow[] {
+    return rows.filter(
+      ({ keys, desc, search, gate }) =>
+        (!gate || (gate === "git" && app.git?.available)) &&
+        (!query || `${keys} ${desc} ${search ?? ""}`.toLowerCase().includes(query)),
+    );
   }
+
+  const groups = $derived(
+    (inHistory
+      ? [{ name: "History", rows: historyRows() }]
+      : [
+          focusedPane,
+          { name: "Panes", rows: rowsFor("pane") },
+          { name: "Global", rows: [...rowsFor("global"), ...rowsFor("system")] },
+        ]
+    ).map(({ name, rows }) => ({ name, rows: visible(rows) })),
+  );
 </script>
 
 <div class="modal-backdrop">
@@ -39,33 +50,14 @@
       use:autofocusSelect
     />
     <div class="help-groups">
-      {#if inHistory}
+      {#each groups as group (group.name)}
         <div class="help-group">
-          <h3>History</h3>
-          {#each filtered(historyRows()) as { keys, desc }}
+          <h3>{group.name}</h3>
+          {#each group.rows as { keys, desc }}
             <div class="help-row"><span>{desc}</span><kbd>{keys}</kbd></div>
           {/each}
         </div>
-      {:else}
-        <div class="help-group">
-          <h3>{paneGroup.name} (focused pane)</h3>
-          {#each filtered(paneGroup.rows) as { keys, desc }}
-            <div class="help-row"><span>{desc}</span><kbd>{keys}</kbd></div>
-          {/each}
-        </div>
-        <div class="help-group">
-          <h3>Panes</h3>
-          {#each filtered(rowsFor("pane")) as { keys, desc }}
-            <div class="help-row"><span>{desc}</span><kbd>{keys}</kbd></div>
-          {/each}
-        </div>
-        <div class="help-group">
-          <h3>Global</h3>
-          {#each filtered([...rowsFor("global"), ...rowsFor("system")]) as { keys, desc }}
-            <div class="help-row"><span>{desc}</span><kbd>{keys}</kbd></div>
-          {/each}
-        </div>
-      {/if}
+      {/each}
     </div>
     <div class="hint">{inHistory ? "Esc returns to history" : "Esc closes"} · rebind in Settings</div>
   </div>

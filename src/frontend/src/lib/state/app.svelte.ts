@@ -1,5 +1,12 @@
-import type { GitStatus, ImportPreview, Notebook, RecentNotebook, SearchHit, Settings } from "../api";
-import { defaultSettings } from "../api";
+import type {
+  GitStatus,
+  ImportPreview,
+  Notebook,
+  RecentNotebook,
+  SearchHit,
+  SearchMode,
+  Settings,
+} from "../api";
 
 export type Pane = "tree" | "editor" | "search" | "results";
 export type ModalName =
@@ -34,6 +41,36 @@ export interface FindPrefill {
   regex: boolean;
 }
 
+// only what the app shows before the backend answers, and what Reset restores —
+// settings.rs::Default is what actually lands in settings.json
+export const defaultSettings: Settings = {
+  notebookPath: null,
+  recentNotebooks: [],
+  zoom: 1.0,
+  textColor: "#d4d4d4",
+  backgroundColor: "#1e1f22",
+  panelColor: "#26282b",
+  accentColor: "#5aa0f2",
+  headingColor: "#d4d4d4",
+  focusAlpha: 0.5,
+  scrollSpeed: 1.0,
+  treeWidth: 300,
+  peekWidth: 460,
+  logLevel: "info",
+  minimizeToTray: false,
+  startOnLogin: false,
+  keybindings: {},
+  window: null,
+};
+
+// Esc steps a sub-modal back to the modal that opened it instead of dismissing
+// the stack; anything absent here closes.
+const MODAL_PARENT: Partial<Record<ModalName, ModalName>> = {
+  colorPicker: "insert",
+  colors: "settings",
+  keybindings: "settings",
+};
+
 export const app = $state({
   focus: "tree" as Pane,
   view: "page" as "page" | "results",
@@ -66,14 +103,14 @@ export const app = $state({
   filterActive: false,
 
   searchQuery: "",
-  searchMode: "fuzzy" as "fuzzy" | "regex",
+  searchMode: "fuzzy" as SearchMode,
   searchError: "",
   searchTerms: [] as string[],
   results: [] as SearchHit[],
   resultsSel: 0,
 
   findPrefill: null as FindPrefill | null,
-  settings: { ...defaultSettings } as Settings,
+  settings: { ...defaultSettings },
   status: "",
   statusIsError: false,
 
@@ -100,3 +137,12 @@ export const app = $state({
   searchFocusReq: 0,
   filterFocusReq: 0,
 });
+
+/** The modal Esc steps back to, or undefined when Esc closes the stack. The
+ * history help sheet and a confirm's `returnTo` are dynamic back-edges, so they
+ * are read from app state rather than from MODAL_PARENT. */
+export function modalParentOf(): ModalName | undefined {
+  if (app.modal === "help" && app.helpContext === "history") return "history";
+  if (app.modal === "confirm") return app.confirm?.returnTo;
+  return MODAL_PARENT[app.modal];
+}

@@ -1,13 +1,14 @@
 <script lang="ts">
   import * as act from "../../actions";
   import { autofocus } from "../../autofocus";
-  import { editorCtl } from "../../editorCtl";
-  import { COLOR_PALETTE } from "../../markdown";
+  import { clampIndex } from "../../listIndex";
+  import { COLOR_PALETTE, COLOR_PALETTE_GRADIENT } from "../../markdown";
+  import { editorCtl } from "../../paneCtl";
 
   const NAMES = Object.keys(COLOR_PALETTE);
   const COLS = 4;
   const CUSTOM = NAMES.length;
-  const RAINBOW = `linear-gradient(90deg, ${Object.values(COLOR_PALETTE).join(",")})`;
+  const CELL_COUNT = CUSTOM + 1;
 
   let sel = $state(0);
   let customInput: HTMLInputElement | undefined = $state();
@@ -19,10 +20,10 @@
 
   function keys(e: KeyboardEvent) {
     switch (e.key) {
-      case "ArrowRight": sel = Math.min(CUSTOM, sel + 1); break;
-      case "ArrowLeft": sel = Math.max(0, sel - 1); break;
-      case "ArrowDown": sel = Math.min(CUSTOM, sel + COLS); break;
-      case "ArrowUp": sel = Math.max(0, sel - COLS); break;
+      case "ArrowRight": sel = clampIndex(sel + 1, CELL_COUNT); break;
+      case "ArrowLeft": sel = clampIndex(sel - 1, CELL_COUNT); break;
+      case "ArrowDown": sel = clampIndex(sel + COLS, CELL_COUNT); break;
+      case "ArrowUp": sel = clampIndex(sel - COLS, CELL_COUNT); break;
       case "Enter":
         if (sel === CUSTOM) customInput?.click();
         else wrapSelection(`]{.${NAMES[sel]}}`);
@@ -58,7 +59,7 @@
         onclick={() => customInput?.click()}
         onmousemove={() => (sel = CUSTOM)}
       >
-        <span class="chip" style:background={RAINBOW}></span>
+        <span class="chip" style:background={COLOR_PALETTE_GRADIENT}></span>
         Custom…
         <input
           type="color"

@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { COLOR_PALETTE, renderBody } from "./markdown";
+import { COLOR_PALETTE, LINE_ATTR, renderBody } from "./markdown";
 
 describe("image width {width=N}", () => {
   it("sets the width attribute and consumes the block", () => {
@@ -34,7 +34,7 @@ describe("image width {width=N}", () => {
     for (const bad of ["{width=abc}", "{width=0}", "{width=12345}", "{width=50%}", "{width=}"]) {
       const html = renderBody(`![i](x.png)${bad}`);
       expect(html).toContain(bad);
-      expect(html).not.toContain("width=\"");
+      expect(html).not.toContain('width="');
     }
   });
 
@@ -122,7 +122,7 @@ describe("color span [text]{...}", () => {
 
 describe("body line attributes", () => {
   const lineOf = (html: string, tag: string) =>
-    Number(new RegExp(`<${tag} data-line="(\\d+)"`).exec(html)?.[1] ?? -1);
+    Number(new RegExp(`<${tag} ${LINE_ATTR}="(\\d+)"`).exec(html)?.[1] ?? -1);
 
   it("reports the line each block starts on", () => {
     const html = renderBody("first\n\nsecond\n\n# head");
@@ -132,19 +132,19 @@ describe("body line attributes", () => {
 
   it("reports body lines, not the lines the spacer paragraphs shifted to", () => {
     const html = renderBody("first\n\n\n\nlast");
-    expect(html).toContain('<p data-line="4">last</p>');
+    expect(html).toContain(`<p ${LINE_ATTR}="4">last</p>`);
   });
 
   it("counts lines inside fences as written", () => {
     const html = renderBody("```\na\n\n\nb\n```\n\nafter");
-    expect(html).toContain('<p data-line="7">after</p>');
+    expect(html).toContain(`<p ${LINE_ATTR}="7">after</p>`);
   });
 });
 
-describe("preserveBlankRuns non-regression", () => {
-  it("keeps spacer paragraphs around the new syntaxes", () => {
+describe("blank-line spacers", () => {
+  it("keeps a spacer paragraph per extra blank line beside width and color attributes", () => {
     const html = renderBody("[a]{.red}\n\n\n\n![i](x.png){width=50}");
-    expect((html.match(/ /g) ?? []).length).toBe(2);
+    expect((html.match(/\u00a0/g) ?? []).length).toBe(2);
     expect(html).toContain(`color:${COLOR_PALETTE.red}`);
     expect(html).toContain('width="50"');
   });

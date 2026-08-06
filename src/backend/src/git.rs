@@ -8,11 +8,7 @@ use std::process::{Child, Command, Stdio};
 use std::sync::{mpsc, OnceLock};
 use std::time::{Duration, Instant};
 
-use crate::store::GitConfig;
-
-fn err<E: std::fmt::Display>(e: E) -> String {
-    e.to_string()
-}
+use crate::err;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum SnapshotKind {
@@ -21,7 +17,16 @@ pub enum SnapshotKind {
     Open,
 }
 
-const IDLE_GRACE_MS: u64 = 30_000;
+impl SnapshotKind {
+    /// A close snapshot is on the path to the window actually going away, so
+    /// it gets far less rope than one the user is not waiting on.
+    fn deadline(self) -> Duration {
+        match self {
+            Self::Idle | Self::Open => Duration::from_secs(20),
+            Self::Close => Duration::from_secs(5),
+        }
+    }
+}
 
 const PROBE_DEADLINE: Duration = Duration::from_secs(3);
 const INIT_DEADLINE: Duration = Duration::from_secs(10);
@@ -29,7 +34,7 @@ const CONFIG_DEADLINE: Duration = Duration::from_secs(3);
 const REV_PARSE_DEADLINE: Duration = Duration::from_secs(3);
 const DIFF_CACHED_DEADLINE: Duration = Duration::from_secs(10);
 
-const HOOKS_DIR: &str = "mynote-hooks";
+const HOOKS_PATH: &str = ".git/mynote-hooks";
 
 const GITATTRIBUTES: &str = "\
 # MyNote keeps the exact bytes you typed — blank lines are WYSIWYG.
@@ -88,9 +93,7 @@ fn probe(candidate: &Path) -> bool {
         .stderr(Stdio::null());
     apply_no_window(&mut cmd);
     match cmd.spawn() {
-        Ok(mut child) => wait_with_deadline(&mut child, PROBE_DEADLINE)
-            .map(|code| code == 0)
-            .unwrap_or(false),
+        Ok(mut child) => wait_with_deadline(&mut child, PROBE_DEADLINE) == Some(0),
         Err(_) => false,
     }
 }
@@ -105,8 +108,35 @@ pub fn available() -> bool {
     exe().is_some()
 }
 
+#[cfg(test)]
+macro_rules! need_git {
+    () => {
+        if !crate::git::available() {
+            eprintln!("skipping: git not found on PATH");
+            return;
+        }
+    };
+}
+#[cfg(test)]
+pub(crate) use need_git;
+
 pub fn is_repo(root: &Path) -> bool {
     root.join(".git").exists()
+}
+
+fn require_git() -> Result<(), String> {
+    if available() {
+        return Ok(());
+    }
+    Err("git not found on PATH".to_string())
+}
+
+fn guard(root: &Path) -> Result<(), String> {
+    require_git()?;
+    if !is_repo(root) {
+        return Err("not a git repo".to_string());
+    }
+    Ok(())
 }
 
 // ---------------------------------------------------------------------------
@@ -124,32 +154,19 @@ fn apply_no_window(cmd: &mut Command) {
 /// `core.hooksPath` must point at a real, empty directory — `--no-verify`
 /// skips `pre-commit`/`commit-msg` but not `post-commit`, and an empty-string
 /// value makes git resolve hook names relative to cwd instead.
-fn harden_args() -> Vec<String> {
-    vec![
-        "-c".into(),
-        format!("core.hooksPath=.git/{HOOKS_DIR}"),
-        "-c".into(),
-        "core.fsmonitor=false".into(),
-        "-c".into(),
-        "commit.gpgSign=false".into(),
-        "-c".into(),
-        "tag.gpgSign=false".into(),
-        "-c".into(),
-        "gc.auto=0".into(),
-        "-c".into(),
-        "core.autocrlf=false".into(),
-        "-c".into(),
-        "core.safecrlf=false".into(),
-        "-c".into(),
-        "core.eol=lf".into(),
-        "-c".into(),
-        "core.askPass=".into(),
-        "-c".into(),
-        "credential.helper=".into(),
-        "-c".into(),
-        "core.quotepath=false".into(),
-    ]
-}
+const HARDEN_ARGS: [&str; 22] = [
+    "-c", "core.hooksPath=.git/mynote-hooks",
+    "-c", "core.fsmonitor=false",
+    "-c", "commit.gpgSign=false",
+    "-c", "tag.gpgSign=false",
+    "-c", "gc.auto=0",
+    "-c", "core.autocrlf=false",
+    "-c", "core.safecrlf=false",
+    "-c", "core.eol=lf",
+    "-c", "core.askPass=",
+    "-c", "credential.helper=",
+    "-c", "core.quotepath=false",
+];
 
 /// Only the repo-local config MyNote writes (plus `harden_args`) may apply: a
 /// globally-installed `filter.lfs.*`, credential helper, alias or signing rule
@@ -184,12 +201,15 @@ fn base(root: &Path) -> Command {
         .env_remove("SSH_ASKPASS");
     ignore_user_config(&mut c);
     apply_no_window(&mut c);
-    c.args(harden_args());
+    c.args(HARDEN_ARGS);
     c
 }
 
+const MAX_POLL_INTERVAL: Duration = Duration::from_millis(20);
+
 fn wait_with_deadline(child: &mut Child, deadline: Duration) -> Option<i32> {
     let start = Instant::now();
+    let mut poll_interval = Duration::from_millis(1);
     loop {
         match child.try_wait() {
             Ok(Some(status)) => return Some(status.code().unwrap_or(-1)),
@@ -199,7 +219,8 @@ fn wait_with_deadline(child: &mut Child, deadline: Duration) -> Option<i32> {
                     let _ = child.wait();
                     return None;
                 }
-                std::thread::sleep(Duration::from_millis(20));
+                std::thread::sleep(poll_interval);
+                poll_interval = (poll_interval * 2).min(MAX_POLL_INTERVAL);
             }
             Err(_) => return None,
         }
@@ -212,22 +233,17 @@ const MAX_CAPTURE_BYTES: usize = 48 * 1024 * 1024;
 
 fn drain_pipe<T: Read + Send + 'static>(pipe: Option<T>) -> mpsc::Receiver<Vec<u8>> {
     let (tx, rx) = mpsc::channel();
-    match pipe {
-        // if spawn itself fails, `tx` drops with the closure and `rx` sees a
-        // disconnected sender — recv_timeout(..).unwrap_or_default() below
-        // treats that the same as "no output", which is the right fallback.
-        Some(p) => {
-            let _ = std::thread::Builder::new()
-                .name("mynote-git-out".into())
-                .spawn(move || {
-                    let mut buf = Vec::new();
-                    let _ = p.take(MAX_CAPTURE_BYTES as u64 + 1).read_to_end(&mut buf);
-                    let _ = tx.send(buf);
-                });
-        }
-        None => {
-            let _ = tx.send(Vec::new());
-        }
+    // with no pipe, or if the spawn itself fails, `tx` drops here and `rx`
+    // sees a disconnected sender — recv_timeout(..).unwrap_or_default() at the
+    // call sites treats that as "no output", which is the right fallback.
+    if let Some(p) = pipe {
+        let _ = std::thread::Builder::new()
+            .name("mynote-git-out".into())
+            .spawn(move || {
+                let mut buf = Vec::new();
+                let _ = p.take(MAX_CAPTURE_BYTES as u64 + 1).read_to_end(&mut buf);
+                let _ = tx.send(buf);
+            });
     }
     rx
 }
@@ -235,6 +251,15 @@ fn drain_pipe<T: Read + Send + 'static>(pipe: Option<T>) -> mpsc::Receiver<Vec<u
 struct RunOutput {
     code: i32,
     stderr: String,
+}
+
+impl RunOutput {
+    fn ok(&self, subcommand: &str) -> Result<(), String> {
+        if self.code == 0 {
+            return Ok(());
+        }
+        Err(format!("git {subcommand} failed: {}", self.stderr.trim()))
+    }
 }
 
 /// stderr is drained on a background thread *before* waiting — a synchronous
@@ -250,8 +275,9 @@ fn run(root: &Path, args: &[&str], deadline: Duration) -> Result<RunOutput, Stri
         Some(code) => code,
         None => return Err("git timed out".to_string()),
     };
-    let stderr =
-        String::from_utf8_lossy(&err_rx.recv_timeout(CAPTURE_GRACE).unwrap_or_default()).into_owned();
+    let stderr_bytes = err_rx.recv_timeout(CAPTURE_GRACE).unwrap_or_default();
+    let stderr = String::from_utf8(stderr_bytes)
+        .unwrap_or_else(|e| String::from_utf8_lossy(e.as_bytes()).into_owned());
     Ok(RunOutput { code, stderr })
 }
 
@@ -265,7 +291,8 @@ fn seed_file_if_absent(path: &Path, contents: &str) -> Result<(), String> {
     fs::write(path, contents).map_err(err)
 }
 
-/// Append to existing .gitignore for backwards compatibility
+/// Appends to `.git/info/exclude` rather than `.gitignore`, so a notebook
+/// whose `.gitignore` the user has since edited is never rewritten.
 fn ensure_excluded(root: &Path, patterns: &[&str]) -> Result<(), String> {
     let info = root.join(".git").join("info");
     fs::create_dir_all(&info).map_err(err)?;
@@ -285,17 +312,11 @@ fn ensure_excluded(root: &Path, patterns: &[&str]) -> Result<(), String> {
 }
 
 fn run_config(root: &Path, key: &str, value: &str) -> Result<(), String> {
-    let out = run(root, &["config", "--local", key, value], CONFIG_DEADLINE)?;
-    if out.code != 0 {
-        return Err(format!("git config {key} failed: {}", out.stderr.trim()));
-    }
-    Ok(())
+    run(root, &["config", "--local", key, value], CONFIG_DEADLINE)?.ok(&format!("config {key}"))
 }
 
 fn has_identity(root: &Path) -> bool {
-    run(root, &["config", "--get", "user.email"], CONFIG_DEADLINE)
-        .map(|o| o.code == 0)
-        .unwrap_or(false)
+    run(root, &["config", "--get", "user.email"], CONFIG_DEADLINE).is_ok_and(|o| o.code == 0)
 }
 
 fn ensure_identity(root: &Path) -> Result<(), String> {
@@ -307,38 +328,37 @@ fn ensure_identity(root: &Path) -> Result<(), String> {
     Ok(())
 }
 
+const INIT_ARGS: [&str; 6] = [
+    "-c", "init.templateDir=",
+    "-c", "init.defaultBranch=main",
+    "init", "--quiet",
+];
+
+/// `HARDEN_ARGS` already forces these on every MyNote invocation; persisting
+/// them into `.git/config` is what makes the user's *own* git client treat the
+/// notebook the same way.
+const PERSISTED_CONFIG: [(&str, &str); 4] = [
+    ("core.autocrlf", "false"),
+    ("core.safecrlf", "false"),
+    ("commit.gpgsign", "false"),
+    ("core.hooksPath", HOOKS_PATH),
+];
+
 /// Idempotent. Seeds `.gitattributes`/`.gitignore` before the first `git add`
 /// so they govern the first commit too — git reads attributes from the
 /// working tree at add time.
 pub fn ensure_repo(root: &Path) -> Result<(), String> {
-    if !available() {
-        return Err("git not found on PATH".to_string());
-    }
+    require_git()?;
     if !is_repo(root) {
-        let out = run(
-            root,
-            &[
-                "-c",
-                "init.templateDir=",
-                "-c",
-                "init.defaultBranch=main",
-                "init",
-                "--quiet",
-            ],
-            INIT_DEADLINE,
-        )?;
-        if out.code != 0 {
-            return Err(format!("git init failed: {}", out.stderr.trim()));
-        }
+        run(root, &INIT_ARGS, INIT_DEADLINE)?.ok("init")?;
     }
-    fs::create_dir_all(root.join(".git").join(HOOKS_DIR)).map_err(err)?;
+    fs::create_dir_all(root.join(HOOKS_PATH)).map_err(err)?;
     seed_file_if_absent(&root.join(".gitattributes"), GITATTRIBUTES)?;
     seed_file_if_absent(&root.join(".gitignore"), GITIGNORE)?;
     ensure_excluded(root, &[crate::store::USER_STATE_FILE])?;
-    run_config(root, "core.autocrlf", "false")?;
-    run_config(root, "core.safecrlf", "false")?;
-    run_config(root, "commit.gpgsign", "false")?;
-    run_config(root, "core.hooksPath", &format!(".git/{HOOKS_DIR}"))?;
+    for (key, value) in PERSISTED_CONFIG {
+        run_config(root, key, value)?;
+    }
     ensure_identity(root)?;
     Ok(())
 }
@@ -352,8 +372,7 @@ fn has_head(root: &Path) -> bool {
         &["rev-parse", "--verify", "--quiet", "HEAD"],
         REV_PARSE_DEADLINE,
     )
-    .map(|o| o.code == 0)
-    .unwrap_or(false)
+    .is_ok_and(|o| o.code == 0)
 }
 
 fn has_staged_changes(root: &Path) -> Result<bool, String> {
@@ -378,45 +397,28 @@ fn commit(root: &Path, deadline: Duration) -> Result<RunOutput, String> {
     )
 }
 
+fn commit_needs_identity(stderr: &str) -> bool {
+    let lowered = stderr.to_lowercase();
+    lowered.contains("tell me who you are") || lowered.contains("empty ident")
+}
+
 /// Stages and commits everything in `root`. `Ok(true)` if a commit was made,
 /// `Ok(false)` if there was nothing to commit.
-pub fn snapshot(root: &Path, kind: SnapshotKind, deadline: Duration) -> Result<bool, String> {
-    if !available() {
-        return Err("git not found on PATH".to_string());
-    }
-    if !is_repo(root) {
-        return Err("not a git repo".to_string());
-    }
-    let add_out = run(root, &["add", "-A"], deadline)?;
-    if add_out.code != 0 {
-        return Err(format!("git add failed: {}", add_out.stderr.trim()));
-    }
+pub fn snapshot(root: &Path, kind: SnapshotKind) -> Result<bool, String> {
+    guard(root)?;
+    let deadline = kind.deadline();
+    run(root, &["add", "-A"], deadline)?.ok("add")?;
     if has_head(root) && !has_staged_changes(root)? {
         return Ok(false);
     }
-    let out = commit(root, deadline)?;
-    if out.code == 0 {
-        log::info!("git snapshot committed ({kind:?})");
-        return Ok(true);
-    }
-    let stderr_lc = out.stderr.to_lowercase();
-    if stderr_lc.contains("tell me who you are") || stderr_lc.contains("empty ident") {
+    let mut out = commit(root, deadline)?;
+    if out.code != 0 && commit_needs_identity(&out.stderr) {
         ensure_identity(root)?;
-        let retry = commit(root, deadline)?;
-        if retry.code == 0 {
-            log::info!("git snapshot committed ({kind:?})");
-            return Ok(true);
-        }
-        return Err(format!("git commit failed: {}", retry.stderr.trim()));
+        out = commit(root, deadline)?;
     }
-    Err(format!("git commit failed: {}", out.stderr.trim()))
-}
-
-pub fn should_snapshot(cfg: &GitConfig, seq: u64, committed: u64, idle_ms: u64, since_commit_ms: u64) -> bool {
-    cfg.enabled
-        && seq != committed
-        && idle_ms >= IDLE_GRACE_MS
-        && since_commit_ms >= cfg.interval_secs.saturating_mul(1000)
+    out.ok("commit")?;
+    log::info!("git snapshot committed ({kind:?})");
+    Ok(true)
 }
 
 // ---------------------------------------------------------------------------
@@ -440,16 +442,6 @@ pub const MAX_DELETE_COMMITS: usize = 200;
 const RECORD_SEP: char = '\u{1e}';
 const FIELD_SEP: char = '\u{1f}';
 
-fn guard(root: &Path) -> Result<(), String> {
-    if !available() {
-        return Err("git not found on PATH".to_string());
-    }
-    if !is_repo(root) {
-        return Err("not a git repo".to_string());
-    }
-    Ok(())
-}
-
 /// A bare commit sha (7-64 hex chars, so both full and abbreviated forms
 /// work) — the only revision shape callers outside this module should ever
 /// hand in. Exported so `commands.rs`/`history.rs` can validate a raw `sha`
@@ -463,17 +455,37 @@ pub fn is_commit_sha(s: &str) -> bool {
 /// Rejects anything that could be parsed as a git option (a leading `-`)
 /// before it reaches argv.
 fn is_safe_rev(rev: &str) -> bool {
-    let (base, suffix) = match rev.split_once('~') {
-        Some((b, s)) => (b, Some(s)),
-        None => (rev, None),
+    let Some((base, parents)) = rev.split_once('~') else {
+        return is_commit_sha(rev);
     };
-    let suffix_ok = suffix.map_or(true, |s| !s.is_empty() && s.len() <= 2 && s.bytes().all(|b| b.is_ascii_digit()));
-    is_commit_sha(base) && suffix_ok
+    is_commit_sha(base)
+        && (1..=2).contains(&parents.len())
+        && parents.bytes().all(|b| b.is_ascii_digit())
 }
 
 struct Captured {
     code: i32,
     stdout: Vec<u8>,
+}
+
+impl Captured {
+    fn stdout_ok(self, subcommand: &str) -> Result<Vec<u8>, String> {
+        if self.code == 0 {
+            return Ok(self.stdout);
+        }
+        Err(format!("git {subcommand} exited with {}", self.code))
+    }
+
+    /// A repo with no commits, and a path never committed, both exit 128 with
+    /// empty stdout — "no revisions", not an error, and stdout is the only
+    /// thing separating them from a real failure (`base()` keeps stderr out of
+    /// `Captured`).
+    fn log_stdout(self) -> Result<Vec<u8>, String> {
+        if self.code != 0 && self.stdout.is_empty() {
+            return Ok(Vec::new());
+        }
+        self.stdout_ok("log")
+    }
 }
 
 /// `base()` nulls stdout, so anything whose output we actually need goes
@@ -485,7 +497,7 @@ struct Captured {
 fn capture(
     root: &Path,
     args: &[&str],
-    stdin_data: Option<&[u8]>,
+    stdin_data: Option<Vec<u8>>,
     deadline: Duration,
 ) -> Result<Captured, String> {
     let mut cmd = base(root);
@@ -495,16 +507,13 @@ fn capture(
     }
     let mut child = cmd.spawn().map_err(err)?;
 
-    if let Some(data) = stdin_data {
-        if let Some(mut stdin) = child.stdin.take() {
-            let data = data.to_vec();
-            let _ = std::thread::Builder::new()
-                .name("mynote-git-in".into())
-                .spawn(move || {
-                    let _ = stdin.write_all(&data);
-                    // stdin drops here, closing the pipe so git sees EOF
-                });
-        }
+    if let (Some(data), Some(mut stdin)) = (stdin_data, child.stdin.take()) {
+        let _ = std::thread::Builder::new()
+            .name("mynote-git-in".into())
+            .spawn(move || {
+                let _ = stdin.write_all(&data);
+                // stdin drops here, closing the pipe so git sees EOF
+            });
     }
 
     let out_rx = drain_pipe(child.stdout.take());
@@ -542,9 +551,7 @@ fn parse_log_records(bytes: &[u8]) -> Vec<Revision> {
 
 /// Revisions of one path, newest first. `rel` is a repo-relative path with no
 /// pathspec magic characters (page ids and `notebook.json` both qualify).
-/// A repo with no commits, or a path never committed, is `Ok(vec![])` — git
-/// exits 128 with empty stdout for the former, which is otherwise
-/// indistinguishable from "not a git error" without checking stdout too.
+/// A repo with no commits, or a path never committed, is `Ok(vec![])`.
 pub fn log_file(root: &Path, rel: &str, limit: usize) -> Result<Vec<Revision>, String> {
     guard(root)?;
     let limit = limit.clamp(1, MAX_PAGE_REVISIONS);
@@ -556,13 +563,7 @@ pub fn log_file(root: &Path, rel: &str, limit: usize) -> Result<Vec<Revision>, S
         None,
         LOG_DEADLINE,
     )?;
-    if out.code != 0 {
-        if out.stdout.is_empty() {
-            return Ok(Vec::new());
-        }
-        return Err(format!("git log exited with {}", out.code));
-    }
-    Ok(parse_log_records(&out.stdout))
+    Ok(parse_log_records(&out.log_stdout()?))
 }
 
 /// The author timestamp (epoch seconds) of one commit. Used to locate where
@@ -575,11 +576,12 @@ pub fn commit_time(root: &Path, sha: &str) -> Result<i64, String> {
     if !is_commit_sha(sha) {
         return Err("invalid revision".to_string());
     }
-    let out = capture(root, &["log", "-1", "--format=%at", sha], None, LOG_DEADLINE)?;
-    if out.code != 0 {
-        return Err(format!("git log exited with {}", out.code));
-    }
-    String::from_utf8_lossy(&out.stdout).trim().parse::<i64>().map_err(|_| "malformed commit time".to_string())
+    let stdout = capture(root, &["log", "-1", "--format=%at", sha], None, LOG_DEADLINE)?
+        .stdout_ok("log")?;
+    String::from_utf8_lossy(&stdout)
+        .trim()
+        .parse::<i64>()
+        .map_err(|_| "malformed commit time".to_string())
 }
 
 pub struct BlobText {
@@ -588,7 +590,7 @@ pub struct BlobText {
     pub missing: bool,
 }
 
-fn blob_bytes_to_text(bytes: Vec<u8>) -> Result<BlobText, String> {
+fn blob_bytes_to_text(mut bytes: Vec<u8>) -> Result<BlobText, String> {
     let probe_len = bytes.len().min(8192);
     if bytes[..probe_len].contains(&0) {
         return Err("that revision isn't text".to_string());
@@ -598,12 +600,12 @@ fn blob_bytes_to_text(bytes: Vec<u8>) -> Result<BlobText, String> {
             .map(|text| BlobText { text, truncated: false, missing: false })
             .map_err(|_| "that revision isn't valid text".to_string());
     }
-    let slice = &bytes[..MAX_TEXT_BYTES];
-    let valid_up_to = match std::str::from_utf8(slice) {
+    let valid_up_to = match std::str::from_utf8(&bytes[..MAX_TEXT_BYTES]) {
         Ok(s) => s.len(),
         Err(e) => e.valid_up_to(),
     };
-    let text = String::from_utf8_lossy(&slice[..valid_up_to]).into_owned();
+    bytes.truncate(valid_up_to);
+    let text = String::from_utf8(bytes).map_err(|_| "that revision isn't valid text".to_string())?;
     Ok(BlobText { text, truncated: true, missing: false })
 }
 
@@ -636,7 +638,7 @@ fn parse_batch_output(bytes: &[u8], expected: usize) -> Vec<Option<Vec<u8>>> {
             continue;
         }
         // "<oid> <type> <size>" — size is the only field we need.
-        let Some(size) = header.rsplit(' ').next().and_then(|s| s.parse::<usize>().ok()) else {
+        let Some(size) = header.rsplit_once(' ').and_then(|(_, s)| s.parse::<usize>().ok()) else {
             break; // malformed header — bail rather than misparse the rest of the stream
         };
         if pos + size > bytes.len() {
@@ -654,6 +656,10 @@ fn parse_batch_output(bytes: &[u8], expected: usize) -> Vec<Option<Vec<u8>>> {
     out
 }
 
+pub fn parent_of(sha: &str) -> String {
+    format!("{sha}~1")
+}
+
 /// Bulk blob fetch: one process regardless of how many `specs` (`"<rev>:<rel>"`)
 /// are requested, chunked at `MAX_BATCH_SPECS`. Results are positional — index
 /// `i` of the result is the blob for `specs[i]`, `None` when that path didn't
@@ -665,16 +671,15 @@ pub fn read_blobs(root: &Path, specs: &[String]) -> Result<Vec<Option<Vec<u8>>>,
     guard(root)?;
     let mut results = Vec::with_capacity(specs.len());
     for chunk in specs.chunks(MAX_BATCH_SPECS) {
-        let mut input = String::new();
-        for s in chunk {
-            input.push_str(s);
-            input.push('\n');
-        }
-        let out = capture(root, &["cat-file", "--batch"], Some(input.as_bytes()), BATCH_DEADLINE)?;
-        if out.code != 0 {
-            return Err(format!("git cat-file exited with {}", out.code));
-        }
-        results.extend(parse_batch_output(&out.stdout, chunk.len()));
+        let input = format!("{}\n", chunk.join("\n"));
+        let stdout = capture(
+            root,
+            &["cat-file", "--batch"],
+            Some(input.into_bytes()),
+            BATCH_DEADLINE,
+        )?
+        .stdout_ok("cat-file")?;
+        results.extend(parse_batch_output(&stdout, chunk.len()));
     }
     Ok(results)
 }
@@ -683,14 +688,6 @@ pub struct DeletedGroup {
     pub sha: String,
     pub at: i64,
     pub ids: Vec<String>,
-}
-
-fn page_id_from_deleted_path(path: &str) -> Option<String> {
-    let name = path.strip_suffix(".md")?;
-    if name.contains('/') {
-        return None; // e.g. assets/<id>/foo.png deleted alongside the page
-    }
-    crate::store::is_page_id(name).then(|| name.to_string())
 }
 
 fn parse_deleted_groups(bytes: &[u8]) -> Vec<DeletedGroup> {
@@ -703,18 +700,14 @@ fn parse_deleted_groups(bytes: &[u8]) -> Vec<DeletedGroup> {
         // header and the NUL-separated path list are joined by a literal
         // '\n' (the pretty-format's own terminator, printed regardless of
         // -z; -z only affects the record separator and the path list).
-        let mut fields = rec.splitn(2, '\u{0}');
-        let Some(header) = fields.next() else { continue };
-        let rest = fields.next().unwrap_or("").strip_prefix('\n').unwrap_or("");
-        let mut hp = header.splitn(2, FIELD_SEP);
-        let Some(sha) = hp.next() else { continue };
-        let Some(at) = hp.next().and_then(|s| s.parse::<i64>().ok()) else {
-            continue;
-        };
-        let ids: Vec<String> = rest
+        let (header, paths) = rec.split_once('\u{0}').unwrap_or((rec, ""));
+        let paths = paths.strip_prefix('\n').unwrap_or("");
+        let Some((sha, at)) = header.split_once(FIELD_SEP) else { continue };
+        let Ok(at) = at.parse::<i64>() else { continue };
+        let ids: Vec<String> = paths
             .split('\u{0}')
             .filter(|p| !p.is_empty())
-            .filter_map(page_id_from_deleted_path)
+            .filter_map(crate::store::page_id_from_rel)
             .collect();
         if !ids.is_empty() {
             out.push(DeletedGroup { sha: sha.to_string(), at, ids });
@@ -749,13 +742,7 @@ pub fn deleted_md_groups(root: &Path, limit: usize) -> Result<Vec<DeletedGroup>,
         None,
         LOG_DEADLINE,
     )?;
-    if out.code != 0 {
-        if out.stdout.is_empty() {
-            return Ok(Vec::new());
-        }
-        return Err(format!("git log exited with {}", out.code));
-    }
-    Ok(parse_deleted_groups(&out.stdout))
+    Ok(parse_deleted_groups(&out.log_stdout()?))
 }
 
 /// Repo-relative paths under `dir_prefix` at `rev`. Empty (not an error) when
@@ -765,11 +752,14 @@ pub fn list_tree_files(root: &Path, rev: &str, dir_prefix: &str) -> Result<Vec<S
     if !is_safe_rev(rev) {
         return Err("invalid revision".to_string());
     }
-    let out = capture(root, &["ls-tree", "-r", "-z", "--name-only", rev, "--", dir_prefix], None, LOG_DEADLINE)?;
-    if out.code != 0 {
-        return Err(format!("git ls-tree exited with {}", out.code));
-    }
-    Ok(String::from_utf8_lossy(&out.stdout)
+    let stdout = capture(
+        root,
+        &["ls-tree", "-r", "-z", "--name-only", rev, "--", dir_prefix],
+        None,
+        LOG_DEADLINE,
+    )?
+    .stdout_ok("ls-tree")?;
+    Ok(String::from_utf8_lossy(&stdout)
         .split('\u{0}')
         .filter(|s| !s.is_empty())
         .map(|s| s.to_string())
@@ -779,13 +769,6 @@ pub fn list_tree_files(root: &Path, rev: &str, dir_prefix: &str) -> Result<Vec<S
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    fn cfg(enabled: bool, interval_secs: u64) -> GitConfig {
-        GitConfig {
-            enabled,
-            interval_secs,
-        }
-    }
 
     #[test]
     fn resolve_returns_none_for_bogus_exe() {
@@ -802,24 +785,11 @@ mod tests {
         assert!(GITATTRIBUTES.contains("* -text"));
     }
 
+    /// `HARDEN_ARGS` has to spell the hooks path as a literal to stay a const.
     #[test]
-    fn should_snapshot_matrix() {
-        assert!(!should_snapshot(&cfg(false, 3600), 5, 0, 1_000_000, 1_000_000));
-        assert!(!should_snapshot(&cfg(true, 3600), 5, 5, 1_000_000, 1_000_000));
-        assert!(!should_snapshot(&cfg(true, 3600), 5, 0, 1_000, 3_600_000));
-        assert!(!should_snapshot(&cfg(true, 3600), 5, 0, 60_000, 10_000));
-        assert!(should_snapshot(&cfg(true, 3600), 5, 0, 60_000, 3_600_001));
-        assert!(!should_snapshot(&cfg(true, 0), 5, 0, 1_000, 1_000_000));
-        assert!(should_snapshot(&cfg(true, 0), 5, 0, 30_000, 0));
-    }
-
-    macro_rules! need_git {
-        () => {
-            if !available() {
-                eprintln!("skipping: git not found on PATH");
-                return;
-            }
-        };
+    fn harden_args_and_persisted_config_agree_on_the_hooks_path() {
+        assert!(HARDEN_ARGS.contains(&format!("core.hooksPath={HOOKS_PATH}").as_str()));
+        assert!(PERSISTED_CONFIG.contains(&("core.hooksPath", HOOKS_PATH)));
     }
 
     #[test]
@@ -833,6 +803,15 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         ensure_repo(dir.path()).unwrap();
         dir
+    }
+
+    fn snap(dir: &Path) -> bool {
+        snapshot(dir, SnapshotKind::Idle).unwrap()
+    }
+
+    fn git_text(dir: &Path, args: &[&str]) -> String {
+        let out = capture(dir, args, None, Duration::from_secs(10)).unwrap();
+        String::from_utf8_lossy(&out.stdout).into_owned()
     }
 
     #[test]
@@ -849,20 +828,15 @@ mod tests {
         fs::write(dir.path().join("scratch.tmp"), "junk").unwrap();
 
         assert!(dir.path().join(".git").is_dir());
-        assert!(dir.path().join(".git").join(HOOKS_DIR).is_dir());
+        assert!(dir.path().join(HOOKS_PATH).is_dir());
 
-        let committed = snapshot(dir.path(), SnapshotKind::Open, Duration::from_secs(20)).unwrap();
+        let committed = snapshot(dir.path(), SnapshotKind::Open).unwrap();
         assert!(committed);
 
         let out = run(dir.path(), &["log", "--oneline"], Duration::from_secs(5)).unwrap();
         assert_eq!(out.code, 0);
 
-        let files_out = base(dir.path())
-            .args(["ls-files"])
-            .stdout(Stdio::piped())
-            .output()
-            .unwrap();
-        let files = String::from_utf8_lossy(&files_out.stdout);
+        let files = git_text(dir.path(), &["ls-files"]);
         assert!(files.contains("notebook.json"));
         assert!(files.contains("AGENTS.md"));
         assert!(files.contains(&uuid_md));
@@ -877,15 +851,10 @@ mod tests {
         need_git!();
         let dir = init_temp_repo();
         fs::write(dir.path().join("notebook.json"), "{}").unwrap();
-        assert!(snapshot(dir.path(), SnapshotKind::Idle, Duration::from_secs(20)).unwrap());
-        assert!(!snapshot(dir.path(), SnapshotKind::Idle, Duration::from_secs(20)).unwrap());
+        assert!(snap(dir.path()));
+        assert!(!snap(dir.path()));
 
-        let files_out = base(dir.path())
-            .args(["log", "--oneline"])
-            .stdout(Stdio::piped())
-            .output()
-            .unwrap();
-        let log = String::from_utf8_lossy(&files_out.stdout);
+        let log = git_text(dir.path(), &["log", "--oneline"]);
         assert_eq!(log.lines().count(), 1);
     }
 
@@ -897,12 +866,9 @@ mod tests {
 
         let content = "# T\r\n\r\n\r\na\r\n";
         fs::write(dir.path().join("page.md"), content).unwrap();
-        assert!(snapshot(dir.path(), SnapshotKind::Idle, Duration::from_secs(20)).unwrap());
+        assert!(snap(dir.path()));
 
-        let blob = base(dir.path())
-            .args(["cat-file", "blob", "HEAD:page.md"])
-            .stdout(Stdio::piped())
-            .output()
+        let blob = capture(dir.path(), &["cat-file", "blob", "HEAD:page.md"], None, Duration::from_secs(10))
             .unwrap();
         assert_eq!(blob.stdout, content.as_bytes());
 
@@ -928,7 +894,7 @@ mod tests {
         .unwrap();
         fs::write(dir.path().join("notebook.json"), "{\"x\":1}").unwrap();
 
-        assert!(snapshot(dir.path(), SnapshotKind::Idle, Duration::from_secs(20)).unwrap());
+        assert!(snap(dir.path()));
     }
 
     /// Points a git process at a throwaway home directory holding a global
@@ -947,12 +913,7 @@ mod tests {
 
     fn init_bare_repo_without_identity() -> tempfile::TempDir {
         let dir = tempfile::tempdir().unwrap();
-        let out = run(
-            dir.path(),
-            &["-c", "init.templateDir=", "-c", "init.defaultBranch=main", "init", "--quiet"],
-            INIT_DEADLINE,
-        )
-        .unwrap();
+        let out = run(dir.path(), &INIT_ARGS, INIT_DEADLINE).unwrap();
         assert_eq!(out.code, 0);
         dir
     }
@@ -1006,17 +967,12 @@ mod tests {
         .unwrap();
         store.write_page(&page.id, "# Pics\n\nno image here\n").unwrap();
         ensure_repo(dir.path()).unwrap();
-        assert!(snapshot(dir.path(), SnapshotKind::Open, Duration::from_secs(20)).unwrap());
+        assert!(snapshot(dir.path(), SnapshotKind::Open).unwrap());
 
         let info = store.close();
-        assert!(snapshot(&info.root, SnapshotKind::Close, Duration::from_secs(5)).unwrap());
+        assert!(snapshot(&info.root, SnapshotKind::Close).unwrap());
 
-        let files_out = base(dir.path())
-            .args(["ls-files"])
-            .stdout(Stdio::piped())
-            .output()
-            .unwrap();
-        let files = String::from_utf8_lossy(&files_out.stdout);
+        let files = git_text(dir.path(), &["ls-files"]);
         assert!(!files.contains(&img), "pruned asset should not be tracked after the close commit");
     }
 
@@ -1072,7 +1028,7 @@ mod tests {
             }
         }
         fs::write(dir.path().join("notebook.json"), "{}").unwrap();
-        assert!(snapshot(dir.path(), SnapshotKind::Idle, Duration::from_secs(20)).unwrap());
+        assert!(snap(dir.path()));
         assert!(!marker.exists(), "a global-style hook must never run for a MyNote snapshot");
     }
 
@@ -1106,9 +1062,8 @@ mod tests {
 
         fs::write(dir.path().join("notebook.json"), "{}").unwrap();
         fs::write(dir.path().join(crate::store::USER_STATE_FILE), "{}").unwrap();
-        assert!(snapshot(dir.path(), SnapshotKind::Idle, Duration::from_secs(20)).unwrap());
-        let files_out = base(dir.path()).args(["ls-files"]).stdout(Stdio::piped()).output().unwrap();
-        let files = String::from_utf8_lossy(&files_out.stdout);
+        assert!(snap(dir.path()));
+        let files = git_text(dir.path(), &["ls-files"]);
         assert!(!files.contains(crate::store::USER_STATE_FILE));
     }
 
@@ -1136,7 +1091,7 @@ mod tests {
         need_git!();
         let dir = init_temp_repo();
         fs::write(dir.path().join("notebook.json"), "{}").unwrap();
-        assert!(snapshot(dir.path(), SnapshotKind::Idle, Duration::from_secs(20)).unwrap());
+        assert!(snap(dir.path()));
         let sha = head_sha(dir.path());
         let revs = log_file(dir.path(), "notebook.json", 10).unwrap();
         assert_eq!(commit_time(dir.path(), &sha).unwrap(), revs[0].at);
@@ -1167,7 +1122,7 @@ mod tests {
     fn commit_uuid_page(dir: &Path, content: &str) -> String {
         let id = crate::store::new_id();
         fs::write(dir.join(format!("{id}.md")), content).unwrap();
-        assert!(snapshot(dir, SnapshotKind::Idle, Duration::from_secs(20)).unwrap());
+        assert!(snap(dir));
         id
     }
 
@@ -1186,7 +1141,7 @@ mod tests {
         let dir = init_temp_repo();
         let id = commit_uuid_page(dir.path(), "# T\n\nv1\n");
         fs::write(dir.path().join(format!("{id}.md")), "# T\n\nv2\n").unwrap();
-        assert!(snapshot(dir.path(), SnapshotKind::Idle, Duration::from_secs(20)).unwrap());
+        assert!(snap(dir.path()));
 
         let revs = log_file(dir.path(), &format!("{id}.md"), 10).unwrap();
         assert_eq!(revs.len(), 2);
@@ -1206,7 +1161,7 @@ mod tests {
         // no commits at all yet
         assert!(log_file(dir.path(), "notebook.json", 10).unwrap().is_empty());
         fs::write(dir.path().join("notebook.json"), "{}").unwrap();
-        assert!(snapshot(dir.path(), SnapshotKind::Idle, Duration::from_secs(20)).unwrap());
+        assert!(snap(dir.path()));
         // a path that was never committed
         assert!(log_file(dir.path(), "never-existed.md", 10).unwrap().is_empty());
     }
@@ -1219,7 +1174,7 @@ mod tests {
         run_config(dir.path(), "core.autocrlf", "true").unwrap();
         let content = "# T\r\n\r\n\r\na\r\n";
         fs::write(dir.path().join("page.md"), content).unwrap();
-        assert!(snapshot(dir.path(), SnapshotKind::Idle, Duration::from_secs(20)).unwrap());
+        assert!(snap(dir.path()));
 
         let sha = head_sha(dir.path());
         let blob = read_blob_text(dir.path(), &sha, "page.md").unwrap();
@@ -1232,7 +1187,7 @@ mod tests {
         need_git!();
         let dir = init_temp_repo();
         fs::write(dir.path().join("img.png"), [0u8, 1, 2, 137, 80, 78, 71]).unwrap();
-        assert!(snapshot(dir.path(), SnapshotKind::Idle, Duration::from_secs(20)).unwrap());
+        assert!(snap(dir.path()));
         let sha = head_sha(dir.path());
         assert!(read_blob_text(dir.path(), &sha, "img.png").is_err());
         let missing = read_blob_text(dir.path(), &sha, "nope.md").unwrap();
@@ -1246,9 +1201,9 @@ mod tests {
         let dir = init_temp_repo();
         let id = commit_uuid_page(dir.path(), "# T\n\nv1\n");
         fs::remove_file(dir.path().join(format!("{id}.md"))).unwrap();
-        assert!(snapshot(dir.path(), SnapshotKind::Idle, Duration::from_secs(20)).unwrap());
+        assert!(snap(dir.path()));
         fs::write(dir.path().join(format!("{id}.md")), "# T\n\nv2\n").unwrap();
-        assert!(snapshot(dir.path(), SnapshotKind::Idle, Duration::from_secs(20)).unwrap());
+        assert!(snap(dir.path()));
 
         let revs = log_file(dir.path(), &format!("{id}.md"), 10).unwrap();
         assert_eq!(revs.len(), 3, "recreate, delete, and create all remain viewable revisions");
@@ -1269,7 +1224,7 @@ mod tests {
         need_git!();
         let dir = init_temp_repo();
         fs::write(dir.path().join("a.md"), "hi").unwrap();
-        assert!(snapshot(dir.path(), SnapshotKind::Idle, Duration::from_secs(20)).unwrap());
+        assert!(snap(dir.path()));
         assert!(read_blob_text(dir.path(), "--upload-pack=x", "a.md").is_err());
     }
 
@@ -1293,11 +1248,11 @@ mod tests {
         let dir = init_temp_repo();
         let id = commit_uuid_page(dir.path(), "# T\n\nbody\n");
         fs::write(dir.path().join("AGENTS.md"), "hi").unwrap();
-        assert!(snapshot(dir.path(), SnapshotKind::Idle, Duration::from_secs(20)).unwrap());
+        assert!(snap(dir.path()));
 
         fs::remove_file(dir.path().join(format!("{id}.md"))).unwrap();
         fs::remove_file(dir.path().join("AGENTS.md")).unwrap();
-        assert!(snapshot(dir.path(), SnapshotKind::Idle, Duration::from_secs(20)).unwrap());
+        assert!(snap(dir.path()));
 
         let groups = deleted_md_groups(dir.path(), 50).unwrap();
         assert_eq!(groups.len(), 1);
@@ -1312,12 +1267,12 @@ mod tests {
         let dir = init_temp_repo();
         let id = commit_uuid_page(dir.path(), "# T\n\nv1\n");
         fs::remove_file(dir.path().join(format!("{id}.md"))).unwrap();
-        assert!(snapshot(dir.path(), SnapshotKind::Idle, Duration::from_secs(20)).unwrap());
+        assert!(snap(dir.path()));
         // recreate and delete again
         fs::write(dir.path().join(format!("{id}.md")), "# T\n\nv2\n").unwrap();
-        assert!(snapshot(dir.path(), SnapshotKind::Idle, Duration::from_secs(20)).unwrap());
+        assert!(snap(dir.path()));
         fs::remove_file(dir.path().join(format!("{id}.md"))).unwrap();
-        assert!(snapshot(dir.path(), SnapshotKind::Idle, Duration::from_secs(20)).unwrap());
+        assert!(snap(dir.path()));
 
         let groups = deleted_md_groups(dir.path(), 50).unwrap();
         let total: usize = groups.iter().map(|g| g.ids.len()).sum();
@@ -1332,7 +1287,7 @@ mod tests {
         let id = crate::store::new_id();
         fs::create_dir_all(dir.path().join("assets").join(&id)).unwrap();
         fs::write(dir.path().join("assets").join(&id).join("img.png"), [1, 2, 3]).unwrap();
-        assert!(snapshot(dir.path(), SnapshotKind::Idle, Duration::from_secs(20)).unwrap());
+        assert!(snap(dir.path()));
 
         let sha = head_sha(dir.path());
         let files = list_tree_files(dir.path(), &sha, &format!("assets/{id}")).unwrap();

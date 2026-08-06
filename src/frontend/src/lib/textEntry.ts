@@ -5,5 +5,9 @@ export function isTextEntry(target: EventTarget | null): boolean {
   if (!(target instanceof HTMLElement)) return false;
   if (target instanceof HTMLInputElement || target instanceof HTMLTextAreaElement) return true;
   if (target.isContentEditable) return true;
-  return target.closest(".cm-editor") !== null;
+  return isCodeMirror(target);
+}
+
+export function isCodeMirror(target: EventTarget | null): boolean {
+  return target instanceof Element && target.closest(".cm-editor") !== null;
 }

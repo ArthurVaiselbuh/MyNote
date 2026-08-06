@@ -9,9 +9,7 @@ use std::time::Instant;
 
 use crate::lock::{LockError, NotebookLock};
 
-fn err<E: std::fmt::Display>(e: E) -> String {
-    e.to_string()
-}
+use crate::err;
 
 #[derive(Debug)]
 pub enum OpenError {
@@ -59,6 +57,30 @@ pub fn is_page_id(id: &str) -> bool {
     })
 }
 
+pub fn page_rel(id: &str) -> String {
+    format!("{id}.md")
+}
+
+pub fn page_id_from_rel(rel: &str) -> Option<String> {
+    let name = rel.strip_suffix(".md")?;
+    if name.contains('/') {
+        return None; // e.g. assets/<id>/foo.png deleted alongside the page
+    }
+    is_page_id(name).then(|| name.to_string())
+}
+
+pub fn page_path_in(root: &Path, id: &str) -> PathBuf {
+    root.join(page_rel(id))
+}
+
+pub fn assets_rel_dir(page_id: &str) -> String {
+    format!("{ASSETS_DIR}/{page_id}/")
+}
+
+pub fn assets_rel(page_id: &str, name: &str) -> String {
+    assets_rel_dir(page_id) + name
+}
+
 fn default_true() -> bool {
     true
 }
@@ -95,6 +117,10 @@ pub struct LastView {
 fn default_git_interval_secs() -> u64 {
     1200
 }
+
+/// Snapshots are a safety net, not a versioning tool — anything faster than
+/// this would churn the log without buying recoverability.
+const MIN_GIT_INTERVAL_SECS: u64 = 60;
 
 fn default_git_enabled() -> bool {
     true
@@ -202,6 +228,14 @@ struct UserState {
     view_positions: BTreeMap<String, ViewPos>,
 }
 
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct StoredUserState<'a> {
+    last_view: &'a LastView,
+    collapsed: &'a [String],
+    view_positions: &'a BTreeMap<String, ViewPos>,
+}
+
 fn collect_collapsed(list: &[PageNode], out: &mut Vec<String>) {
     for node in list {
         if !node.expanded {
@@ -261,7 +295,9 @@ pub struct UndoOutcome {
 
 const UNDO_LIMIT: usize = 100;
 
+pub const NOTEBOOK_FILE: &str = "notebook.json";
 pub const USER_STATE_FILE: &str = "notebook.user.json";
+pub const ASSETS_DIR: &str = "assets";
 
 const AGENTS_TEMPLATE: &str = include_str!("../templates/agents-template.md");
 
@@ -371,9 +407,9 @@ impl Store {
         if *self.last_saved_json.borrow() == json {
             return Ok(());
         }
-        let path = self.root.join("notebook.json");
+        let path = self.root.join(NOTEBOOK_FILE);
         if path.exists() {
-            let _ = fs::copy(&path, self.root.join("notebook.json.bak"));
+            let _ = fs::copy(&path, self.root.join(format!("{NOTEBOOK_FILE}.bak")));
         }
         atomic_write(&path, json.as_bytes())?;
         *self.last_saved_json.borrow_mut() = json;
@@ -386,18 +422,18 @@ impl Store {
         for section in &self.notebook.sections {
             collect_collapsed(&section.pages, &mut collapsed);
         }
-        let state = UserState {
-            last_view: self.notebook.last_view.clone(),
-            collapsed,
-            view_positions: self.view_positions.clone(),
-        };
-        let json = serde_json::to_string_pretty(&state).map_err(err)?;
+        let json = serde_json::to_string_pretty(&StoredUserState {
+            last_view: &self.notebook.last_view,
+            collapsed: &collapsed,
+            view_positions: &self.view_positions,
+        })
+        .map_err(err)?;
         if *self.last_saved_user_json.borrow() == json {
             return Ok(());
         }
         atomic_write(&self.user_state_path(), json.as_bytes())?;
         *self.last_saved_user_json.borrow_mut() = json;
-        log::trace!("view state saved ({} collapsed)", state.collapsed.len());
+        log::trace!("view state saved ({} collapsed)", collapsed.len());
         Ok(())
     }
 
@@ -436,7 +472,11 @@ impl Store {
     }
 
     pub fn page_path(&self, id: &str) -> PathBuf {
-        self.root.join(format!("{id}.md"))
+        page_path_in(&self.root, id)
+    }
+
+    pub fn assets_dir(&self, page_id: &str) -> PathBuf {
+        self.root.join(ASSETS_DIR).join(page_id)
     }
 
     pub fn create_section(&mut self, name: &str) -> Result<Section, String> {
@@ -488,11 +528,11 @@ impl Store {
             .position(|s| s.id == id)
             .ok_or("section not found")?;
         let section = self.notebook.sections.remove(index);
+        let mut ids = Vec::new();
         for page in &section.pages {
-            let mut ids = Vec::new();
             collect_ids(page, &mut ids);
-            self.session_deleted.extend(ids);
         }
+        self.session_deleted.extend(ids);
         let mut default_added = None;
         if self.notebook.sections.is_empty() {
             let default = Section {
@@ -512,7 +552,7 @@ impl Store {
 
     fn remove_page_files(&self, id: &str) {
         let _ = fs::remove_file(self.page_path(id));
-        let assets = self.root.join("assets").join(id);
+        let assets = self.assets_dir(id);
         if assets.is_dir() {
             let _ = fs::remove_dir_all(assets);
         }
@@ -544,9 +584,7 @@ impl Store {
             list.insert(idx, node.clone());
         }
         if let Some(pid) = parent_id {
-            if let Some(parent) = self.find_page_mut(pid) {
-                parent.expanded = true;
-            }
+            self.expand_page(pid);
         }
         self.save()?;
         Ok(node)
@@ -557,14 +595,10 @@ impl Store {
     }
 
     pub fn write_page(&mut self, id: &str, content: &str) -> Result<String, String> {
-        let existing_title = self
-            .find_page(id)
-            .ok_or("page not found")?
-            .title
-            .clone();
+        let existing_title = &self.find_page(id).ok_or("page not found")?.title;
         atomic_write(&self.page_path(id), content.as_bytes())?;
         let title = extract_title(content).unwrap_or_else(|| existing_title.clone());
-        if title == existing_title {
+        if title == *existing_title {
             self.touch();
             return Ok(title);
         }
@@ -661,9 +695,7 @@ impl Store {
         let idx = index.min(list.len());
         list.insert(idx, node);
         if let Some(pid) = parent_id {
-            if let Some(parent) = self.find_page_mut(pid) {
-                parent.expanded = true;
-            }
+            self.expand_page(pid);
         }
         Ok(())
     }
@@ -687,6 +719,18 @@ impl Store {
         self.save_view_state()
     }
 
+    pub fn set_git_snapshots(
+        &mut self,
+        enabled: bool,
+        interval_secs: Option<u64>,
+    ) -> Result<(), String> {
+        self.notebook.git.enabled = enabled;
+        if let Some(secs) = interval_secs {
+            self.notebook.git.interval_secs = secs.max(MIN_GIT_INTERVAL_SECS);
+        }
+        self.save()
+    }
+
     pub fn set_last_view(
         &mut self,
         section_id: Option<String>,
@@ -707,10 +751,7 @@ impl Store {
     }
 
     pub fn find_page(&self, id: &str) -> Option<&PageNode> {
-        self.notebook
-            .sections
-            .iter()
-            .find_map(|s| find_node(&s.pages, id))
+        find_page_in(&self.notebook, id)
     }
 
     fn find_page_mut(&mut self, id: &str) -> Option<&mut PageNode> {
@@ -718,6 +759,12 @@ impl Store {
             .sections
             .iter_mut()
             .find_map(|s| find_node_mut(&mut s.pages, id))
+    }
+
+    fn expand_page(&mut self, id: &str) {
+        if let Some(node) = self.find_page_mut(id) {
+            node.expanded = true;
+        }
     }
 
     fn record_undo(&mut self, op: UndoOp) {
@@ -803,11 +850,8 @@ impl Store {
         let outcome = match op {
             UndoOp::DeletePage { node, .. } => {
                 let title = node.title.clone();
+                let section_id = self.section_of(&node.id);
                 let new_op = self.apply_delete_page(&node.id)?;
-                let section_id = match &new_op {
-                    UndoOp::DeletePage { section_id, .. } => Some(section_id.clone()),
-                    _ => None,
-                };
                 self.push_undo_keeping_redo(new_op);
                 UndoOutcome {
                     label: format!("deleted \"{title}\""),
@@ -906,27 +950,8 @@ impl Store {
     }
 
     fn locate_page(&self, id: &str) -> Option<(String, Option<String>, usize)> {
-        fn walk(
-            list: &[PageNode],
-            parent: Option<&str>,
-            id: &str,
-        ) -> Option<(Option<String>, usize)> {
-            for (i, node) in list.iter().enumerate() {
-                if node.id == id {
-                    return Some((parent.map(str::to_string), i));
-                }
-                if let Some(found) = walk(&node.children, Some(&node.id), id) {
-                    return Some(found);
-                }
-            }
-            None
-        }
-        for section in &self.notebook.sections {
-            if let Some((parent, index)) = walk(&section.pages, None, id) {
-                return Some((section.id.clone(), parent, index));
-            }
-        }
-        None
+        locate_page_in(&self.notebook, id)
+            .map(|(section, _, parent, index)| (section.id.clone(), parent, index))
     }
 
     fn detach_page(&mut self, id: &str) -> Option<PageNode> {
@@ -957,11 +982,8 @@ impl Store {
         }
     }
 
-    /// True when `id` is free to reuse for a restore: no live tree node, and
-    /// no leftover file on disk either (a pending-purge delete from this same
-    /// session, or a stray `.md` the app never wrote, must never be clobbered).
     pub fn id_available(&self, id: &str) -> bool {
-        self.find_page(id).is_none() && !self.page_path(id).exists()
+        id_available_in(&self.root, &self.notebook, id)
     }
 
     fn write_incoming(&mut self, page: IncomingPage) -> Result<PageNode, String> {
@@ -975,11 +997,11 @@ impl Store {
         } else {
             // the id changed, so the page's own asset links must follow it —
             // otherwise every image in the restored page renders broken.
-            page.content.replace(&format!("assets/{}/", page.id), &format!("assets/{id}/"))
+            page.content.replace(&assets_rel_dir(&page.id), &assets_rel_dir(&id))
         };
         atomic_write(&self.page_path(&id), content.as_bytes())?;
         if !page.assets.is_empty() {
-            let dir = self.root.join("assets").join(&id);
+            let dir = self.assets_dir(&id);
             fs::create_dir_all(&dir).map_err(err)?;
             for (name, bytes) in &page.assets {
                 let Some(safe_name) = Path::new(name).file_name().and_then(|f| f.to_str()) else {
@@ -1039,9 +1061,7 @@ impl Store {
             list.extend(written.iter().cloned());
         }
         if let Some(pid) = &target_parent {
-            if let Some(parent) = self.find_page_mut(pid) {
-                parent.expanded = true;
-            }
+            self.expand_page(pid);
         }
         self.save()?;
         Ok(written)
@@ -1071,8 +1091,8 @@ fn parse_notebook(path: &Path) -> Result<Notebook, String> {
 }
 
 fn load_notebook(root: &Path) -> Result<Notebook, String> {
-    let main = root.join("notebook.json");
-    let backup = root.join("notebook.json.bak");
+    let main = root.join(NOTEBOOK_FILE);
+    let backup = root.join(format!("{NOTEBOOK_FILE}.bak"));
     if main.exists() {
         match parse_notebook(&main) {
             Ok(notebook) => return Ok(notebook),
@@ -1119,7 +1139,7 @@ fn non_empty(value: &str, fallback: &str) -> String {
     }
 }
 
-fn find_node<'a>(list: &'a [PageNode], id: &str) -> Option<&'a PageNode> {
+pub(crate) fn find_node<'a>(list: &'a [PageNode], id: &str) -> Option<&'a PageNode> {
     for node in list {
         if node.id == id {
             return Some(node);
@@ -1155,14 +1175,57 @@ fn detach(list: &mut Vec<PageNode>, id: &str) -> Option<PageNode> {
     None
 }
 
-fn collect_ids(node: &PageNode, out: &mut Vec<String>) {
+pub(crate) fn collect_ids(node: &PageNode, out: &mut Vec<String>) {
     out.push(node.id.clone());
     for child in &node.children {
         collect_ids(child, out);
     }
 }
 
-pub fn flatten_pages<'a>(notebook: &'a Notebook) -> Vec<(&'a Section, &'a PageNode)> {
+pub(crate) fn subtree_len(node: &PageNode) -> usize {
+    1 + node.children.iter().map(subtree_len).sum::<usize>()
+}
+
+/// The tree lookups the `Store` methods delegate to, taking a borrowed
+/// `Notebook` so `history.rs` can run them against one parsed out of a git
+/// blob, which has no `Store` behind it.
+pub(crate) fn find_page_in<'a>(notebook: &'a Notebook, id: &str) -> Option<&'a PageNode> {
+    notebook.sections.iter().find_map(|s| find_node(&s.pages, id))
+}
+
+pub(crate) fn locate_page_in<'a>(
+    notebook: &'a Notebook,
+    id: &str,
+) -> Option<(&'a Section, &'a PageNode, Option<String>, usize)> {
+    fn walk<'a>(
+        list: &'a [PageNode],
+        parent: Option<&str>,
+        id: &str,
+    ) -> Option<(&'a PageNode, Option<String>, usize)> {
+        for (i, node) in list.iter().enumerate() {
+            if node.id == id {
+                return Some((node, parent.map(str::to_string), i));
+            }
+            if let Some(found) = walk(&node.children, Some(&node.id), id) {
+                return Some(found);
+            }
+        }
+        None
+    }
+    notebook
+        .sections
+        .iter()
+        .find_map(|section| walk(&section.pages, None, id).map(|(n, p, i)| (section, n, p, i)))
+}
+
+/// True when `id` is free to reuse for a restore: no live tree node, and no
+/// leftover file on disk either (a pending-purge delete from this same
+/// session, or a stray `.md` the app never wrote, must never be clobbered).
+pub(crate) fn id_available_in(root: &Path, notebook: &Notebook, id: &str) -> bool {
+    find_page_in(notebook, id).is_none() && !page_path_in(root, id).exists()
+}
+
+pub fn flatten_pages(notebook: &Notebook) -> Vec<(&Section, &PageNode)> {
     fn walk<'a>(
         section: &'a Section,
         list: &'a [PageNode],

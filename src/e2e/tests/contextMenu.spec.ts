@@ -3,20 +3,12 @@ import { expect, test, type App } from "../app";
 const menu = (app: App) => app.page.locator(".context-menu");
 const item = (app: App, label: string) => menu(app).locator(".item", { hasText: label });
 
-function row(app: App, title: string) {
-  return app.page.locator(".tree .row", { hasText: title });
-}
-
-// a renaming row shows an input instead of its title, so it can no longer be
-// found by text — only one rename is ever open at a time
-const renameInput = (app: App) => app.page.locator(".tree .row input.rename");
-
 test("the tree menu acts on the right-clicked row without opening it", async ({ app }) => {
   await app.newTitledPage("Alpha", 1);
   await app.newTitledPage("Beta", 2);
-  await expect(app.page.locator(".title-input")).toHaveValue("Beta");
+  await expect(app.titleInput).toHaveValue("Beta");
 
-  await row(app, "Alpha").click({ button: "right" });
+  await app.row("Alpha").click({ button: "right" });
   await expect(menu(app)).toBeVisible();
   await expect(item(app, "New subpage")).toBeVisible();
   await expect(item(app, "Move to section…")).toBeVisible();
@@ -25,40 +17,40 @@ test("the tree menu acts on the right-clicked row without opening it", async ({ 
 
   // selected, but the editor stays on Beta — a menu the user may just dismiss
   // must not navigate as a side effect
-  await expect(app.page.locator(".tree .row.selected .title")).toHaveText("Alpha");
-  await expect(app.page.locator(".title-input")).toHaveValue("Beta");
+  await expect(app.selectedTitle).toHaveText("Alpha");
+  await expect(app.titleInput).toHaveValue("Beta");
 
   await item(app, "Rename").click();
   await expect(menu(app)).toHaveCount(0);
-  await expect(renameInput(app)).toBeFocused();
+  await expect(app.renameInput).toBeFocused();
   await app.page.keyboard.press("Control+a");
   await app.page.keyboard.type("Renamed");
   await app.page.keyboard.press("Enter");
-  await expect(app.page.locator(".tree .row .title")).toHaveText(["Renamed", "Beta"]);
+  await expect(app.rowTitles).toHaveText(["Renamed", "Beta"]);
 });
 
 test("arrows step over separators and wrap, Enter runs the selection", async ({ app }) => {
   await app.newTitledPage("Alpha", 1);
-  await row(app, "Alpha").click({ button: "right" });
+  await app.row("Alpha").click({ button: "right" });
+  const selected = menu(app).locator(".item.selected");
 
   // nothing is preselected, so the first ArrowUp wraps to the last item
   await app.page.keyboard.press("ArrowUp");
-  await expect(menu(app).locator(".item.selected")).toHaveText(/Delete/);
-  await expect(menu(app).locator(".item.selected")).toHaveClass(/danger/);
+  await expect(selected).toHaveText(/Delete/);
+  await expect(selected).toHaveClass(/danger/);
 
-  // ...and ArrowDown from there wraps back to the top
   await app.page.keyboard.press("ArrowDown");
-  await expect(menu(app).locator(".item.selected")).toHaveText(/New page/);
+  await expect(selected).toHaveText(/New page/);
 
   // New subpage, then the separator is skipped rather than selected
   await app.page.keyboard.press("ArrowDown");
-  await expect(menu(app).locator(".item.selected")).toHaveText(/New subpage/);
+  await expect(selected).toHaveText(/New subpage/);
   await app.page.keyboard.press("ArrowDown");
-  await expect(menu(app).locator(".item.selected")).toHaveText(/Rename/);
+  await expect(selected).toHaveText(/Rename/);
 
   await app.page.keyboard.press("Enter");
   await expect(menu(app)).toHaveCount(0);
-  await expect(renameInput(app)).toBeFocused();
+  await expect(app.renameInput).toBeFocused();
 });
 
 test("Esc closes the menu without spending a step of the focus ladder", async ({ app }) => {
@@ -70,7 +62,7 @@ test("Esc closes the menu without spending a step of the focus ladder", async ({
   await app.page.locator(".section-strip").click({ button: "right" });
   await expect(menu(app)).toBeVisible();
   // a context menu is not a modal — it never joins the Esc ladder
-  await expect(app.page.locator(".modal-backdrop")).toHaveCount(0);
+  await expect(app.modalBackdrop).toHaveCount(0);
   await expect(editor).toHaveClass(/focused/);
 
   await app.page.keyboard.press("Escape");
@@ -84,27 +76,26 @@ test("Esc closes the menu without spending a step of the focus ladder", async ({
 
 test("clicking outside dismisses the menu without running anything", async ({ app }) => {
   await app.newTitledPage("Alpha", 1);
-  await row(app, "Alpha").click({ button: "right" });
+  await app.row("Alpha").click({ button: "right" });
   await expect(menu(app)).toBeVisible();
 
-  await app.page.locator(".title-input").click();
+  await app.titleInput.click();
   await expect(menu(app)).toHaveCount(0);
-  await expect(app.page.locator(".tree .row")).toHaveCount(1);
-  await expect(app.page.locator(".tree .row .title")).toHaveText(["Alpha"]);
+  await expect(app.rows).toHaveCount(1);
+  await expect(app.rowTitles).toHaveText(["Alpha"]);
 });
 
 test("text fields keep the native menu, and a modal suppresses ours", async ({ app }) => {
   await app.newTitledPage("Alpha", 1);
 
   await app.page.keyboard.press("F2");
-  const rename = renameInput(app);
-  await expect(rename).toBeFocused();
-  await rename.click({ button: "right" });
+  await expect(app.renameInput).toBeFocused();
+  await app.renameInput.click({ button: "right" });
   await expect(menu(app)).toHaveCount(0);
   await app.page.keyboard.press("Escape");
 
   await app.page.keyboard.press("Control+,");
-  await expect(app.page.locator(".modal-backdrop")).toBeVisible();
+  await expect(app.modalBackdrop).toBeVisible();
   // the backdrop would swallow a real right-click, so drive the strip's own
   // handler directly — what is under test is openContextMenu's modal guard
   await app.page.locator(".section-strip").dispatchEvent("contextmenu");
@@ -135,9 +126,7 @@ test("the results menu retargets the selection and opens in the editor", async (
   await app.newPageWithBody("Groceries", "buy milk milk milk and eggs", 1);
   await app.newPageWithBody("Dairy", "milk comes from cows", 2);
 
-  await app.page.keyboard.press("Control+k");
-  await app.page.keyboard.type("milk");
-  await app.page.keyboard.press("Enter");
+  await app.search("milk");
   const hits = app.page.locator(".results .hit");
   await expect(hits).toHaveCount(2);
   await expect(app.page.locator(".peek .peek-head")).toContainText("Groceries");
@@ -149,27 +138,21 @@ test("the results menu retargets the selection and opens in the editor", async (
   await item(app, "Open in editor").click();
   await expect(menu(app)).toHaveCount(0);
   await expect(app.page.locator(".results")).toHaveCount(0);
-  await expect(app.page.locator(".title-input")).toHaveValue("Dairy");
+  await expect(app.titleInput).toHaveValue("Dairy");
   await expect(app.page.locator(".editor-wrap")).toHaveClass(/focused/);
-  await expect(app.page.locator(".cm-content")).toBeVisible();
+  await expect(app.editorBody).toBeVisible();
 });
 
 test("menu hints follow a rebound chord", async ({ app }) => {
   await app.newTitledPage("Alpha", 1);
-  await row(app, "Alpha").click({ button: "right" });
+  await app.row("Alpha").click({ button: "right" });
   await expect(item(app, "New page").locator(".keys")).toHaveText("Ctrl+N");
   await app.page.keyboard.press("Escape");
 
-  await app.page.keyboard.press("Control+,");
-  await app.page.locator(".settings-row", { hasText: "Keyboard shortcuts" }).getByRole("button").click();
-  const bind = app.page.locator(".keybind-row", { hasText: "New page" }).first();
-  await bind.getByRole("button", { name: "Change…" }).click();
-  await app.page.keyboard.press("Control+Shift+P");
-  await expect(bind.locator("kbd")).toHaveText("Ctrl+Shift+P");
-  await app.page.keyboard.press("Escape");
-  await app.page.keyboard.press("Escape");
-  await expect(app.page.locator(".modal-backdrop")).toHaveCount(0);
+  await app.openKeybindings();
+  await app.rebind("New page", "Control+Shift+P", "Ctrl+Shift+P");
+  await app.closeSettings();
 
-  await row(app, "Alpha").click({ button: "right" });
+  await app.row("Alpha").click({ button: "right" });
   await expect(item(app, "New page").locator(".keys")).toHaveText("Ctrl+Shift+P");
 });

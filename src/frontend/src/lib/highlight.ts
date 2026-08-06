@@ -4,8 +4,20 @@
 
 export function clearHighlights(container: HTMLElement) {
   const marks = container.querySelectorAll("mark.find-hit");
-  for (const m of marks) m.replaceWith(...Array.from(m.childNodes));
+  for (const mark of marks) mark.replaceWith(...mark.childNodes);
   container.normalize();
+}
+
+/** The find cursor. `.current` is the one match a pane has scrolled to, and only
+ * one match ever carries it; the new cursor is returned for the caller to hold. */
+export function setCurrentMatch(
+  prev: HTMLElement | null,
+  next: HTMLElement | null,
+): HTMLElement | null {
+  prev?.classList.remove("current");
+  next?.classList.add("current");
+  next?.scrollIntoView({ block: "center" });
+  return next;
 }
 
 // matches only within a single text node — a term split across inline
@@ -23,14 +35,13 @@ export function applyHighlights(container: HTMLElement, re: RegExp): HTMLElement
     re.lastIndex = 0;
     let m: RegExpExecArray | null;
     let last = 0;
-    let hit = false;
-    const frag = document.createDocumentFragment();
+    let frag: DocumentFragment | null = null;
     while ((m = re.exec(text))) {
       if (m[0].length === 0) {
         re.lastIndex++;
         continue;
       }
-      hit = true;
+      frag ??= document.createDocumentFragment();
       if (m.index > last) frag.append(text.slice(last, m.index));
       const mark = document.createElement("mark");
       mark.className = "find-hit";
@@ -39,7 +50,7 @@ export function applyHighlights(container: HTMLElement, re: RegExp): HTMLElement
       found.push(mark);
       last = m.index + m[0].length;
     }
-    if (hit) {
+    if (frag) {
       if (last < text.length) frag.append(text.slice(last));
       node.replaceWith(frag);
     }

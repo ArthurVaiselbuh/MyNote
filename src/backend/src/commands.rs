@@ -1,9 +1,8 @@
 use serde::Serialize;
 use std::collections::BTreeMap;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::atomic::AtomicBool;
 use std::sync::{mpsc, Mutex};
-use std::time::Duration;
 use tauri::{Emitter, State};
 
 use crate::assets;
@@ -12,14 +11,11 @@ use crate::history;
 use crate::hotkey;
 use crate::import::{ImportOutcome, ImportPreview};
 use crate::{import_md, import_mht};
-use crate::search::{self, SearchResults};
+use crate::search::{self, SearchMode, SearchResults};
 use crate::settings::{self, Settings};
 use crate::startup;
-use crate::store::{CloseInfo, Notebook, OpenError, PageNode, Section, Store, UndoOutcome, ViewPos};
+use crate::store::{self, Notebook, OpenError, PageNode, Section, Store, UndoOutcome, ViewPos};
 use crate::tray;
-
-const OPEN_SNAPSHOT_DEADLINE: Duration = Duration::from_secs(20);
-const CLOSE_SNAPSHOT_DEADLINE: Duration = Duration::from_secs(5);
 
 pub struct AppState {
     pub store: Mutex<Option<Store>>,
@@ -49,7 +45,7 @@ pub struct NotebookInfo {
     pub notebook: Notebook,
 }
 
-fn lock_err<T>(_: T) -> String {
+pub(crate) fn lock_err<T>(_: T) -> String {
     "state lock poisoned".to_string()
 }
 
@@ -75,42 +71,59 @@ fn with_store<T>(
 
 fn close_current(state: &State<'_, AppState>, app: &tauri::AppHandle, guard: &mut Option<Store>) {
     let Some(store) = guard.take() else { return };
-    let info = store.close();
-    commit_on_close(state, app, &info);
+    close_and_commit(state, app, store);
 }
 
-pub(crate) fn commit_on_close(
+pub(crate) fn close_and_commit(
     state: &State<'_, AppState>,
     app: &tauri::AppHandle,
-    info: &CloseInfo,
+    store: Store,
 ) {
-    if !info.git_enabled || !git::available() || !git::is_repo(&info.root) {
-        return;
-    }
-    let Ok(_gate) = state.git_gate.try_lock() else {
-        return;
-    };
-    if let Err(e) = git::snapshot(&info.root, SnapshotKind::Close, CLOSE_SNAPSHOT_DEADLINE) {
-        log::warn!("git close snapshot failed: {e}");
-        emit_git_snapshot_failed(app);
+    let info = store.close();
+    if info.git_enabled {
+        gated_snapshot(state, app, &info.root, SnapshotKind::Close, RepoSetup::Existing);
     }
 }
 
 fn commit_on_open(state: &State<'_, AppState>, app: &tauri::AppHandle, info: &NotebookInfo) {
-    if !info.notebook.git.enabled || !git::available() {
+    if info.notebook.git.enabled {
+        let root = PathBuf::from(&info.root);
+        gated_snapshot(state, app, &root, SnapshotKind::Open, RepoSetup::Ensure);
+    }
+}
+
+enum RepoSetup {
+    Existing,
+    Ensure,
+}
+
+/// A snapshot is never worth blocking on: a busy gate, a missing git, or a
+/// failed commit all mean "skip and tell the user quietly".
+fn gated_snapshot(
+    state: &State<'_, AppState>,
+    app: &tauri::AppHandle,
+    root: &Path,
+    kind: SnapshotKind,
+    setup: RepoSetup,
+) {
+    if !git::available() {
         return;
     }
-    let root = PathBuf::from(&info.root);
+    if matches!(setup, RepoSetup::Existing) && !git::is_repo(root) {
+        return;
+    }
     let Ok(_gate) = state.git_gate.try_lock() else {
         return;
     };
-    if let Err(e) = git::ensure_repo(&root) {
-        log::warn!("git ensure_repo failed: {e}");
-        emit_git_snapshot_failed(app);
-        return;
+    if matches!(setup, RepoSetup::Ensure) {
+        if let Err(e) = git::ensure_repo(root) {
+            log::warn!("git ensure_repo failed: {e}");
+            emit_git_snapshot_failed(app);
+            return;
+        }
     }
-    if let Err(e) = git::snapshot(&root, SnapshotKind::Open, OPEN_SNAPSHOT_DEADLINE) {
-        log::warn!("git open snapshot failed: {e}");
+    if let Err(e) = git::snapshot(root, kind) {
+        log::warn!("git snapshot failed ({kind:?}): {e}");
         emit_git_snapshot_failed(app);
     }
 }
@@ -137,13 +150,19 @@ fn adopt_store(
 
 fn notebook_root_from(path: &str) -> Result<PathBuf, String> {
     let p = PathBuf::from(path);
-    if p.is_file() {
-        if p.file_name().is_some_and(|n| n.eq_ignore_ascii_case("notebook.json")) {
-            return Ok(p.parent().map(Into::into).unwrap_or(p));
-        }
-        return Err("not a notebook: select its notebook.json file".to_string());
+    if !p.is_file() {
+        return Ok(p);
     }
-    Ok(p)
+    let is_notebook_file = p
+        .file_name()
+        .is_some_and(|n| n.eq_ignore_ascii_case(store::NOTEBOOK_FILE));
+    if !is_notebook_file {
+        return Err(format!(
+            "not a notebook: select its {} file",
+            store::NOTEBOOK_FILE
+        ));
+    }
+    Ok(p.parent().map(Path::to_path_buf).unwrap_or(p))
 }
 
 // Git-touching commands are `async fn` on purpose: sync commands run inline in
@@ -199,7 +218,7 @@ pub async fn create_notebook(
     path: String,
 ) -> Result<NotebookInfo, String> {
     let root = PathBuf::from(&path);
-    if root.join("notebook.json").exists() {
+    if root.join(store::NOTEBOOK_FILE).exists() {
         return Err("that folder already contains a notebook — use Open instead".to_string());
     }
     let mut guard = state.store.lock().map_err(lock_err)?;
@@ -233,7 +252,7 @@ pub fn list_recent_notebooks(state: State<'_, AppState>) -> Result<Vec<RecentNot
                     .file_name()
                     .map(|n| n.to_string_lossy().to_string())
                     .unwrap_or_else(|| p.clone()),
-                exists: root.join("notebook.json").is_file(),
+                exists: root.join(store::NOTEBOOK_FILE).is_file(),
             }
         })
         .collect())
@@ -363,8 +382,9 @@ pub fn search_pages(
     query: String,
     mode: String,
 ) -> Result<SearchResults, String> {
-    log::trace!("search ({mode}), {} chars", query.chars().count());
-    with_store(&state, |s| search::search(s, &query, &mode))
+    let mode = SearchMode::from(mode.as_str());
+    log::trace!("search ({mode:?}), {} chars", query.chars().count());
+    with_store(&state, |s| search::search(s, &query, mode))
 }
 
 #[tauri::command]
@@ -435,47 +455,28 @@ pub async fn set_git_snapshots(
     enabled: bool,
     interval_secs: Option<u64>,
 ) -> Result<GitStatus, String> {
-    let root = {
-        let mut guard = state.store.lock().map_err(lock_err)?;
-        let store = guard.as_mut().ok_or_else(|| "no notebook open".to_string())?;
-        store.notebook.git.enabled = enabled;
-        if let Some(secs) = interval_secs {
-            store.notebook.git.interval_secs = secs.max(60);
-        }
-        store.save()?;
+    // `with_store` returns before the snapshot runs: ensure_repo/snapshot must
+    // never hold the store lock.
+    let root = with_store(&state, |s| {
+        s.set_git_snapshots(enabled, interval_secs)?;
         log::info!(
             "git snapshots {} for this notebook",
             if enabled { "enabled" } else { "disabled" }
         );
-        store.root.clone()
-    }; // guard dropped here — ensure_repo/snapshot must never run while it's held
-    if enabled && git::available() {
-        if let Ok(_gate) = state.git_gate.try_lock() {
-            match git::ensure_repo(&root) {
-                Ok(()) => {
-                    if let Err(e) = git::snapshot(&root, SnapshotKind::Open, OPEN_SNAPSHOT_DEADLINE) {
-                        log::warn!("git snapshot failed: {e}");
-                        emit_git_snapshot_failed(&app);
-                    }
-                }
-                Err(e) => {
-                    log::warn!("git ensure_repo failed: {e}");
-                    emit_git_snapshot_failed(&app);
-                }
-            }
-        }
+        Ok(s.root.clone())
+    })?;
+    if enabled {
+        gated_snapshot(&state, &app, &root, SnapshotKind::Open, RepoSetup::Ensure);
     }
-    with_store(&state, |s| Ok(git_status(s)))
+    get_git_status(state)
 }
 
 // ---------------------------------------------------------------------------
 // History — page revisions + deleted-page recovery. Every command clones the
-// `root`/`notebook` it needs and drops the store lock *before* running any
-// git subprocess, so browsing history never blocks autosave, typing, or tree
-// edits on other windows onto the same store mutex. Reads queue on
-// `history_gate` (serializing process spawns, not correctness); the
-// writer phase of a restore takes the store lock again, never alongside
-// `history_gate`.
+// `root`/`notebook` it needs and drops the store lock *before* running any git
+// subprocess, so browsing history never blocks autosave, typing, or tree edits
+// on the same store mutex. See `AppState::history_gate` for why reads take
+// their own gate.
 
 #[tauri::command]
 pub async fn page_revisions(state: State<'_, AppState>, id: String) -> Result<Vec<history::PageRevision>, String> {
@@ -509,29 +510,42 @@ pub async fn deleted_page_text(state: State<'_, AppState>, sha: String, id: Stri
     history::deleted_page_text(&root, &sha, &id)
 }
 
+#[derive(Serialize, Clone)]
+#[serde(rename_all = "camelCase")]
+pub struct RestoreOutcome {
+    pub section_id: String,
+    pub page_id: String,
+    pub page_count: usize,
+    pub asset_count: usize,
+    pub renamed: bool,
+}
+
 #[tauri::command]
 pub async fn restore_deleted_page(
     state: State<'_, AppState>,
     sha: String,
     id: String,
     fallback_section_id: Option<String>,
-) -> Result<history::RestoreOutcome, String> {
+) -> Result<RestoreOutcome, String> {
     let (root, notebook) = with_store(&state, |s| Ok((s.root.clone(), s.notebook.clone())))?;
-    let recovered = {
+    let history::Recovered {
+        section_id,
+        parent_id,
+        page,
+        page_count,
+        asset_count,
+    } = {
         let _gate = state.history_gate.lock().map_err(lock_err)?;
         history::recover(&root, &notebook, &sha, &id, fallback_section_id.as_deref())?
     }; // gate dropped here — insert_restored (a write) must not run under it
 
-    let page_count = recovered.page_count;
-    let asset_count = recovered.asset_count;
-    let requested_id = recovered.page.id.clone();
-    let section_id = recovered.section_id.clone();
+    let requested_id = page.id.clone();
     let written = with_store(&state, |s| {
-        s.insert_restored(&recovered.section_id, recovered.parent_id.as_deref(), vec![recovered.page])
+        s.insert_restored(&section_id, parent_id.as_deref(), vec![page])
     })?;
     let page = written.into_iter().next().ok_or("nothing was restored")?;
     log::info!("restored {page_count} page(s), {asset_count} asset(s) from history");
-    Ok(history::RestoreOutcome {
+    Ok(RestoreOutcome {
         section_id,
         page_id: page.id.clone(),
         page_count,

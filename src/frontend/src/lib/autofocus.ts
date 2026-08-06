@@ -1,8 +1,10 @@
+export function focusSelect(node: HTMLInputElement | null | undefined) {
+  node?.focus();
+  node?.select();
+}
+
 export function autofocusSelect(node: HTMLInputElement) {
-  requestAnimationFrame(() => {
-    node.focus();
-    node.select();
-  });
+  requestAnimationFrame(() => focusSelect(node));
 }
 
 export function autofocus(node: HTMLElement) {

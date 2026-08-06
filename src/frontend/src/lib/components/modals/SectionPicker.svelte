@@ -3,6 +3,7 @@
   import { autofocusSelect } from "../../autofocus";
   import { app } from "../../state/app.svelte";
   import { countPages, sectionOfPage } from "../../treeUtils";
+  import { clampIndex } from "../../listIndex";
   import { labelOf } from "../../keys/bindings";
 
   const moving = $derived(app.sectionPickerMode === "move");
@@ -34,7 +35,7 @@
   });
 
   $effect(() => {
-    if (sel >= items.length) sel = Math.max(0, items.length - 1);
+    if (sel >= items.length) sel = clampIndex(sel, items.length);
   });
 
   $effect(() => {
@@ -85,12 +86,9 @@
     if (e.altKey && (e.key === "ArrowUp" || e.key === "ArrowDown")) {
       e.preventDefault();
       reorder(e.key === "ArrowDown" ? 1 : -1);
-    } else if (e.key === "ArrowDown") {
+    } else if (e.key === "ArrowDown" || e.key === "ArrowUp") {
       e.preventDefault();
-      sel = Math.min(items.length - 1, sel + 1);
-    } else if (e.key === "ArrowUp") {
-      e.preventDefault();
-      sel = Math.max(0, sel - 1);
+      sel = clampIndex(sel + (e.key === "ArrowDown" ? 1 : -1), items.length);
     } else if (e.key === "Enter") {
       e.preventDefault();
       if (items[sel]) choose(items[sel].idx);

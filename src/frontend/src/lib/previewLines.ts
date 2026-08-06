@@ -4,16 +4,16 @@ import { LINE_ATTR } from "./markdown";
 // Only block elements carry LINE_ATTR, so a position is always resolved to the
 // block that contains it.
 
-function blocksIn(container: HTMLElement): HTMLElement[] {
-  return [...container.querySelectorAll<HTMLElement>(`[${LINE_ATTR}]`)];
-}
-
 function bodyLineOf(block: HTMLElement): number {
   return Number(block.getAttribute(LINE_ATTR));
 }
 
-function offsetFromContainerTop(container: HTMLElement, block: HTMLElement): number {
-  return block.getBoundingClientRect().top - container.getBoundingClientRect().top;
+function topOf(el: Element): number {
+  return el.getBoundingClientRect().top;
+}
+
+function offsetBelow(containerTop: number, block: HTMLElement): number {
+  return topOf(block) - containerTop;
 }
 
 // nested blocks come after their parent in document order, so the last block
@@ -22,26 +22,27 @@ function lastBlockWhile(
   container: HTMLElement,
   keepGoing: (block: HTMLElement) => boolean,
 ): HTMLElement | null {
-  const blocks = blocksIn(container);
-  let last: HTMLElement | null = null;
+  const blocks = container.querySelectorAll<HTMLElement>(`[${LINE_ATTR}]`);
+  let last: HTMLElement | null = blocks[0] ?? null;
   for (const block of blocks) {
     if (!keepGoing(block)) break;
     last = block;
   }
-  return last ?? blocks[0] ?? null;
+  return last;
 }
 
 export function previewPositionAt(
   container: HTMLElement,
   focused: Element | null,
 ): { bodyLine: number; offsetFromTop: number } | null {
+  const containerTop = topOf(container);
   const block =
     focused?.closest<HTMLElement>(`[${LINE_ATTR}]`) ??
-    lastBlockWhile(container, (b) => offsetFromContainerTop(container, b) <= 1);
+    lastBlockWhile(container, (b) => offsetBelow(containerTop, b) <= 1);
   if (!block) return null;
   return {
     bodyLine: bodyLineOf(block),
-    offsetFromTop: offsetFromContainerTop(container, block),
+    offsetFromTop: offsetBelow(containerTop, block),
   };
 }
 
@@ -52,5 +53,5 @@ export function scrollPreviewToBodyLine(
 ) {
   const block = lastBlockWhile(container, (b) => bodyLineOf(b) <= bodyLine);
   if (!block) return;
-  container.scrollTop += offsetFromContainerTop(container, block) - offsetFromTop;
+  container.scrollTop += offsetBelow(topOf(container), block) - offsetFromTop;
 }

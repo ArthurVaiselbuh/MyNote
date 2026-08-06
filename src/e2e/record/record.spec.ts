@@ -3,81 +3,55 @@ import { spawnSync } from "node:child_process";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { App, hasGit } from "../app";
+import { App, hasGit, NO_GIT_REASON, sleep, withScratchApp } from "../app";
 
-// Records the README/onboarding demo GIFs by driving the real release exe
-// over CDP, dumping frames as PNGs, and handing them to ffmpeg for a
-// palette + dithered encode (ffmpeg's palettegen/paletteuse pair beats a
-// hand-rolled quantizer on quality, and its gifflags frame-diff a mostly
-// static UI instead of re-encoding every pixel every frame). Requires
-// ffmpeg on PATH (e.g. `winget install Gyan.FFmpeg`) — dev-machine tooling
-// only, never bundled or run at app runtime. Writes straight into
-// public/tutorial — the app's onboarding tour and the README (which links
-// there directly) share these files, so there's only one copy in the repo.
+// Records the README/onboarding demo GIFs by driving the real release exe over
+// CDP, dumping frames as PNGs, and handing them to ffmpeg for a palette +
+// dithered encode. Requires ffmpeg on PATH (e.g. `winget install Gyan.FFmpeg`)
+// — dev-machine tooling only, never bundled or run at app runtime. Writes
+// straight into public/tutorial, which the onboarding tour and the README both
+// link at, so there is only one copy of each GIF in the repo.
 
-const SETTINGS = path.join(process.env.APPDATA!, "MyNote", "settings.json");
-const SETTINGS_BAK = `${SETTINGS}.gif-bak`;
 const TUTORIAL_DIR = path.resolve(__dirname, "..", "..", "frontend", "public", "tutorial");
-// Recorded at native window resolution, no upscaling — ffmpeg's
-// palettegen/paletteuse dithering is what fixes the pixelated look (a flat
-// nearest-color quantizer bands hard on antialiased UI text), not extra
-// pixels. A bigger capture window was tried too, but since the UI's text and
-// panel widths are CSS-fixed rather than proportional, a wider window just
-// adds blank canvas — downscaling that back down shrinks the text instead of
-// sharpening it.
+// Native window resolution, no upscaling: the UI's text and panel widths are
+// CSS-fixed rather than proportional, so a bigger capture window only adds
+// blank canvas. Dithering, not pixel count, is what keeps the text crisp.
 const BASE_WIDTH = 1080;
 const BASE_HEIGHT = 720;
+const WINDOW = { x: 120, y: 80, width: BASE_WIDTH, height: BASE_HEIGHT, maximized: false };
 
-const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
-
-function swapSettings(notebookDir: string) {
-  fs.mkdirSync(path.dirname(SETTINGS), { recursive: true });
-  if (fs.existsSync(SETTINGS_BAK)) {
-    fs.copyFileSync(SETTINGS_BAK, SETTINGS);
-    fs.rmSync(SETTINGS_BAK);
-  }
-  if (fs.existsSync(SETTINGS)) fs.copyFileSync(SETTINGS, SETTINGS_BAK);
-  fs.writeFileSync(
-    SETTINGS,
-    JSON.stringify({
-      notebookPath: notebookDir,
-      window: { x: 120, y: 80, width: BASE_WIDTH, height: BASE_HEIGHT, maximized: false },
-    }),
-  );
-}
-
-function restoreSettings() {
-  if (fs.existsSync(SETTINGS_BAK)) {
-    fs.copyFileSync(SETTINGS_BAK, SETTINGS);
-    fs.rmSync(SETTINGS_BAK);
-  } else {
-    fs.rmSync(SETTINGS, { force: true });
-  }
-}
+const FRAME_INTERVAL_MS = 60;
+const MIN_FRAME_MS = 30;
+const FINAL_HOLD_MS = 1_500; // hold the last state before the loop restarts
+// palettegen/paletteuse beats a flat nearest-color quantizer, which bands hard
+// on antialiased UI text; transdiff re-encodes only pixels that changed.
+const PALETTE_FILTER =
+  `split[a][b];[a]palettegen=stats_mode=diff:max_colors=256[p];` +
+  `[b][p]paletteuse=dither=sierra2_4a:diff_mode=rectangle`;
 
 class Recorder {
   private frames: { png: Buffer; t: number }[] = [];
-  private stopFlag = false;
-  private loop: Promise<void> = Promise.resolve();
+  private stopped = false;
+  private capturing: Promise<void> = Promise.resolve();
 
   start(page: Page) {
-    this.stopFlag = false;
-    this.loop = (async () => {
-      while (!this.stopFlag) {
+    this.stopped = false;
+    this.capturing = (async () => {
+      while (!this.stopped) {
         const t = Date.now();
         try {
           this.frames.push({ png: await page.screenshot(), t });
         } catch {
           // window mid-teardown; drop the frame
         }
-        await sleep(60);
+        await sleep(FRAME_INTERVAL_MS);
       }
     })();
   }
 
   async stopAndSave(name: string) {
-    this.stopFlag = true;
-    await this.loop;
+    this.stopped = true;
+    await this.capturing;
     fs.mkdirSync(TUTORIAL_DIR, { recursive: true });
 
     const frameDir = fs.mkdtempSync(path.join(os.tmpdir(), "mynote-gif-"));
@@ -85,33 +59,28 @@ class Recorder {
       const framePaths = this.frames.map((frame, i) => {
         const framePath = path.join(frameDir, `f${String(i).padStart(4, "0")}.png`);
         fs.writeFileSync(framePath, frame.png);
-        return framePath;
+        return framePath.replace(/\\/g, "/");
       });
 
-      const listLines = framePaths.map((framePath, i) => {
-        const durationSec =
-          (i + 1 < this.frames.length
-            ? Math.max(30, this.frames[i + 1].t - this.frames[i].t)
-            : 1500) / 1000; // hold the final state before the loop restarts
-        return `file '${framePath.replace(/\\/g, "/")}'\nduration ${durationSec}`;
-      });
+      const listLines = framePaths.map(
+        (framePath, i) => `file '${framePath}'\nduration ${this.frameDurationSec(i)}`,
+      );
       // the concat demuxer drops the last entry's duration unless the file is repeated
-      listLines.push(`file '${framePaths[framePaths.length - 1].replace(/\\/g, "/")}'`);
+      listLines.push(`file '${framePaths[framePaths.length - 1]}'`);
       const listPath = path.join(frameDir, "frames.txt");
       fs.writeFileSync(listPath, listLines.join("\n"));
 
       const out = path.join(TUTORIAL_DIR, `${name}.gif`);
       const result = spawnSync(
         "ffmpeg",
+        // prettier-ignore
         [
           "-y",
           "-f", "concat",
           "-safe", "0",
           "-i", listPath,
-          "-vf",
-          `split[a][b];[a]palettegen=stats_mode=diff:max_colors=256[p];` +
-            `[b][p]paletteuse=dither=sierra2_4a:diff_mode=rectangle`,
-          "-gifflags", "+transdiff+offsetting", // only re-encode pixels that changed frame-to-frame
+          "-vf", PALETTE_FILTER,
+          "-gifflags", "+transdiff+offsetting",
           "-loop", "0",
           out,
         ],
@@ -121,54 +90,60 @@ class Recorder {
         throw new Error(`ffmpeg failed (${result.status}): ${result.stderr.toString()}`);
       }
       console.log(`wrote ${out}: ${this.frames.length} frames, ${fs.statSync(out).size} bytes`);
-
-      if (process.env.GIF_FRAME_DUMP) {
-        fs.mkdirSync(process.env.GIF_FRAME_DUMP, { recursive: true });
-        for (const pct of [30, 55, 80, 99]) {
-          const i = Math.min(this.frames.length - 1, Math.floor((this.frames.length * pct) / 100));
-          fs.writeFileSync(
-            path.join(process.env.GIF_FRAME_DUMP, `${name}-${pct}.png`),
-            this.frames[i].png,
-          );
-        }
-      }
+      this.dumpSampleFrames(name);
     } finally {
       fs.rmSync(frameDir, { recursive: true, force: true });
+      this.frames = [];
     }
-    this.frames = [];
+  }
+
+  private frameDurationSec(i: number) {
+    const next = this.frames[i + 1];
+    return (next ? Math.max(MIN_FRAME_MS, next.t - this.frames[i].t) : FINAL_HOLD_MS) / 1000;
+  }
+
+  private dumpSampleFrames(name: string) {
+    const dir = process.env.GIF_FRAME_DUMP;
+    if (!dir) return;
+    fs.mkdirSync(dir, { recursive: true });
+    for (const pct of [30, 55, 80, 99]) {
+      const i = Math.min(this.frames.length - 1, Math.floor((this.frames.length * pct) / 100));
+      fs.writeFileSync(path.join(dir, `${name}-${pct}.png`), this.frames[i].png);
+    }
   }
 }
 
-/** Types a code line replacing whatever indent the editor auto-inserted. */
-async function typeCodeLine(page: Page, line: string) {
+/** Types one line from column zero, defeating the indent the editor inserts. */
+async function typeFromColumnZero(page: Page, line: string, delay?: number) {
   await page.keyboard.press("Enter");
   await page.keyboard.press("Shift+Home");
-  await page.keyboard.type(line, { delay: 24 });
+  if (line) await page.keyboard.type(line, { delay });
+  else await page.keyboard.press("Delete");
+}
+
+/** Replaces the whole body line by line (typing a multi-line string straight in
+ * re-inserts each list marker). */
+async function setBodyLines(app: App, lines: string[]) {
+  await app.selectWholeBody();
+  await app.page.keyboard.type(lines[0]);
+  for (const line of lines.slice(1)) {
+    await typeFromColumnZero(app.page, line);
+  }
+  await app.page.keyboard.press("Control+s");
+  await app.page.keyboard.press("Escape");
+  await expect(app.editorBody).not.toBeFocused();
 }
 
 const test = base.extend<{ app: App }>({
   // eslint-disable-next-line no-empty-pattern
-  app: async ({}, use, testInfo) => {
-    const notebookDir = testInfo.outputPath("notebook");
-    const dataDir = testInfo.outputPath("wv2-data");
-    fs.mkdirSync(notebookDir, { recursive: true });
-    swapSettings(notebookDir);
-    const app = new App(notebookDir, dataDir);
-    try {
-      await app.launch();
-      await use(app);
-    } finally {
-      await app.close().catch(() => {});
-      restoreSettings();
-    }
-  },
+  app: ({}, use, testInfo) => withScratchApp(testInfo, use, { window: WINDOW }),
 });
 
 test("edit-preview: type a code block, flip to preview", async ({ app }) => {
   const { page } = app;
   await app.newTitledPage("Quicksort notes", 1);
   await page.keyboard.press("Control+2");
-  await expect(page.locator(".cm-content")).toBeFocused();
+  await expect(app.editorBody).toBeFocused();
   await page.keyboard.press("Control+End"); // keep the seeded date stamp on top
   await page.keyboard.type(
     "Refactoring the sort helpers tonight.\n\nAlways recurse into the smaller half first — keeps the stack at O(log n).\n",
@@ -204,7 +179,7 @@ test("edit-preview: type a code block, flip to preview", async ({ app }) => {
     "    large = [x for x in rest if x >= pivot]",
     "    return quicksort(small) + [pivot] + quicksort(large)",
   ]) {
-    await typeCodeLine(page, line);
+    await typeFromColumnZero(page, line, 24);
   }
   await sleep(900);
 
@@ -212,7 +187,7 @@ test("edit-preview: type a code block, flip to preview", async ({ app }) => {
   await expect(page.locator(".preview")).toBeVisible();
   await sleep(2200);
   await page.keyboard.press("Control+e"); // and back to the editor
-  await expect(page.locator(".cm-content")).toBeVisible();
+  await expect(app.editorBody).toBeVisible();
   await sleep(800);
 
   await rec.stopAndSave("edit-preview");
@@ -228,27 +203,13 @@ test("tree-sections: subpages, folding, section switching", async ({ app }) => {
   rec.start(page);
   await sleep(700);
 
-  const subpage = async (title: string, expectedCount: number) => {
-    await page.keyboard.press("Control+Enter");
-    await expect(page.locator(".tree .row")).toHaveCount(expectedCount);
-    const input = page.locator(".title-input");
-    await expect(input).toBeFocused();
-    await expect(input).toHaveValue("Untitled");
-    await page.keyboard.press("Control+a");
-    await page.keyboard.type(title, { delay: 45 });
-    await page.keyboard.press("Control+s");
-    await expect(page.locator(".tree .row.selected .title")).toHaveText(title);
-    await page.keyboard.press("Escape");
-    await expect(input).not.toBeFocused();
-  };
-
-  await subpage("Architecture", 3);
+  await app.newTitledSubpage("Architecture", 3, 45);
   await sleep(300);
   await page.keyboard.press("ArrowUp"); // parent again
   await sleep(300);
-  await subpage("Milestones", 4);
+  await app.newTitledSubpage("Milestones", 4, 45);
   await sleep(300);
-  await subpage("Q3 targets", 5); // nested one level deeper
+  await app.newTitledSubpage("Q3 targets", 5, 45); // nested one level deeper
   await sleep(500);
 
   for (let i = 0; i < 3; i++) {
@@ -256,49 +217,26 @@ test("tree-sections: subpages, folding, section switching", async ({ app }) => {
     await sleep(260);
   }
   await page.keyboard.press("ArrowLeft"); // fold the subtree
-  await expect(page.locator(".tree .row")).toHaveCount(2);
+  await expect(app.rows).toHaveCount(2);
   await sleep(900);
   await page.keyboard.press("ArrowRight"); // unfold
-  await expect(page.locator(".tree .row")).toHaveCount(5);
+  await expect(app.rows).toHaveCount(5);
   await sleep(900);
 
-  await page.keyboard.press("Control+Shift+n"); // new section
-  const rename = page.locator(".section-strip input");
-  await expect(rename).toBeFocused();
-  await page.keyboard.type("Research", { delay: 60 });
-  await page.keyboard.press("Enter");
-  await expect(page.locator(".section-strip .name")).toContainText("Research");
+  await app.newSection("Research", 60);
   await sleep(400);
   await app.newTitledPage("Reading list", 1);
   await sleep(600);
 
   await page.keyboard.press("Control+PageUp"); // flip between sections
-  await expect(page.locator(".section-strip .name")).toContainText("Notes");
+  await expect(app.sectionName).toContainText("Notes");
   await sleep(1100);
   await page.keyboard.press("Control+PageDown");
-  await expect(page.locator(".section-strip .name")).toContainText("Research");
+  await expect(app.sectionName).toContainText("Research");
   await sleep(900);
 
   await rec.stopAndSave("tree-sections");
 });
-
-/** Replaces the whole body, defeating the editor's auto-indent line by line
- * (typing a multi-line string straight in re-inserts each list marker). */
-async function setBodyLines(page: Page, lines: string[]) {
-  await page.keyboard.press("Control+2");
-  await expect(page.locator(".cm-content")).toBeFocused();
-  await page.keyboard.press("Control+a");
-  await page.keyboard.type(lines[0]);
-  for (const line of lines.slice(1)) {
-    await page.keyboard.press("Enter");
-    await page.keyboard.press("Shift+Home");
-    if (line) await page.keyboard.type(line);
-    else await page.keyboard.press("Delete");
-  }
-  await page.keyboard.press("Control+s");
-  await page.keyboard.press("Escape");
-  await expect(page.locator(".cm-content")).not.toBeFocused();
-}
 
 const CHECKLIST_V1 = [
   "Ship 2.4 on Friday.",
@@ -331,25 +269,25 @@ const CHECKLIST_V2 = [
 ];
 
 test("history: snapshots, diff, restore", async ({ app }) => {
-  test.skip(!hasGit(), "git not found on PATH — history is inert without it");
+  test.skip(!hasGit(), NO_GIT_REASON);
 
   await app.enableGitSnapshots();
   await app.newPageWithBody("Scratch pad", "throwaway numbers from the sync", 1);
   await app.newTitledPage("Release checklist", 2);
-  await setBodyLines(app.page, CHECKLIST_V1);
+  await setBodyLines(app, CHECKLIST_V1);
   await app.relaunch(); // close-commit: the first snapshot
 
-  await expect(app.page.locator(".tree .row.selected .title")).toHaveText("Release checklist");
-  await setBodyLines(app.page, CHECKLIST_V2);
+  await expect(app.selectedTitle).toHaveText("Release checklist");
+  await setBodyLines(app, CHECKLIST_V2);
   await app.page.keyboard.press("ArrowUp"); // onto Scratch pad
-  await expect(app.page.locator(".tree .row.selected .title")).toHaveText("Scratch pad");
+  await expect(app.selectedTitle).toHaveText("Scratch pad");
   await app.page.keyboard.press("Delete");
   await app.confirmDanger();
   await app.relaunch(); // second snapshot, and the deletion lands in history
 
   const { page } = app; // relaunch swaps the CDP page — bind it after the last one
-  await expect(page.locator(".tree .row")).toHaveCount(1);
-  await expect(page.locator(".tree .row.selected .title")).toHaveText("Release checklist");
+  await expect(app.rows).toHaveCount(1);
+  await expect(app.selectedTitle).toHaveText("Release checklist");
 
   const rec = new Recorder();
   rec.start(page);
@@ -357,7 +295,7 @@ test("history: snapshots, diff, restore", async ({ app }) => {
 
   // the accident the pane exists for: a whole section goes, and gets saved
   await page.keyboard.press("Control+2");
-  await expect(page.locator(".cm-content")).toBeFocused();
+  await expect(app.editorBody).toBeFocused();
   await page.keyboard.press("Control+End");
   for (let i = 0; i < 4; i++) await page.keyboard.press("Shift+ArrowUp");
   await page.keyboard.press("Shift+End");
@@ -394,7 +332,7 @@ test("history: snapshots, diff, restore", async ({ app }) => {
   await page.keyboard.press("Enter"); // restore the newest snapshot
   await app.confirmDanger();
   await expect(page.locator(".history-layout")).toHaveCount(0);
-  await expect(page.locator(".cm-content")).toContainText("Rollback plan");
+  await expect(app.editorBody).toContainText("Rollback plan");
   await sleep(2000);
 
   await rec.stopAndSave("history");
@@ -408,10 +346,9 @@ test("help-search: the ? overlay and its live filter", async ({ app }) => {
   rec.start(page);
   await sleep(700);
 
-  await page.keyboard.press("?");
+  await app.openHelp();
   await expect(page.locator(".modal-title")).toHaveText("Keyboard shortcuts");
-  const filter = page.locator(".modal input");
-  await expect(filter).toBeFocused();
+  await expect(app.modal.locator("input")).toBeFocused();
   await sleep(1400);
 
   // slow typing so several frames land between keystrokes — the GIF must

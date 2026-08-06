@@ -16,11 +16,12 @@ test("Ctrl+O opens the notebook pane with logo and recents; Esc closes", async (
   await expect(current.locator(".nb-path")).toContainText("notebook");
 
   // arrows walk from the recents into the action rows
-  await expect(app.page.locator(".recent-item.selected")).toHaveText(/current/);
+  const selected = app.page.locator(".recent-item.selected");
+  await expect(selected).toHaveText(/current/);
   await app.page.keyboard.press("ArrowDown");
-  await expect(app.page.locator(".recent-item.selected")).toHaveText(/New notebook/);
+  await expect(selected).toHaveText(/New notebook/);
   await app.page.keyboard.press("ArrowDown");
-  await expect(app.page.locator(".recent-item.selected")).toHaveText(/Open notebook/);
+  await expect(selected).toHaveText(/Open notebook/);
 
   await app.page.keyboard.press("Escape");
   await expect(app.page.locator(".open-nb")).toHaveCount(0);
@@ -33,6 +34,6 @@ test("Enter on a recent entry opens that notebook and closes the pane", async ({
 
   await app.page.keyboard.press("Enter");
   await expect(app.page.locator(".open-nb")).toHaveCount(0);
-  await expect(app.page.locator(".section-strip .name")).toContainText("Notes");
-  await expect(app.page.locator(".tree .row .title")).toHaveText("Alpha");
+  await expect(app.sectionName).toContainText("Notes");
+  await expect(app.rowTitles).toHaveText("Alpha");
 });

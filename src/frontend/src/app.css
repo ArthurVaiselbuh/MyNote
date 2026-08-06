@@ -302,30 +302,40 @@ input:focus {
   display: flex;
   flex-direction: column;
 }
-.preview-find {
+/* the preview's find panel and the search bar are the same query strip */
+.preview-find,
+.search-bar {
   display: flex;
   align-items: center;
   gap: 8px;
   padding: 6px 14px;
   border-bottom: 1px solid var(--guide);
 }
-.preview-find input {
+.search-bar {
+  padding: 10px 14px;
+}
+.preview-find input,
+.search-bar input {
   flex: 1;
   min-width: 0;
 }
-.preview-find .mode {
+.preview-find .mode,
+.search-bar .mode {
   color: var(--muted);
   border: 1px solid var(--guide);
 }
-.preview-find .mode.active {
+.preview-find .mode.active,
+.search-bar .mode.active {
   color: var(--accent);
   border-color: var(--accent);
 }
-.preview-find .count {
+.preview-find .count,
+.search-bar .count {
   color: var(--muted);
   white-space: nowrap;
 }
-.preview-find .error {
+.preview-find .error,
+.search-bar .error {
   color: #e06c75;
 }
 .preview {
@@ -397,33 +407,6 @@ input:focus {
 }
 
 /* ---------- search / results ---------- */
-
-.search-bar {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  padding: 10px 14px;
-  border-bottom: 1px solid var(--guide);
-}
-.search-bar input {
-  flex: 1;
-  min-width: 0;
-}
-.search-bar .mode {
-  color: var(--muted);
-  border: 1px solid var(--guide);
-}
-.search-bar .mode.active {
-  color: var(--accent);
-  border-color: var(--accent);
-}
-.search-bar .count {
-  color: var(--muted);
-  white-space: nowrap;
-}
-.search-bar .error {
-  color: #e06c75;
-}
 
 .results-split {
   flex: 1;

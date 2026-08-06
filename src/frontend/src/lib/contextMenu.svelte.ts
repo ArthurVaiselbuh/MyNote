@@ -1,3 +1,4 @@
+import { wrapIndex } from "./listIndex";
 import { app } from "./state/app.svelte";
 import { isTextEntry } from "./textEntry";
 
@@ -44,23 +45,27 @@ export function runContextItem(item: MenuItem) {
   item.run();
 }
 
-function itemIndices(): number[] {
-  return contextMenu.entries
-    .map((entry, i) => (entry === "separator" ? -1 : i))
-    .filter((i) => i >= 0);
+export function isItem(entry: MenuEntry | undefined): entry is MenuItem {
+  return entry !== undefined && entry !== "separator";
+}
+
+function selectableIndices(): number[] {
+  return contextMenu.entries.map((entry, i) => (isItem(entry) ? i : -1)).filter((i) => i >= 0);
 }
 
 function moveSelection(dir: number) {
-  const indices = itemIndices();
+  const indices = selectableIndices();
   if (indices.length === 0) return;
   const pos = indices.indexOf(contextMenu.sel);
-  const next = pos < 0 ? (dir > 0 ? 0 : indices.length - 1) : pos + dir;
-  contextMenu.sel = indices[((next % indices.length) + indices.length) % indices.length];
+  // with nothing selected yet, stepping starts just outside the list so that
+  // Down lands on the first item and Up on the last
+  const from = pos >= 0 ? pos : dir > 0 ? -1 : 0;
+  contextMenu.sel = indices[wrapIndex(from + dir, indices.length)];
 }
 
 function runSelection() {
   const entry = contextMenu.entries[contextMenu.sel];
-  if (entry && entry !== "separator") runContextItem(entry);
+  if (isItem(entry)) runContextItem(entry);
 }
 
 export function contextMenuKeys(e: KeyboardEvent) {

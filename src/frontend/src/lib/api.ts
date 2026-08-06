@@ -18,12 +18,6 @@ export interface LastView {
   pageId: string | null;
 }
 
-export interface ViewPos {
-  editorScrollTop: number;
-  editorCursor: number;
-  previewScrollTop: number;
-}
-
 export interface Notebook {
   sections: Section[];
   lastView: LastView;
@@ -33,6 +27,20 @@ export interface NotebookInfo {
   root: string;
   notebook: Notebook;
 }
+
+export interface UndoOutcome {
+  label: string;
+  sectionId: string | null;
+  pageId: string | null;
+}
+
+export interface ViewPos {
+  editorScrollTop: number;
+  editorCursor: number;
+  previewScrollTop: number;
+}
+
+export type SearchMode = "fuzzy" | "regex";
 
 export interface SearchHit {
   pageId: string;
@@ -48,12 +56,6 @@ export interface SearchResults {
   hits: SearchHit[];
   // the literal keywords/phrases the query split into — empty in regex mode
   terms: string[];
-}
-
-export interface UndoOutcome {
-  label: string;
-  sectionId: string | null;
-  pageId: string | null;
 }
 
 export interface PagePreview {
@@ -151,7 +153,6 @@ export interface DeletedItem {
   sectionExists: boolean;
   parentId: string | null;
   parentExists: boolean;
-  resolved: boolean;
   pageCount: number;
   children: DeletedChild[];
 }
@@ -168,26 +169,6 @@ export interface RestoreOutcome {
   assetCount: number;
   renamed: boolean;
 }
-
-export const defaultSettings: Settings = {
-  notebookPath: null,
-  recentNotebooks: [],
-  zoom: 1.0,
-  textColor: "#d4d4d4",
-  backgroundColor: "#1e1f22",
-  panelColor: "#26282b",
-  accentColor: "#5aa0f2",
-  headingColor: "#d4d4d4",
-  focusAlpha: 0.5,
-  scrollSpeed: 1.0,
-  treeWidth: 300,
-  peekWidth: 460,
-  logLevel: "info",
-  minimizeToTray: false,
-  startOnLogin: false,
-  keybindings: {},
-  window: null,
-};
 
 export const api = {
   openNotebook: (path?: string) =>
@@ -221,7 +202,7 @@ export const api = {
   getViewPositions: () => invoke<Record<string, ViewPos>>("get_view_positions"),
   setViewPositions: (entries: [string, ViewPos][]) =>
     invoke<void>("set_view_positions", { entries }),
-  searchPages: (query: string, mode: "fuzzy" | "regex") =>
+  searchPages: (query: string, mode: SearchMode) =>
     invoke<SearchResults>("search_pages", { query, mode }),
   saveImage: (pageId: string, data: string, ext: string) =>
     invoke<string>("save_image", { pageId, data, ext }),
@@ -236,11 +217,11 @@ export const api = {
   setSettings: (settings: Settings) => invoke<void>("set_settings", { settings }),
   getGitStatus: () => invoke<GitStatus>("get_git_status"),
   setGitSnapshots: (enabled: boolean, intervalSecs?: number) =>
-    invoke<GitStatus>("set_git_snapshots", { enabled, intervalSecs }),
+    invoke<GitStatus>("set_git_snapshots", { enabled, intervalSecs: intervalSecs ?? null }),
   pageRevisions: (id: string) => invoke<PageRevision[]>("page_revisions", { id }),
   revisionText: (id: string, sha: string) => invoke<RevisionText>("revision_text", { id, sha }),
   deletedPages: () => invoke<DeletedHistory>("deleted_pages"),
-  deletedPageText: (sha: string, id: string) => invoke<RevisionText>("deleted_page_text", { sha, id }),
-  restoreDeletedPage: (sha: string, id: string, fallbackSectionId: string | null) =>
+  deletedPageText: (id: string, sha: string) => invoke<RevisionText>("deleted_page_text", { sha, id }),
+  restoreDeletedPage: (id: string, sha: string, fallbackSectionId: string | null) =>
     invoke<RestoreOutcome>("restore_deleted_page", { sha, id, fallbackSectionId }),
 };

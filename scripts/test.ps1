@@ -26,7 +26,7 @@ Write-Host '[3/4] cargo test'
 Invoke-InDirectory $backend 'cargo test' { cargo test }
 
 if (-not (Test-Path $releasedExe)) {
-    throw "[4/4] skipped: $releasedExe missing - run scripts\build.ps1 first"
+    throw "[4/4] e2e needs $releasedExe - run scripts\build.ps1 first"
 }
 
 Write-Host '[4/4] e2e against output\MyNote.exe'

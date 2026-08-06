@@ -13,11 +13,11 @@ test("Tab cycles panes; Esc peels editor back to tree", async ({ app }) => {
   // results view ring cycles search -> results -> tree -> search
   await app.page.keyboard.press("Control+k");
   await expect(app.page.locator(".search-bar input")).toBeFocused();
-  await app.page.keyboard.press("Tab"); // search box is part of the ring
+  await app.page.keyboard.press("Tab");
   await expect(app.page.locator(".results")).toHaveClass(/focused/);
   await app.page.keyboard.press("Tab");
   await expect(app.page.locator(".tree-pane")).toHaveClass(/focused/);
-  await expect(app.page.locator(".results")).toHaveCount(1); // still in results view
+  await expect(app.page.locator(".results")).toHaveCount(1);
   await app.page.keyboard.press("Tab");
   await expect(app.page.locator(".search-bar")).toHaveClass(/focused/);
 
@@ -29,13 +29,11 @@ test("Tab cycles panes; Esc peels editor back to tree", async ({ app }) => {
 
 test("? opens the context-aware, filterable help overlay", async ({ app }) => {
   await app.newTitledPage("Alpha", 1);
-  // the help chord is Shift+the base "/" key — press("?") alone sends no shiftKey
-  await app.page.keyboard.press("Shift+Slash");
+  await app.openHelp();
   await expect(app.page.locator(".modal-title")).toHaveText("Keyboard shortcuts");
   await expect(app.page.locator(".help-group h3").first()).toHaveText("Tree (focused pane)");
 
-  const filter = app.page.locator(".modal input");
-  await expect(filter).toBeFocused();
+  await expect(app.modal.locator("input")).toBeFocused();
   await app.page.keyboard.type("undo");
   await expect(app.page.locator(".help-row", { hasText: "Undo delete & move" })).toBeVisible();
   await expect(app.page.locator(".help-row", { hasText: "Zoom" })).toHaveCount(0);

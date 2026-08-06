@@ -2,10 +2,11 @@
   import { onMount } from "svelte";
   import * as act from "../actions";
   import { api, type SearchHit } from "../api";
-  import { applyHighlights } from "../highlight";
+  import { applyHighlights, setCurrentMatch } from "../highlight";
+  import { wrapIndex } from "../listIndex";
   import { renderBody } from "../markdown";
-  import { peekCtl } from "../peekCtl";
-  import { escapeRegExp } from "../regex";
+  import { peekCtl } from "../paneCtl";
+  import { searchRegex } from "../regex";
   import { app } from "../state/app.svelte";
 
   const LOAD_DELAY_MS = 120;
@@ -78,51 +79,37 @@
 
   let matches: HTMLElement[] = [];
   let currentIdx = -1;
-
-  function termsRegex(): RegExp | null {
-    const prefill = act.resultFindPrefill();
-    if (!prefill.text) return null;
-    try {
-      return new RegExp(prefill.regex ? prefill.text : escapeRegExp(prefill.text), "gi");
-    } catch {
-      return null;
-    }
-  }
-
-  function renderInto(container: HTMLElement) {
-    container.innerHTML = html;
-    matches = [];
-    currentIdx = -1;
-    const re = termsRegex();
-    matches = re ? applyHighlights(container, re) : [];
-    if (matches.length) goTo(0);
-    else container.scrollTop = 0;
-  }
+  let currentEl: HTMLElement | null = null;
 
   // landing on the first match rather than the hit's own line is deliberate:
   // it is what the reader searched for, and it holds even when the hit sits
   // outside the range the line number would have scrolled to.
+  function renderInto(container: HTMLElement, markup: string) {
+    container.innerHTML = markup;
+    const prefill = act.resultFindPrefill();
+    const re = searchRegex(prefill.text, prefill.regex);
+    matches = re ? applyHighlights(container, re) : [];
+    currentEl = null;
+    currentIdx = -1;
+    if (matches.length) goTo(0);
+    else container.scrollTop = 0;
+  }
+
   function goTo(idx: number) {
-    matches[currentIdx]?.classList.remove("current");
-    if (!matches.length) {
-      currentIdx = -1;
-      return;
-    }
-    currentIdx = (idx + matches.length) % matches.length;
-    const mark = matches[currentIdx];
-    mark.classList.add("current");
-    mark.scrollIntoView({ block: "center" });
+    currentIdx = idx;
+    currentEl = setCurrentMatch(currentEl, matches[idx] ?? null);
+  }
+
+  function step(delta: number) {
+    if (matches.length) goTo(wrapIndex(currentIdx + delta, matches.length));
   }
 
   // The peek writes this subtree itself instead of using `{@html}`: highlighting
   // rewrites text nodes underneath, which leaves Svelte's bookkeeping for its own
   // range stale and drops the body on the following update.
-  // `app.results` is the dependency that changes exactly when a new search lands,
-  // in both search modes.
   $effect(() => {
-    void html;
-    void app.results;
-    if (containerEl) renderInto(containerEl);
+    const markup = html;
+    if (containerEl) renderInto(containerEl, markup);
   });
 
   onMount(() => {
@@ -130,8 +117,9 @@
       openFind() {},
       closeFind: () => false,
       findOpen: () => false,
-      findNext: () => goTo(currentIdx + 1),
-      findPrev: () => goTo(currentIdx - 1),
+      findNext: () => step(1),
+      findPrev: () => step(-1),
+      scroller: () => containerEl ?? null,
     };
     return () => {
       peekCtl.current = null;
