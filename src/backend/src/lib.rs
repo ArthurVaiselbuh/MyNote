@@ -21,9 +21,15 @@ use std::sync::{mpsc, Mutex};
 use std::time::{Duration, Instant};
 use tauri::{Emitter, Manager};
 
+pub(crate) fn err<E: std::fmt::Display>(e: E) -> String {
+    e.to_string()
+}
+
 const TICK: Duration = Duration::from_secs(60);
-const IDLE_SNAPSHOT_DEADLINE: Duration = Duration::from_secs(20);
+const IDLE_GRACE_MS: u64 = 30_000;
 const FAILURE_BACKOFF: Duration = Duration::from_secs(60);
+
+const ASSET_SCHEME: &str = "note-asset";
 
 pub fn run() {
     let settings = Settings::load();
@@ -46,7 +52,7 @@ pub fn run() {
             git_stop: Mutex::new(None),
             history_gate: Mutex::new(()),
         })
-        .register_uri_scheme_protocol("note-asset", |ctx, request| {
+        .register_uri_scheme_protocol(ASSET_SCHEME, |ctx, request| {
             serve_asset(ctx.app_handle(), &request)
         })
         .invoke_handler(tauri::generate_handler![
@@ -111,7 +117,7 @@ pub fn run() {
 
             let (geom, tray_enabled, start_on_login) = {
                 let state = app.state::<AppState>();
-                let s = state.settings.lock().map_err(|_| "settings lock poisoned")?;
+                let s = state.settings.lock().map_err(commands::lock_err)?;
                 (s.window.clone(), s.minimize_to_tray, s.start_on_login)
             };
             if let Some(g) = geom.filter(|g| g.width > 0 && g.height > 0) {
@@ -162,7 +168,8 @@ fn navigation_guard<R: tauri::Runtime>() -> tauri::plugin::TauriPlugin<R> {
     tauri::plugin::Builder::new("navigation-guard")
         .on_navigation(|_, url| {
             let allowed = match url.scheme() {
-                "tauri" | "note-asset" => true,
+                "tauri" => true,
+                s if s == ASSET_SCHEME => true,
                 "http" | "https" => url
                     .host_str()
                     .is_some_and(|h| h == "localhost" || h.ends_with(".localhost")),
@@ -200,20 +207,17 @@ fn persist_on_close(window: &tauri::Window) {
             let _ = tx.send(());
         }
     }
-    if let Ok(mut guard) = state.store.lock() {
-        if let Some(store) = guard.take() {
-            drop(guard);
-            let info = store.close();
-            commands::commit_on_close(&state, window.app_handle(), &info);
-        }
+    let closed = state.store.lock().ok().and_then(|mut guard| guard.take());
+    if let Some(store) = closed {
+        commands::close_and_commit(&state, window.app_handle(), store);
     }
-    let settings_lock = state.settings.lock();
-    if let Ok(mut s) = settings_lock {
-        if window.is_visible().unwrap_or(true) {
-            capture_geometry(window, &mut s);
-        }
-        s.save();
+    let Ok(mut settings) = state.settings.lock() else {
+        return;
+    };
+    if window.is_visible().unwrap_or(true) {
+        capture_geometry(window, &mut settings);
     }
+    settings.save();
 }
 
 /// Closing with `minimizeToTray` on parks the app in the tray instead of
@@ -222,18 +226,16 @@ fn hide_to_tray(window: &tauri::Window, state: &tauri::State<'_, AppState>) -> b
     if state.quitting.load(Ordering::SeqCst) || state.closing.load(Ordering::SeqCst) {
         return false;
     }
-    if !state
-        .settings
-        .lock()
-        .is_ok_and(|s| s.minimize_to_tray && window.app_handle().tray_by_id(tray::ID).is_some())
-    {
+    let Ok(mut settings) = state.settings.lock() else {
+        return false;
+    };
+    if !settings.minimize_to_tray || window.app_handle().tray_by_id(tray::ID).is_none() {
         return false;
     }
     log::trace!("close requested — hiding to tray");
-    if let Ok(mut s) = state.settings.lock() {
-        capture_geometry(window, &mut s);
-        s.save();
-    }
+    capture_geometry(window, &mut settings);
+    settings.save();
+    drop(settings);
     let _ = window.hide();
     let _ = window.emit("mynote:flush", ());
     true
@@ -262,9 +264,7 @@ fn serve_asset(
     app: &tauri::AppHandle,
     request: &tauri::http::Request<Vec<u8>>,
 ) -> tauri::http::Response<Vec<u8>> {
-    let path = percent_decode_str(request.uri().path())
-        .decode_utf8_lossy()
-        .to_string();
+    let path = percent_decode_str(request.uri().path()).decode_utf8_lossy();
     let rel = path.trim_start_matches('/');
     if rel.is_empty() || rel.contains("..") || rel.contains('\\') {
         return not_found();
@@ -278,12 +278,12 @@ fn serve_asset(
     let Some(root) = root else {
         return not_found();
     };
-    let file = root.join("assets").join(rel);
+    let file = root.join(store::ASSETS_DIR).join(rel);
     log::trace!("serving asset {rel}");
     match std::fs::read(&file) {
         Ok(bytes) => tauri::http::Response::builder()
             .status(200)
-            .header("Content-Type", content_type(&file))
+            .header("Content-Type", assets::content_type(&file))
             .header("Access-Control-Allow-Origin", "*")
             .body(bytes)
             .unwrap_or_else(|_| not_found()),
@@ -299,24 +299,6 @@ fn not_found() -> tauri::http::Response<Vec<u8>> {
         .status(404)
         .body(Vec::new())
         .expect("static response")
-}
-
-fn content_type(path: &std::path::Path) -> &'static str {
-    match path
-        .extension()
-        .and_then(|e| e.to_str())
-        .unwrap_or("")
-        .to_lowercase()
-        .as_str()
-    {
-        "png" => "image/png",
-        "jpg" | "jpeg" => "image/jpeg",
-        "gif" => "image/gif",
-        "webp" => "image/webp",
-        "bmp" => "image/bmp",
-        "svg" => "image/svg+xml",
-        _ => "application/octet-stream",
-    }
 }
 
 fn spawn_git_ticker(app: tauri::AppHandle) -> mpsc::Sender<()> {
@@ -349,12 +331,11 @@ fn git_tick(app: &tauri::AppHandle, backoff_until: &mut Instant) {
     }
     let state = app.state::<AppState>();
 
-    let plan = {
+    let (root, session, seq) = {
         let Ok(guard) = state.store.lock() else { return };
         let Some(store) = guard.as_ref() else { return };
-        let cfg = &store.notebook.git;
-        if !git::should_snapshot(
-            cfg,
+        if !snapshot_is_due(
+            &store.notebook.git,
             store.change_seq(),
             store.committed_seq(),
             store.idle_ms(),
@@ -364,7 +345,6 @@ fn git_tick(app: &tauri::AppHandle, backoff_until: &mut Instant) {
         }
         (store.root.clone(), store.session(), store.change_seq())
     };
-    let (root, session, seq) = plan;
 
     if !git::available() || !git::is_repo(&root) {
         return;
@@ -374,23 +354,62 @@ fn git_tick(app: &tauri::AppHandle, backoff_until: &mut Instant) {
         let Ok(_gate) = state.git_gate.try_lock() else {
             return;
         };
-        git::snapshot(&root, git::SnapshotKind::Idle, IDLE_SNAPSHOT_DEADLINE)
+        git::snapshot(&root, git::SnapshotKind::Idle)
     };
 
     match outcome {
-        Ok(_) => {
-            if let Ok(guard) = state.store.lock() {
-                if let Some(store) = guard.as_ref() {
-                    if store.session() == session && store.change_seq() == seq {
-                        store.mark_committed(seq);
-                    }
-                }
-            }
-        }
+        Ok(_) => mark_committed_if_unchanged(&state, session, seq),
         Err(e) => {
             log::warn!("git idle snapshot failed: {e}");
             commands::emit_git_snapshot_failed(app);
             *backoff_until = Instant::now() + FAILURE_BACKOFF;
         }
+    }
+}
+
+fn snapshot_is_due(
+    cfg: &store::GitConfig,
+    seq: u64,
+    committed: u64,
+    idle_ms: u64,
+    since_commit_ms: u64,
+) -> bool {
+    cfg.enabled
+        && seq != committed
+        && idle_ms >= IDLE_GRACE_MS
+        && since_commit_ms >= cfg.interval_secs.saturating_mul(1000)
+}
+
+/// The snapshot ran without the store lock, so anything edited or opened in
+/// the meantime must not be credited to this commit.
+fn mark_committed_if_unchanged(state: &AppState, session: u64, seq: u64) {
+    let Ok(guard) = state.store.lock() else { return };
+    let Some(store) = guard.as_ref() else { return };
+    if store.session() == session && store.change_seq() == seq {
+        store.mark_committed(seq);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use store::GitConfig;
+
+    fn cfg(enabled: bool, interval_secs: u64) -> GitConfig {
+        GitConfig {
+            enabled,
+            interval_secs,
+        }
+    }
+
+    #[test]
+    fn snapshot_is_due_matrix() {
+        assert!(!snapshot_is_due(&cfg(false, 3600), 5, 0, 1_000_000, 1_000_000));
+        assert!(!snapshot_is_due(&cfg(true, 3600), 5, 5, 1_000_000, 1_000_000));
+        assert!(!snapshot_is_due(&cfg(true, 3600), 5, 0, 1_000, 3_600_000));
+        assert!(!snapshot_is_due(&cfg(true, 3600), 5, 0, 60_000, 10_000));
+        assert!(snapshot_is_due(&cfg(true, 3600), 5, 0, 60_000, 3_600_001));
+        assert!(!snapshot_is_due(&cfg(true, 0), 5, 0, 1_000, 1_000_000));
+        assert!(snapshot_is_due(&cfg(true, 0), 5, 0, 30_000, 0));
     }
 }

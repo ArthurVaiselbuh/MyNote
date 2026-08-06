@@ -32,13 +32,14 @@ pub struct SearchHit {
     pub rank: Rank,
 }
 
+/// variant order is the ranking order: a stronger way of matching sorts higher
 #[derive(Default, Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
 pub enum Strategy {
-    Phrase,
-    Word,
-    Partial,
     #[default]
     Fuzzy,
+    Partial,
+    Word,
+    Phrase,
 }
 
 /// field order is the ranking order: matching more of the query's distinct
@@ -46,34 +47,62 @@ pub enum Strategy {
 #[derive(Default, Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
 pub struct Rank {
     pub terms_matched: usize,
-    pub tier: Reverse<Strategy>,
+    pub tier: Strategy,
     pub occurrences: usize,
     pub title_matched: bool,
 }
 
 struct Term {
     text: String,
-    /// quoted terms are matched verbatim — never split, never fuzzy
-    quoted: bool,
+    lowered: Vec<char>,
+    /// quoted terms are matched verbatim — absent here means never fuzzy
+    fuzzy: Option<Atom>,
 }
 
-/// a matched line's index within `searchable_lines`, with its char ranges
-type LineRanges = (usize, Vec<(usize, usize)>);
+struct ScoredLine<'a> {
+    line_no: usize,
+    text: &'a str,
+    lowered: Vec<char>,
+    terms_hit: usize,
+    ranges: Vec<(usize, usize)>,
+}
 
-pub fn search(store: &Store, query: &str, mode: &str) -> Result<SearchResults, String> {
+struct LineHit {
+    line: usize,
+    ranges: Vec<(usize, usize)>,
+}
+
+/// Anything the frontend does not spell `"regex"` searches by keyword, so an
+/// older frontend never fails a query against a newer backend.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum SearchMode {
+    Keyword,
+    Regex,
+}
+
+impl From<&str> for SearchMode {
+    fn from(mode: &str) -> Self {
+        match mode {
+            "regex" => Self::Regex,
+            _ => Self::Keyword,
+        }
+    }
+}
+
+pub fn search(store: &Store, query: &str, mode: SearchMode) -> Result<SearchResults, String> {
     if query.trim().is_empty() {
         return Ok(SearchResults { hits: vec![], terms: vec![] });
     }
     let (mut hits, terms) = match mode {
-        "regex" => (regex_search(store, query)?, vec![]),
-        _ => keyword_search(store, query),
+        SearchMode::Regex => (regex_search(store, query)?, vec![]),
+        SearchMode::Keyword => keyword_search(store, query),
     };
     hits.sort_by_key(|hit| Reverse(hit.rank));
     hits.truncate(MAX_HITS);
     Ok(SearchResults { hits, terms })
 }
 
-// ---------- keyword ("fuzzy" mode) ----------
+// ---------- keyword search ----------
 
 fn keyword_search(store: &Store, query: &str) -> (Vec<SearchHit>, Vec<String>) {
     let terms = parse_terms(query);
@@ -111,8 +140,13 @@ fn parse_terms(query: &str) -> Vec<Term> {
                 (word, false, tail)
             }
         };
-        if !text.trim().is_empty() {
-            terms.push(Term { text: text.trim().to_string(), quoted });
+        let text = text.trim();
+        if !text.is_empty() {
+            terms.push(Term {
+                lowered: lower_chars(text),
+                fuzzy: (!quoted).then(|| fuzzy_atom(text)),
+                text: text.to_string(),
+            });
         }
         rest = tail.trim_start();
     }
@@ -128,70 +162,88 @@ fn page_hit(
     phrase: &[char],
     matcher: &mut Matcher,
 ) -> Option<SearchHit> {
-    let lines = searchable_lines(content);
-    let lowered: Vec<Vec<char>> = lines.iter().map(|(_, text)| lower_chars(text)).collect();
-
-    let mut ranges_per_line: Vec<Vec<(usize, usize)>> = vec![Vec::new(); lines.len()];
-    let mut terms_per_line: Vec<usize> = vec![0; lines.len()];
+    let mut lines = scored_lines(content);
     let mut rank = Rank::default();
     let mut weakest_strategy = Strategy::Phrase;
 
     for term in terms {
         let mut strategy = Strategy::Word;
-        let mut matched_lines = literal_lines(&lowered, &lower_chars(&term.text));
-        if matched_lines.is_empty() && !term.quoted {
-            matched_lines.extend(best_fuzzy_line(&lines, &term.text, matcher));
+        let mut hits = literal_hits(&lines, &term.lowered);
+        if hits.is_empty() {
+            let Some(atom) = &term.fuzzy else { continue };
+            hits.extend(best_fuzzy_hit(&lines, atom, matcher));
             strategy = Strategy::Fuzzy;
-        } else if !any_word_bounded(&lowered, &matched_lines) {
+        } else if !any_hit_word_bounded(&lines, &hits) {
             strategy = Strategy::Partial;
         }
-        if matched_lines.is_empty() {
+        if hits.is_empty() {
             continue;
         }
         rank.terms_matched += 1;
-        weakest_strategy = weakest_strategy.max(strategy);
-        for (line_idx, ranges) in matched_lines {
-            rank.occurrences += ranges.len();
-            rank.title_matched |= lines[line_idx].0 == 0;
-            terms_per_line[line_idx] += 1;
-            ranges_per_line[line_idx].extend(ranges);
+        weakest_strategy = weakest_strategy.min(strategy);
+        for hit in hits {
+            let line = &mut lines[hit.line];
+            rank.occurrences += hit.ranges.len();
+            rank.title_matched |= line.line_no == 0;
+            line.terms_hit += 1;
+            line.ranges.extend(hit.ranges);
         }
     }
     if rank.terms_matched == 0 {
         return None;
     }
-    if lowered.iter().any(|line| has_word_bounded_match(line, phrase)) {
-        weakest_strategy = Strategy::Phrase;
-    }
-    rank.tier = Reverse(weakest_strategy);
+    rank.tier = if query_appears_verbatim(&lines, phrase) {
+        Strategy::Phrase
+    } else {
+        weakest_strategy
+    };
 
-    let best = (0..lines.len())
-        .filter(|&i| terms_per_line[i] > 0)
-        .min_by_key(|&i| (Reverse(terms_per_line[i]), Reverse(ranges_per_line[i].len()), i))?;
-    let (line_no, text) = lines[best];
-    let ranges = merge_ranges(std::mem::take(&mut ranges_per_line[best]));
-    Some(make_hit(section, page, line_no, text, ranges, rank))
-}
-
-fn literal_lines(lowered: &[Vec<char>], needle: &[char]) -> Vec<LineRanges> {
-    lowered
+    let best = lines
         .iter()
         .enumerate()
-        .map(|(idx, haystack)| (idx, literal_ranges(haystack, needle)))
-        .filter(|(_, ranges)| !ranges.is_empty())
+        .filter(|(_, line)| line.terms_hit > 0)
+        .max_by_key(|(idx, line)| (line.terms_hit, line.ranges.len(), Reverse(*idx)))
+        .map(|(idx, _)| idx)?;
+    let best = lines.swap_remove(best);
+    let ranges = merge_ranges(best.ranges);
+    Some(make_hit(section, page, best.line_no, best.text, ranges, rank))
+}
+
+fn scored_lines(content: &str) -> Vec<ScoredLine<'_>> {
+    searchable_lines(content)
+        .into_iter()
+        .map(|(line_no, text)| ScoredLine {
+            line_no,
+            text,
+            lowered: lower_chars(text),
+            terms_hit: 0,
+            ranges: Vec::new(),
+        })
         .collect()
 }
 
-fn any_word_bounded(lowered: &[Vec<char>], matched_lines: &[LineRanges]) -> bool {
-    matched_lines.iter().any(|(line_idx, ranges)| {
-        ranges
-            .iter()
-            .any(|&(start, end)| is_word_bounded(&lowered[*line_idx], start, end))
-    })
+fn literal_hits(lines: &[ScoredLine], needle: &[char]) -> Vec<LineHit> {
+    lines
+        .iter()
+        .enumerate()
+        .map(|(line, scored)| LineHit { line, ranges: literal_ranges(&scored.lowered, needle) })
+        .filter(|hit| !hit.ranges.is_empty())
+        .collect()
 }
 
-fn has_word_bounded_match(haystack: &[char], needle: &[char]) -> bool {
-    literal_ranges(haystack, needle)
+fn query_appears_verbatim(lines: &[ScoredLine], phrase: &[char]) -> bool {
+    lines
+        .iter()
+        .any(|line| any_range_word_bounded(&line.lowered, &literal_ranges(&line.lowered, phrase)))
+}
+
+fn any_hit_word_bounded(lines: &[ScoredLine], hits: &[LineHit]) -> bool {
+    hits.iter()
+        .any(|hit| any_range_word_bounded(&lines[hit.line].lowered, &hit.ranges))
+}
+
+fn any_range_word_bounded(haystack: &[char], ranges: &[(usize, usize)]) -> bool {
+    ranges
         .iter()
         .any(|&(start, end)| is_word_bounded(haystack, start, end))
 }
@@ -223,34 +275,33 @@ fn literal_ranges(haystack: &[char], needle: &[char]) -> Vec<(usize, usize)> {
     out
 }
 
-/// typo tolerance for a bare keyword the page never spells out literally
-fn best_fuzzy_line(
-    lines: &[(usize, &str)],
-    needle: &str,
-    matcher: &mut Matcher,
-) -> Option<LineRanges> {
-    let atom = Atom::new(
+fn fuzzy_atom(needle: &str) -> Atom {
+    Atom::new(
         needle,
         CaseMatching::Ignore,
         Normalization::Smart,
         AtomKind::Fuzzy,
         false,
-    );
+    )
+}
+
+/// typo tolerance for a bare keyword the page never spells out literally
+fn best_fuzzy_hit(lines: &[ScoredLine], atom: &Atom, matcher: &mut Matcher) -> Option<LineHit> {
     let mut buf = Vec::new();
     let mut indices: Vec<u32> = Vec::new();
-    let mut best: Option<(u16, LineRanges)> = None;
-    for (line_idx, (_, text)) in lines.iter().enumerate() {
+    let mut best: Option<(u16, LineHit)> = None;
+    for (line, scored) in lines.iter().enumerate() {
         indices.clear();
-        let haystack = Utf32Str::new(text, &mut buf);
+        let haystack = Utf32Str::new(scored.text, &mut buf);
         let Some(score) = atom.indices(haystack, matcher, &mut indices) else {
             continue;
         };
         if best.as_ref().map_or(true, |(top, _)| score > *top) {
             let ranges = indices.iter().map(|&i| (i as usize, i as usize + 1)).collect();
-            best = Some((score, (line_idx, merge_ranges(ranges))));
+            best = Some((score, LineHit { line, ranges: merge_ranges(ranges) }));
         }
     }
-    best.map(|(_, line)| line)
+    best.map(|(_, hit)| hit)
 }
 
 // ---------- regex ----------
@@ -281,11 +332,17 @@ fn regex_search(store: &Store, query: &str) -> Result<Vec<SearchHit>, String> {
     Ok(hits)
 }
 
+/// matches arrive in ascending byte order, so one cursor carries the char
+/// count forward instead of recounting the line for every match
 fn regex_ranges(re: &regex::Regex, text: &str) -> Vec<(usize, usize)> {
-    re.find_iter(text)
-        .filter(|m| m.end() > m.start())
-        .map(|m| byte_to_char_range(text, m.start(), m.end()))
-        .collect()
+    let mut ranges = Vec::new();
+    let (mut counted_bytes, mut counted_chars) = (0, 0);
+    for m in re.find_iter(text).filter(|m| m.end() > m.start()) {
+        counted_chars += text[counted_bytes..m.start()].chars().count();
+        counted_bytes = m.start();
+        ranges.push((counted_chars, counted_chars + text[m.range()].chars().count()));
+    }
+    ranges
 }
 
 // ---------- shared ----------
@@ -352,18 +409,12 @@ fn make_hit(
     }
 }
 
-fn byte_to_char_range(text: &str, start: usize, end: usize) -> (usize, usize) {
-    let char_start = text[..start].chars().count();
-    let char_end = char_start + text[start..end].chars().count();
-    (char_start, char_end)
-}
-
 fn window_snippet(line: &str, ranges: &[(usize, usize)]) -> (String, Vec<(usize, usize)>) {
-    let chars: Vec<char> = line.chars().collect();
-    if chars.len() <= SNIPPET_CHARS {
+    if line.chars().count() <= SNIPPET_CHARS {
         return (line.to_string(), ranges.to_vec());
     }
-    let first = ranges.first().map(|r| r.0).unwrap_or(0);
+    let chars: Vec<char> = line.chars().collect();
+    let first = ranges.first().map_or(0, |r| r.0);
     let start = first
         .saturating_sub(60)
         .min(chars.len().saturating_sub(SNIPPET_CHARS));
@@ -383,7 +434,7 @@ mod tests {
     use crate::store::Store;
     use tempfile::tempdir;
 
-    fn hits(store: &Store, query: &str, mode: &str) -> Vec<SearchHit> {
+    fn hits(store: &Store, query: &str, mode: SearchMode) -> Vec<SearchHit> {
         search(store, query, mode).unwrap().hits
     }
 
@@ -393,18 +444,10 @@ mod tests {
     }
 
     fn store_with_pages() -> (tempfile::TempDir, Store) {
-        let dir = tempdir().unwrap();
-        let mut store = Store::open(dir.path()).unwrap();
-        let sid = store.notebook.sections[0].id.clone();
-        let a = store.create_page(&sid, None, None).unwrap();
-        store
-            .write_page(&a.id, "# Grocery List\n\nbuy milk and eggs\ncall the plumber\n")
-            .unwrap();
-        let b = store.create_page(&sid, None, None).unwrap();
-        store
-            .write_page(&b.id, "# Meeting Notes\n\ndiscussed deployment pipeline\n")
-            .unwrap();
-        (dir, store)
+        store_with(&[
+            "# Grocery List\n\nbuy milk and eggs\ncall the plumber\n",
+            "# Meeting Notes\n\ndiscussed deployment pipeline\n",
+        ])
     }
 
     fn store_with(pages: &[&str]) -> (tempfile::TempDir, Store) {
@@ -421,9 +464,9 @@ mod tests {
     #[test]
     fn finds_title_and_body() {
         let (_dir, store) = store_with_pages();
-        let found = hits(&store, "grocery", "fuzzy");
+        let found = hits(&store, "grocery", SearchMode::Keyword);
         assert!(found.iter().any(|h| h.title == "Grocery List" && h.line_no == 0));
-        let found = hits(&store, "milk", "fuzzy");
+        let found = hits(&store, "milk", SearchMode::Keyword);
         let body_hit = found.iter().find(|h| h.line_no > 0).unwrap();
         assert!(body_hit.snippet.contains("milk"));
         assert_eq!(matched(body_hit, 0), "milk");
@@ -432,7 +475,7 @@ mod tests {
     #[test]
     fn one_hit_per_page() {
         let (_dir, store) = store_with(&["# Log\n\nmilk\nmilk\nmilk\n"]);
-        assert_eq!(hits(&store, "milk", "fuzzy").len(), 1);
+        assert_eq!(hits(&store, "milk", SearchMode::Keyword).len(), 1);
     }
 
     #[test]
@@ -441,7 +484,7 @@ mod tests {
             "# Loud\n\nalpha alpha alpha\nalpha alpha alpha\n",
             "# Quiet\n\nalpha\n\nbeta\n",
         ]);
-        let found = hits(&store, "alpha beta", "fuzzy");
+        let found = hits(&store, "alpha beta", SearchMode::Keyword);
         assert_eq!(found[0].title, "Quiet");
         assert_eq!(found[0].rank.terms_matched, 2);
         assert_eq!(found[1].title, "Loud");
@@ -450,7 +493,7 @@ mod tests {
     #[test]
     fn occurrences_break_the_tie_within_one_term() {
         let (_dir, store) = store_with(&["# Few\n\nalpha\n", "# Many\n\nalpha alpha alpha\n"]);
-        let found = hits(&store, "alpha", "fuzzy");
+        let found = hits(&store, "alpha", SearchMode::Keyword);
         assert_eq!(found[0].title, "Many");
         assert_eq!(found[0].rank.occurrences, 3);
     }
@@ -458,7 +501,7 @@ mod tests {
     #[test]
     fn keywords_may_live_on_different_lines() {
         let (_dir, store) = store_with(&["# Split\n\nalpha here\n\nbeta there\n"]);
-        let found = hits(&store, "alpha beta", "fuzzy");
+        let found = hits(&store, "alpha beta", SearchMode::Keyword);
         assert_eq!(found.len(), 1);
         assert_eq!(found[0].rank.terms_matched, 2);
     }
@@ -469,7 +512,7 @@ mod tests {
             "# Together\n\nthe deployment pipeline broke\n",
             "# Apart\n\npipeline notes\n\ndeployment notes\n",
         ]);
-        let found = hits(&store, "\"deployment pipeline\"", "fuzzy");
+        let found = hits(&store, "\"deployment pipeline\"", SearchMode::Keyword);
         assert_eq!(found.len(), 1);
         assert_eq!(found[0].title, "Together");
         assert_eq!(matched(&found[0], 0), "deployment pipeline");
@@ -478,14 +521,14 @@ mod tests {
     #[test]
     fn quoted_phrase_skips_the_fuzzy_fallback() {
         let (_dir, store) = store_with(&["# Page\n\ndeployment of the pipeline\n"]);
-        assert!(hits(&store, "\"deployment pipeline\"", "fuzzy").is_empty());
-        assert_eq!(hits(&store, "deployment pipeline", "fuzzy").len(), 1);
+        assert!(hits(&store, "\"deployment pipeline\"", SearchMode::Keyword).is_empty());
+        assert_eq!(hits(&store, "deployment pipeline", SearchMode::Keyword).len(), 1);
     }
 
     #[test]
     fn quoted_and_bare_terms_mix() {
         let (_dir, store) = store_with(&["# Mixed\n\nred herring\n\nblue whale\n"]);
-        let results = search(&store, "\"red herring\" whale", "fuzzy").unwrap();
+        let results = search(&store, "\"red herring\" whale", SearchMode::Keyword).unwrap();
         assert_eq!(results.terms, vec!["red herring", "whale"]);
         assert_eq!(results.hits[0].rank.terms_matched, 2);
     }
@@ -493,20 +536,20 @@ mod tests {
     #[test]
     fn fuzzy_fallback_still_catches_typos() {
         let (_dir, store) = store_with(&["# Deployment\n\nnothing here\n"]);
-        assert_eq!(hits(&store, "deploymnt", "fuzzy").len(), 1);
+        assert_eq!(hits(&store, "deploymnt", SearchMode::Keyword).len(), 1);
     }
 
     #[test]
     fn best_line_carries_the_most_terms() {
         let (_dir, store) = store_with(&["# Page\n\nalpha alone\nalpha and beta\n"]);
-        let found = hits(&store, "alpha beta", "fuzzy");
+        let found = hits(&store, "alpha beta", SearchMode::Keyword);
         assert_eq!(found[0].snippet, "alpha and beta");
     }
 
     #[test]
     fn overlapping_terms_merge_into_one_range() {
         let (_dir, store) = store_with(&["# Page\n\nmilkshake\n"]);
-        let found = hits(&store, "milk milks", "fuzzy");
+        let found = hits(&store, "milk milks", SearchMode::Keyword);
         assert_eq!(found[0].ranges, vec![(0, 5)]);
     }
 
@@ -516,19 +559,19 @@ mod tests {
             "# Shake\n\nmilkshake milkshake milkshake\n",
             "# Fridge\n\nbuy milk\n",
         ]);
-        let found = hits(&store, "milk", "fuzzy");
+        let found = hits(&store, "milk", SearchMode::Keyword);
         assert_eq!(found[0].title, "Fridge");
-        assert_eq!(found[0].rank.tier, Reverse(Strategy::Phrase));
-        assert_eq!(found[1].rank.tier, Reverse(Strategy::Partial));
+        assert_eq!(found[0].rank.tier, Strategy::Phrase);
+        assert_eq!(found[1].rank.tier, Strategy::Partial);
     }
 
     #[test]
     fn substring_outranks_a_fuzzy_only_match() {
         let (_dir, store) = store_with(&["# Typo\n\nm i l l k y way\n", "# Shake\n\nmilkshake\n"]);
-        let found = hits(&store, "milk", "fuzzy");
+        let found = hits(&store, "milk", SearchMode::Keyword);
         assert_eq!(found[0].title, "Shake");
-        assert_eq!(found[0].rank.tier, Reverse(Strategy::Partial));
-        assert_eq!(found[1].rank.tier, Reverse(Strategy::Fuzzy));
+        assert_eq!(found[0].rank.tier, Strategy::Partial);
+        assert_eq!(found[1].rank.tier, Strategy::Fuzzy);
     }
 
     #[test]
@@ -537,20 +580,20 @@ mod tests {
             "# Apart\n\ndeployment notes\n\npipeline notes\n\ndeployment pipeline again\n",
             "# Together\n\nthe deployment pipeline broke\n",
         ]);
-        let found = hits(&store, "deployment pipeline", "fuzzy");
+        let found = hits(&store, "deployment pipeline", SearchMode::Keyword);
         assert_eq!(found[0].title, "Apart");
         let apart_and_together_both_phrase_tier =
-            found.iter().all(|h| h.rank.tier == Reverse(Strategy::Phrase));
+            found.iter().all(|h| h.rank.tier == Strategy::Phrase);
         assert!(apart_and_together_both_phrase_tier);
 
         let (_dir, store) = store_with(&[
             "# Apart\n\ndeployment notes\n\npipeline notes\n",
             "# Together\n\nthe deployment pipeline broke\n",
         ]);
-        let found = hits(&store, "deployment pipeline", "fuzzy");
+        let found = hits(&store, "deployment pipeline", SearchMode::Keyword);
         assert_eq!(found[0].title, "Together");
-        assert_eq!(found[0].rank.tier, Reverse(Strategy::Phrase));
-        assert_eq!(found[1].rank.tier, Reverse(Strategy::Word));
+        assert_eq!(found[0].rank.tier, Strategy::Phrase);
+        assert_eq!(found[1].rank.tier, Strategy::Word);
     }
 
     #[test]
@@ -561,12 +604,12 @@ mod tests {
             "# Punctuated\n\n(milk), please\n",
             "# Joined\n\nmilk_shake\n",
         ]);
-        let found = hits(&store, "milk", "fuzzy");
+        let found = hits(&store, "milk", SearchMode::Keyword);
         let tier_of = |title: &str| found.iter().find(|h| h.title == title).unwrap().rank.tier;
-        assert_eq!(tier_of("Start"), Reverse(Strategy::Phrase));
-        assert_eq!(tier_of("End"), Reverse(Strategy::Phrase));
-        assert_eq!(tier_of("Punctuated"), Reverse(Strategy::Phrase));
-        assert_eq!(tier_of("Joined"), Reverse(Strategy::Partial));
+        assert_eq!(tier_of("Start"), Strategy::Phrase);
+        assert_eq!(tier_of("End"), Strategy::Phrase);
+        assert_eq!(tier_of("Punctuated"), Strategy::Phrase);
+        assert_eq!(tier_of("Joined"), Strategy::Partial);
     }
 
     #[test]
@@ -575,11 +618,11 @@ mod tests {
             "# Bounded\n\nthe deployment pipeline broke\n",
             "# Glued\n\nxdeployment pipelinex\n",
         ]);
-        let found = hits(&store, "\"deployment pipeline\"", "fuzzy");
+        let found = hits(&store, "\"deployment pipeline\"", SearchMode::Keyword);
         assert_eq!(found[0].title, "Bounded");
-        assert_eq!(found[0].rank.tier, Reverse(Strategy::Phrase));
-        assert_eq!(found[1].rank.tier, Reverse(Strategy::Partial));
-        assert!(found.iter().all(|h| h.rank.tier != Reverse(Strategy::Fuzzy)));
+        assert_eq!(found[0].rank.tier, Strategy::Phrase);
+        assert_eq!(found[1].rank.tier, Strategy::Partial);
+        assert!(found.iter().all(|h| h.rank.tier != Strategy::Fuzzy));
     }
 
     #[test]
@@ -588,7 +631,7 @@ mod tests {
             "# Both\n\nalphabet soup\n\nbeta\n",
             "# One\n\nalpha alone\n",
         ]);
-        let found = hits(&store, "alpha beta", "fuzzy");
+        let found = hits(&store, "alpha beta", SearchMode::Keyword);
         assert_eq!(found[0].title, "Both");
         assert_eq!(found[0].rank.terms_matched, 2);
     }
@@ -596,7 +639,7 @@ mod tests {
     #[test]
     fn regex_matches_with_ranges() {
         let (_dir, store) = store_with_pages();
-        let found = hits(&store, r"m\w+k", "regex");
+        let found = hits(&store, r"m\w+k", SearchMode::Regex);
         assert!(!found.is_empty());
         let hit = found.iter().find(|h| h.snippet.contains("milk")).unwrap();
         assert_eq!(matched(hit, 0), "milk");
@@ -605,7 +648,7 @@ mod tests {
     #[test]
     fn regex_reports_a_title_match_once() {
         let (_dir, store) = store_with_pages();
-        let found = hits(&store, "Grocery", "regex");
+        let found = hits(&store, "Grocery", SearchMode::Regex);
         assert_eq!(found.len(), 1);
         assert_eq!(found[0].line_no, 0);
         assert_eq!(found[0].snippet, "Grocery List");
@@ -614,20 +657,20 @@ mod tests {
     #[test]
     fn regex_keeps_one_hit_per_line() {
         let (_dir, store) = store_with(&["# Log\n\nmilk\nmilk\n"]);
-        assert_eq!(hits(&store, "milk", "regex").len(), 2);
+        assert_eq!(hits(&store, "milk", SearchMode::Regex).len(), 2);
     }
 
     #[test]
     fn invalid_regex_is_an_error() {
         let (_dir, store) = store_with_pages();
-        assert!(search(&store, r"([unclosed", "regex").is_err());
+        assert!(search(&store, r"([unclosed", SearchMode::Regex).is_err());
     }
 
     #[test]
     fn empty_query_returns_nothing() {
         let (_dir, store) = store_with_pages();
-        assert!(hits(&store, "   ", "fuzzy").is_empty());
-        assert!(hits(&store, "\"\"", "fuzzy").is_empty());
+        assert!(hits(&store, "   ", SearchMode::Keyword).is_empty());
+        assert!(hits(&store, "\"\"", SearchMode::Keyword).is_empty());
     }
 
     #[test]
@@ -637,7 +680,7 @@ mod tests {
             "x".repeat(500),
             "y".repeat(500)
         )]);
-        let found = hits(&store, "needle", "regex");
+        let found = hits(&store, "needle", SearchMode::Regex);
         assert!(found[0].snippet.chars().count() <= 240);
         assert_eq!(matched(&found[0], 0), "needle");
     }

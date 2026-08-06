@@ -1,9 +1,10 @@
 <script lang="ts">
   import * as act from "../../actions";
   import { autofocusSelect } from "../../autofocus";
-  import { editorCtl } from "../../editorCtl";
   import { labelOf } from "../../keys/bindings";
-  import { COLOR_PALETTE } from "../../markdown";
+  import { clampIndex } from "../../listIndex";
+  import { COLOR_PALETTE, COLOR_PALETTE_GRADIENT } from "../../markdown";
+  import { editorCtl } from "../../paneCtl";
 
   interface Item {
     label: string;
@@ -18,14 +19,10 @@
   function pad(n: number): string {
     return String(n).padStart(2, "0");
   }
-  function today(): string {
-    const d = new Date();
-    return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
-  }
-  function nowStamp(): string {
-    const d = new Date();
-    return `${today()} ${pad(d.getHours())}:${pad(d.getMinutes())}`;
-  }
+
+  const openedAt = new Date();
+  const date = `${openedAt.getFullYear()}-${pad(openedAt.getMonth() + 1)}-${pad(openedAt.getDate())}`;
+  const dateTime = `${date} ${pad(openedAt.getHours())}:${pad(openedAt.getMinutes())}`;
 
   const ITEMS: Item[] = [
     { label: "Link", before: "[", after: "](url)", hint: "[text](url)" },
@@ -43,8 +40,8 @@
     { label: "Code block", before: "```\n", after: "\n```", hint: "``` … ```" },
     { label: "Table", before: "| A | B |\n| --- | --- |\n|  |  |\n", after: "", hint: "2×2 table" },
     { label: "Divider", before: "\n---\n", after: "", hint: "---" },
-    { label: "Date", before: today(), after: "", hint: today() },
-    { label: "Date + time", before: nowStamp(), after: "", hint: nowStamp() },
+    { label: "Date", before: date, after: "", hint: date },
+    { label: "Date + time", before: dateTime, after: "", hint: dateTime },
     {
       label: "Image width",
       before: "",
@@ -57,19 +54,20 @@
       before: "",
       after: "",
       hint: "[text]{.red}",
-      swatch: `linear-gradient(90deg, ${Object.values(COLOR_PALETTE).join(",")})`,
+      swatch: COLOR_PALETTE_GRADIENT,
       search: `colour text ${Object.keys(COLOR_PALETTE).join(" ")} grey`,
       action: () => act.openModal("colorPicker"),
     },
   ];
+
+  const chord = $derived(labelOf("app.insertHelper"));
 
   let filter = $state("");
   let sel = $state(0);
   let listEl: HTMLDivElement | undefined = $state();
 
   $effect(() => {
-    void sel;
-    listEl?.querySelector(".insert-item.selected")?.scrollIntoView({ block: "nearest" });
+    (listEl?.children[sel] as HTMLElement | undefined)?.scrollIntoView({ block: "nearest" });
   });
 
   const items = $derived.by(() => {
@@ -81,7 +79,7 @@
   });
 
   $effect(() => {
-    if (sel >= items.length) sel = Math.max(0, items.length - 1);
+    if (sel >= items.length) sel = clampIndex(sel, items.length);
   });
 
   function choose(item: Item) {
@@ -94,12 +92,9 @@
   }
 
   function keys(e: KeyboardEvent) {
-    if (e.key === "ArrowDown") {
+    if (e.key === "ArrowDown" || e.key === "ArrowUp") {
       e.preventDefault();
-      sel = Math.min(items.length - 1, sel + 1);
-    } else if (e.key === "ArrowUp") {
-      e.preventDefault();
-      sel = Math.max(0, sel - 1);
+      sel = clampIndex(sel + (e.key === "ArrowDown" ? 1 : -1), items.length);
     } else if (e.key === "Enter") {
       e.preventDefault();
       if (items[sel]) choose(items[sel]);
@@ -109,7 +104,7 @@
 
 <div class="modal-backdrop">
   <div class="modal" style:width="440px" role="dialog">
-    <div class="modal-title">Insert{labelOf("app.insertHelper") ? ` (${labelOf("app.insertHelper")})` : ""}</div>
+    <div class="modal-title">Insert{chord ? ` (${chord})` : ""}</div>
     <input
       placeholder="filter…"
       style="width:100%"

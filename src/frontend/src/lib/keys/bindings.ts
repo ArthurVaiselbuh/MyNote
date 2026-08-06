@@ -173,9 +173,8 @@ export type ParsedChord = { mod: boolean; alt: boolean; shift: boolean; key: str
 
 export function parseChord(chord: string): ParsedChord {
   const parsed: ParsedChord = { mod: false, alt: false, shift: false, key: "" };
-  // the key half can itself be "+", which splitting would swallow
-  const parts = chord === "+" ? ["+"] : chord.split("+").map((p) => (p === "" ? "+" : p));
-  for (const part of parts) {
+  // the key half can itself be "+", which splitting leaves as empty parts
+  for (const part of chord.split("+").map((p) => p || "+")) {
     if (part === "Mod") parsed.mod = true;
     else if (part === "Alt") parsed.alt = true;
     else if (part === "Shift") parsed.shift = true;
@@ -184,23 +183,20 @@ export function parseChord(chord: string): ParsedChord {
   return parsed;
 }
 
-export function formatChordParts({ mod, alt, shift, key }: ParsedChord): string {
+export function formatChord(chord: string): string {
+  const { mod, alt, shift, key } = parseChord(chord);
   const parts: string[] = [];
   if (mod) parts.push(MOD_LABEL);
   if (alt) parts.push(ALT_LABEL);
-  let key_label = KEY_LABELS[key] ?? (key.length === 1 ? key.toUpperCase() : key);
+  let keyLabel = KEY_LABELS[key] ?? (key.length === 1 ? key.toUpperCase() : key);
   if (shift) {
     // a bare shifted punctuation key reads as what it prints — "?" not "Shift+/"
     const printed = !mod && !alt ? SHIFTED_PRINTED[key] : undefined;
-    if (printed) key_label = printed;
+    if (printed) keyLabel = printed;
     else parts.push(SHIFT_LABEL);
   }
-  parts.push(key_label);
+  parts.push(keyLabel);
   return parts.join("+");
-}
-
-export function formatChord(chord: string): string {
-  return formatChordParts(parseChord(chord));
 }
 
 const KEY_LABELS: Record<string, string> = {
@@ -212,7 +208,6 @@ const KEY_LABELS: Record<string, string> = {
   PageDown: "PgDn",
   Delete: "Del",
   Escape: "Esc",
-  Backspace: "Backspace",
   " ": "Space",
   Insert: "Ins",
 };
@@ -274,23 +269,32 @@ function overrides(): Record<string, string[]> {
   return app.settings.keybindings ?? NO_OVERRIDES;
 }
 
+export function commandOf(id: string): Command | undefined {
+  return BY_ID.get(id);
+}
+
+function defaultsOf(id: string): string[] {
+  return BY_ID.get(id)?.defaults ?? [];
+}
+
+function sameChords(a: string[], b: string[]): boolean {
+  return a.length === b.length && a.every((chord, i) => chord === b[i]);
+}
+
 export function chordsOf(id: string): string[] {
   const custom = overrides()[id];
-  if (custom) return [...custom];
-  return BY_ID.get(id)?.defaults ?? [];
+  return custom ? [...custom] : defaultsOf(id);
 }
 
 export function isDefault(id: string): boolean {
   const custom = overrides()[id];
-  if (!custom) return true;
-  const defaults = BY_ID.get(id)?.defaults ?? [];
-  return custom.length === defaults.length && custom.every((c, i) => c === defaults[i]);
+  return !custom || sameChords(custom, defaultsOf(id));
 }
 
 /** The chord shown in tooltips and menus — the first one, or "" when unassigned. */
 export function labelOf(id: string): string {
-  const chords = chordsOf(id);
-  return chords.length ? formatChord(chords[0]) : "";
+  const [first] = chordsOf(id);
+  return first ? formatChord(first) : "";
 }
 
 /** " (Ctrl+N)" for tooltips, or "" so an unassigned command shows no empty parens. */
@@ -313,8 +317,8 @@ function chordIndex(): Map<BindingContext, Map<string, string>> {
   indexedOverrides = current;
   index = new Map();
   for (const command of COMMANDS) {
-    let ctxIndex = index.get(command.ctx);
-    if (!ctxIndex) index.set(command.ctx, (ctxIndex = new Map()));
+    const ctxIndex = index.get(command.ctx) ?? new Map<string, string>();
+    index.set(command.ctx, ctxIndex);
     for (const chord of chordsOf(command.id)) {
       if (!ctxIndex.has(chord)) ctxIndex.set(chord, command.id);
     }
@@ -322,15 +326,13 @@ function chordIndex(): Map<BindingContext, Map<string, string>> {
   return index;
 }
 
-export function commandFor(ctx: BindingContext, e: KeyboardEvent): string | null {
-  const chord = chordOf(e);
-  if (!chord) return null;
+export function commandForChord(ctx: BindingContext, chord: string): string | null {
   return chordIndex().get(ctx)?.get(chord) ?? null;
 }
 
-export function matches(id: string, e: KeyboardEvent): boolean {
+export function commandFor(ctx: BindingContext, e: KeyboardEvent): string | null {
   const chord = chordOf(e);
-  return !!chord && chordsOf(id).includes(chord);
+  return chord ? commandForChord(ctx, chord) : null;
 }
 
 // ---------- editing ----------
@@ -348,18 +350,19 @@ const REACH: Record<BindingContext, BindingContext[]> = {
   history: ["system", "pane", "history"],
 };
 
+/** Why `chord` can't be assigned to `id`, phrased for the user, or null. */
 export function rejectionOf(id: string, chord: string): string | null {
-  if (BY_ID.get(id)?.ctx !== "system") return null;
-  const { mod, alt } = parseChord(chord);
-  if (!mod && !alt) {
-    return `A system-wide shortcut needs ${MOD_LABEL} or ${ALT_LABEL} — otherwise it swallows that key in every app.`;
-  }
-  return null;
+  if (chord.startsWith("Other+")) return "That modifier isn't usable in a shortcut.";
+  const { mod, alt, key } = parseChord(chord);
+  if (key === "Tab") return "Tab can't be reassigned — it drives focus everywhere.";
+  if (commandOf(id)?.ctx !== "system") return null;
+  if (mod || alt) return null;
+  return `A system-wide shortcut needs ${MOD_LABEL} or ${ALT_LABEL} — otherwise it swallows that key in every app.`;
 }
 
 /** The command a chord would collide with if assigned to `id`, if any. */
 export function conflictOf(id: string, chord: string): Command | null {
-  const command = BY_ID.get(id);
+  const command = commandOf(id);
   if (!command) return null;
   const reach = new Set(REACH[command.ctx]);
   for (const other of COMMANDS) {
@@ -371,9 +374,7 @@ export function conflictOf(id: string, chord: string): Command | null {
 
 function writeChords(id: string, chords: string[]) {
   const next = { ...overrides() };
-  const defaults = BY_ID.get(id)?.defaults ?? [];
-  const isSameAsDefault = chords.length === defaults.length && chords.every((c, i) => c === defaults[i]);
-  if (isSameAsDefault) delete next[id];
+  if (sameChords(chords, defaultsOf(id))) delete next[id];
   else next[id] = chords;
   app.settings.keybindings = next;
 }
@@ -390,9 +391,7 @@ export function unassign(id: string) {
 }
 
 export function resetToDefault(id: string) {
-  const next = { ...overrides() };
-  delete next[id];
-  app.settings.keybindings = next;
+  writeChords(id, defaultsOf(id));
 }
 
 export function resetAllToDefaults() {

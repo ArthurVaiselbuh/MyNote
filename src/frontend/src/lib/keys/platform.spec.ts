@@ -1,14 +1,11 @@
 import { describe, expect, it } from "vitest";
 import { chordKey } from "./platform";
-
-function press(key: string, code: string, shiftKey = false): KeyboardEvent {
-  return { key, code, shiftKey } as KeyboardEvent;
-}
+import { press } from "./testPress";
 
 describe("chordKey — Latin layouts keep the printed character", () => {
   it("lowercases letters", () => {
     expect(chordKey(press("k", "KeyK"))).toBe("k");
-    expect(chordKey(press("K", "KeyK", true))).toBe("k");
+    expect(chordKey(press("K", "KeyK", { shiftKey: true }))).toBe("k");
   });
 
   it("passes named keys through untouched", () => {
@@ -39,16 +36,16 @@ describe("chordKey — non-Latin layouts fall back to the physical key", () => {
   });
 
   it("ignores ASCII punctuation the layout moved to another key", () => {
-    expect(chordKey(press(",", "Slash", true))).toBe("/");
+    expect(chordKey(press(",", "Slash", { shiftKey: true }))).toBe("/");
     expect(chordKey(press(".", "Slash"))).toBe("/");
   });
 });
 
 describe("chordKey — shifted punctuation normalizes to its base key", () => {
   it("reports the unshifted character", () => {
-    expect(chordKey(press("?", "Slash", true))).toBe("/");
-    expect(chordKey(press("+", "Equal", true))).toBe("=");
-    expect(chordKey(press("{", "BracketLeft", true))).toBe("[");
+    expect(chordKey(press("?", "Slash", { shiftKey: true }))).toBe("/");
+    expect(chordKey(press("+", "Equal", { shiftKey: true }))).toBe("=");
+    expect(chordKey(press("{", "BracketLeft", { shiftKey: true }))).toBe("[");
   });
 
   it("keeps numpad +/- on the zoom bindings", () => {

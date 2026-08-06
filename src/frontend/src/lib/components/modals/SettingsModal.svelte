@@ -2,7 +2,7 @@
   import { onMount } from "svelte";
   import { getVersion } from "@tauri-apps/api/app";
   import * as act from "../../actions";
-  import { api, type GitStatus } from "../../api";
+  import { api } from "../../api";
   import { hintOf } from "../../keys/bindings";
   import { app } from "../../state/app.svelte";
 
@@ -12,34 +12,26 @@
     void act.persistSettings();
   }
 
-  let gitStatus = $state<GitStatus | null>(null);
-  let gitIntervalMinutes = $state(20);
+  const FALLBACK_INTERVAL_MINUTES = 20;
+
+  function minutesOf(intervalSecs: number | undefined): number {
+    return intervalSecs ? Math.max(1, Math.round(intervalSecs / 60)) : FALLBACK_INTERVAL_MINUTES;
+  }
+
+  let gitIntervalMinutes = $state(minutesOf(app.git?.intervalSecs));
   let version = $state("");
 
   onMount(() => {
     void getVersion().then((v) => (version = v));
     void api.getGitStatus().then((s) => {
-      gitStatus = s;
       app.git = s;
-      gitIntervalMinutes = Math.max(1, Math.round(s.intervalSecs / 60));
+      gitIntervalMinutes = minutesOf(s.intervalSecs);
     });
   });
 
-  async function toggleGit(e: Event) {
-    const enabled = (e.currentTarget as HTMLInputElement).checked;
+  async function saveGitSnapshots(enabled: boolean) {
     try {
-      gitStatus = await api.setGitSnapshots(enabled, gitIntervalMinutes * 60);
-      app.git = gitStatus;
-    } catch (err) {
-      app.status = String(err);
-    }
-  }
-
-  async function changeGitInterval() {
-    if (!gitStatus?.enabled) return;
-    try {
-      gitStatus = await api.setGitSnapshots(true, gitIntervalMinutes * 60);
-      app.git = gitStatus;
+      app.git = await api.setGitSnapshots(enabled, gitIntervalMinutes * 60);
     } catch (err) {
       app.status = String(err);
     }
@@ -54,11 +46,11 @@
 
     <div class="settings-row">
       <span>Colors &amp; theme</span>
-      <button onclick={() => (app.modal = "colors")}>Customize…</button>
+      <button onclick={() => act.openModal("colors")}>Customize…</button>
     </div>
     <div class="settings-row">
       <span>Keyboard shortcuts</span>
-      <button onclick={() => (app.modal = "keybindings")}>Customize…</button>
+      <button onclick={() => act.openModal("keybindings")}>Customize…</button>
     </div>
     <div class="settings-row">
       <label for="set-scroll">Scroll speed</label>
@@ -111,7 +103,7 @@
 
     <div class="settings-row">
       <span>Welcome tour</span>
-      <button onclick={() => (app.modal = "welcome")}>Show again</button>
+      <button onclick={() => act.openModal("welcome")}>Show again</button>
     </div>
 
     <div class="settings-group">
@@ -133,16 +125,16 @@
         <input
           id="set-git"
           type="checkbox"
-          checked={gitStatus?.enabled ?? false}
-          disabled={!gitStatus?.available}
-          onchange={toggleGit}
+          checked={app.git?.enabled ?? false}
+          disabled={!app.git?.available}
+          onchange={(e) => saveGitSnapshots(e.currentTarget.checked)}
         />
       </div>
-      {#if gitStatus && !gitStatus.available}
+      {#if app.git && !app.git.available}
         <div class="settings-path">
           git was not found on this machine — install it to enable version history.
         </div>
-      {:else if gitStatus?.enabled}
+      {:else if app.git?.enabled}
         <div class="settings-row">
           <label for="set-git-interval">Snapshot interval (minutes)</label>
           <input
@@ -152,7 +144,7 @@
             max="1440"
             step="1"
             bind:value={gitIntervalMinutes}
-            onchange={changeGitInterval}
+            onchange={() => saveGitSnapshots(true)}
           />
         </div>
       {/if}

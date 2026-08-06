@@ -1,16 +1,17 @@
 import * as act from "../actions";
-import { peekCtl } from "../peekCtl";
+import { clampIndex } from "../listIndex";
+import { peekCtl } from "../paneCtl";
 import { app } from "../state/app.svelte";
 import { commandFor } from "./bindings";
 
 export function resultsKeys(e: KeyboardEvent) {
   switch (commandFor("results", e)) {
     case "results.selectUp":
-      app.resultsSel = Math.max(0, app.resultsSel - 1);
+      app.resultsSel = clampIndex(app.resultsSel - 1, app.results.length);
       app.focus = "results";
       break;
     case "results.selectDown":
-      app.resultsSel = Math.min(Math.max(0, app.results.length - 1), app.resultsSel + 1);
+      app.resultsSel = clampIndex(app.resultsSel + 1, app.results.length);
       app.focus = "results";
       break;
     case "results.open":

@@ -1,17 +1,10 @@
 import * as act from "../actions";
 import { contextMenu, contextMenuKeys } from "../contextMenu.svelte";
 import { app } from "../state/app.svelte";
-import { isTextEntry } from "../textEntry";
-import { chordOf, commandFor, isTextChord } from "./bindings";
+import { isCodeMirror, isTextEntry } from "../textEntry";
+import { chordOf, commandForChord, isTextChord } from "./bindings";
 import { resultsKeys } from "./resultsKeys";
 import { treeKeys } from "./treeKeys";
-
-// A global chord fires even while typing, but only if it can't be text: a
-// command rebound to a bare letter must not swallow that letter in the editor.
-function firesWhileTyping(e: KeyboardEvent): boolean {
-  const chord = chordOf(e);
-  return !!chord && !isTextChord(chord);
-}
 
 export function handleGlobal(e: KeyboardEvent) {
   const target = e.target as HTMLElement | null;
@@ -38,16 +31,20 @@ export function handleGlobal(e: KeyboardEvent) {
     return;
   }
 
-  const typing = isTextEntry(e.target);
+  const typing = isTextEntry(target);
+
+  // A global or pane chord fires even while typing, but only if it can't be
+  // text: a command rebound to a bare letter must not swallow that letter in
+  // the editor.
+  const chord = chordOf(e);
+  const bindable = chord && (!typing || !isTextChord(chord)) ? chord : null;
 
   // 3. global shortcuts fire regardless of focus
-  const global = commandFor("global", e);
-  if (global && (!typing || firesWhileTyping(e))) {
-    if (runGlobal(global, typing)) {
-      e.preventDefault();
-      e.stopPropagation();
-      return;
-    }
+  const global = bindable && commandForChord("global", bindable);
+  if (global && runGlobal(global, typing)) {
+    e.preventDefault();
+    e.stopPropagation();
+    return;
   }
 
   if (e.key === "Escape") {
@@ -68,9 +65,9 @@ export function handleGlobal(e: KeyboardEvent) {
     return;
   }
 
-  const pane = commandFor("pane", e);
-  if (pane && (!typing || firesWhileTyping(e))) {
-    if (typing && target?.closest(".cm-editor")) return; // CM pages natively
+  const pane = bindable && commandForChord("pane", bindable);
+  if (pane) {
+    if (typing && isCodeMirror(target)) return; // CM pages natively
     e.preventDefault();
     act.scrollMain(pane === "pane.scrollUp" ? -1 : 1);
     return;
@@ -92,8 +89,8 @@ function runGlobal(id: string, typing: boolean): boolean {
     case "app.redo": if (typing) return false; void act.redoLast(); return true;
     case "app.search": act.openSearch(); return true;
     case "app.find": act.openFind(); return true;
-    case "app.findNext": act.activeFindCtl()?.findNext(); return true;
-    case "app.findPrev": act.activeFindCtl()?.findPrev(); return true;
+    case "app.findNext": act.activePaneCtl()?.findNext(); return true;
+    case "app.findPrev": act.activePaneCtl()?.findPrev(); return true;
     case "app.toggleMode": act.toggleMode(); return true;
     case "app.save": void act.saveNow(); return true;
     case "page.new": void act.newPage(); return true;

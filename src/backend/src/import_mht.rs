@@ -1,17 +1,16 @@
 use base64::engine::general_purpose::STANDARD;
 use base64::Engine;
 use percent_encoding::percent_decode_str;
+use std::borrow::Cow;
 use std::fs;
 use std::path::Path;
 
+use crate::assets;
+use crate::err;
 use crate::import::{
-    section_exists, DupTracker, ImportOutcome, ImportPreview, PagePreview, SectionPreview,
+    name_or, section_exists, DupTracker, ImportOutcome, ImportPreview, PagePreview, SectionPreview,
 };
-use crate::store::{new_id, PageNode, Section, Store};
-
-fn err<E: std::fmt::Display>(e: E) -> String {
-    e.to_string()
-}
+use crate::store::{self, new_id, PageNode, Store};
 
 // image references survive HTML->Markdown conversion as \u{1}src\u{1} markers
 // and are resolved against the MIME parts only at import time, when the
@@ -25,11 +24,9 @@ pub fn inspect(store: &Store, paths: &[String]) -> ImportPreview {
         .map(|path| {
             let name = section_name_of(path);
             let exists = section_exists(store, &name);
-            match load_pages(path) {
-                Ok((pages, _)) => SectionPreview {
-                    exists,
-                    error: None,
-                    pages: pages
+            let (pages, error) = match load_pages(path, Attachments::Skip) {
+                Ok((pages, _)) => (
+                    pages
                         .into_iter()
                         .map(|p| PagePreview {
                             duplicate: dup.mark(&p.title),
@@ -37,14 +34,15 @@ pub fn inspect(store: &Store, paths: &[String]) -> ImportPreview {
                             children: vec![],
                         })
                         .collect(),
-                    name,
-                },
-                Err(e) => SectionPreview {
-                    name,
-                    exists,
-                    error: Some(e),
-                    pages: vec![],
-                },
+                    None,
+                ),
+                Err(e) => (vec![], Some(e)),
+            };
+            SectionPreview {
+                name,
+                exists,
+                error,
+                pages,
             }
         })
         .collect();
@@ -54,19 +52,13 @@ pub fn inspect(store: &Store, paths: &[String]) -> ImportPreview {
 pub fn import(store: &mut Store, paths: &[String]) -> Result<ImportOutcome, String> {
     let mut parsed = Vec::new();
     for path in paths {
-        let (pages, parts) = load_pages(path).map_err(|e| format!("{path}: {e}"))?;
+        let (pages, parts) =
+            load_pages(path, Attachments::Decode).map_err(|e| format!("{path}: {e}"))?;
         parsed.push((section_name_of(path), pages, parts));
     }
-    let mut outcome = ImportOutcome {
-        section_ids: vec![],
-        page_count: 0,
-    };
+    let mut outcome = ImportOutcome::default();
     for (name, pages, parts) in parsed {
-        let mut section = Section {
-            id: new_id(),
-            name,
-            pages: vec![],
-        };
+        let mut nodes = Vec::new();
         for page in pages {
             let id = new_id();
             let body = resolve_images(store, &id, &page.blocks, &parts)?;
@@ -75,32 +67,30 @@ pub fn import(store: &mut Store, paths: &[String]) -> Result<ImportOutcome, Stri
                 format!("# {}\n\n{}", page.title, body),
             )
             .map_err(err)?;
-            section.pages.push(PageNode {
+            nodes.push(PageNode {
                 id,
                 title: page.title,
                 expanded: true,
                 children: vec![],
             });
-            outcome.page_count += 1;
         }
-        outcome.section_ids.push(section.id.clone());
-        store.notebook.sections.push(section);
+        outcome.add_section(store, name, nodes);
     }
     store.save()?;
     Ok(outcome)
 }
 
 fn section_name_of(path: &str) -> String {
-    Path::new(path)
-        .file_stem()
-        .map(|s| s.to_string_lossy().to_string())
-        .unwrap_or_else(|| "Imported".into())
+    name_or(Path::new(path).file_stem(), "Imported")
 }
 
-fn load_pages(path: &str) -> Result<(Vec<RawPage>, Vec<MimePart>), String> {
+fn load_pages(
+    path: &str,
+    attachments: Attachments,
+) -> Result<(Vec<RawPage>, Vec<MimePart>), String> {
     let raw = fs::read(path).map_err(err)?;
     let raw = String::from_utf8_lossy(&raw);
-    let doc = parse_mht(&raw)?;
+    let doc = parse_mht(&raw, attachments)?;
     let pages = html_to_pages(&doc.html);
     if pages.is_empty() {
         return Err("no pages found (not a OneNote single-file export?)".into());
@@ -110,8 +100,17 @@ fn load_pages(path: &str) -> Result<(Vec<RawPage>, Vec<MimePart>), String> {
 
 // ---------- MIME ----------
 
+// the preview only needs page titles, so it parses the same MHT without paying
+// the base64 decode of every embedded image
+#[derive(Clone, Copy, PartialEq)]
+enum Attachments {
+    Decode,
+    Skip,
+}
+
 struct MimePart {
     location: String,
+    location_file_name: String,
     content_type: String,
     bytes: Vec<u8>,
 }
@@ -121,15 +120,14 @@ struct MhtDoc {
     parts: Vec<MimePart>,
 }
 
-fn parse_mht(raw: &str) -> Result<MhtDoc, String> {
+fn parse_mht(raw: &str, attachments: Attachments) -> Result<MhtDoc, String> {
     let (head, body) = split_headers(raw);
     let headers = parse_headers(head);
     let ctype = header(&headers, "content-type").unwrap_or("");
     let Some(boundary) = boundary_of(ctype) else {
         let enc = header(&headers, "content-transfer-encoding").unwrap_or("");
-        let bytes = decode_body(enc, body);
         return Ok(MhtDoc {
-            html: String::from_utf8_lossy(&bytes).into_owned(),
+            html: into_utf8_lossy(decode_body(enc, body)),
             parts: vec![],
         });
     };
@@ -138,19 +136,23 @@ fn parse_mht(raw: &str) -> Result<MhtDoc, String> {
     for chunk in split_multipart(body, &boundary) {
         let (part_head, part_body) = split_headers(chunk);
         let part_headers = parse_headers(part_head);
-        let part_type = header(&part_headers, "content-type").unwrap_or("").to_string();
+        let part_type = header(&part_headers, "content-type").unwrap_or("");
         let enc = header(&part_headers, "content-transfer-encoding").unwrap_or("");
-        let location = header(&part_headers, "content-location").unwrap_or("").to_string();
-        let bytes = decode_body(enc, part_body);
+        let location = header(&part_headers, "content-location").unwrap_or("");
         if part_type.to_lowercase().starts_with("text/html") && html.is_none() {
-            html = Some(String::from_utf8_lossy(&bytes).into_owned());
-        } else {
-            parts.push(MimePart {
-                location,
-                content_type: part_type,
-                bytes,
-            });
+            html = Some(into_utf8_lossy(decode_body(enc, part_body)));
+            continue;
         }
+        let location = percent_decode_str(location).decode_utf8_lossy().into_owned();
+        parts.push(MimePart {
+            location_file_name: file_name_of(&location),
+            location,
+            content_type: part_type.to_string(),
+            bytes: match attachments {
+                Attachments::Decode => decode_body(enc, part_body),
+                Attachments::Skip => vec![],
+            },
+        });
     }
     Ok(MhtDoc {
         html: html.ok_or("no HTML part in MHT file")?,
@@ -158,19 +160,17 @@ fn parse_mht(raw: &str) -> Result<MhtDoc, String> {
     })
 }
 
+fn into_utf8_lossy(bytes: Vec<u8>) -> String {
+    String::from_utf8(bytes)
+        .unwrap_or_else(|invalid| String::from_utf8_lossy(invalid.as_bytes()).into_owned())
+}
+
 fn split_headers(raw: &str) -> (&str, &str) {
     let crlf = raw.find("\r\n\r\n").map(|i| (i, 4));
     let lf = raw.find("\n\n").map(|i| (i, 2));
-    match (crlf, lf) {
-        (Some((a, la)), Some((b, lb))) => {
-            if a <= b {
-                (&raw[..a], &raw[a + la..])
-            } else {
-                (&raw[..b], &raw[b + lb..])
-            }
-        }
-        (Some((i, l)), None) | (None, Some((i, l))) => (&raw[..i], &raw[i + l..]),
-        (None, None) => ("", raw),
+    match crlf.into_iter().chain(lf).min_by_key(|&(at, _)| at) {
+        Some((at, sep_len)) => (&raw[..at], &raw[at + sep_len..]),
+        None => ("", raw),
     }
 }
 
@@ -208,11 +208,7 @@ fn boundary_of(ctype: &str) -> Option<String> {
             .next()
             .unwrap_or("")
     };
-    if boundary.is_empty() {
-        None
-    } else {
-        Some(boundary.to_string())
-    }
+    (!boundary.is_empty()).then(|| boundary.to_string())
 }
 
 fn split_multipart<'a>(body: &'a str, boundary: &str) -> Vec<&'a str> {
@@ -231,7 +227,8 @@ fn split_multipart<'a>(body: &'a str, boundary: &str) -> Vec<&'a str> {
 fn decode_body(encoding: &str, body: &str) -> Vec<u8> {
     match encoding.to_lowercase().as_str() {
         "base64" => {
-            let compact: String = body.chars().filter(|c| !c.is_whitespace()).collect();
+            let mut compact = String::with_capacity(body.len());
+            compact.extend(body.chars().filter(|c| !c.is_whitespace()));
             STANDARD.decode(compact).unwrap_or_default()
         }
         "quoted-printable" => decode_qp(body),
@@ -254,17 +251,9 @@ fn decode_qp(s: &str) -> Vec<u8> {
             i += 3;
         } else if rest.starts_with(b"\n") {
             i += 2;
-        } else if rest.len() >= 2 {
-            match (hex_val(rest[0]), hex_val(rest[1])) {
-                (Some(hi), Some(lo)) => {
-                    out.push(hi * 16 + lo);
-                    i += 3;
-                }
-                _ => {
-                    out.push(b'=');
-                    i += 1;
-                }
-            }
+        } else if let Some(byte) = rest.get(..2).and_then(hex_pair) {
+            out.push(byte);
+            i += 3;
         } else {
             out.push(b'=');
             i += 1;
@@ -273,15 +262,19 @@ fn decode_qp(s: &str) -> Vec<u8> {
     out
 }
 
+fn hex_pair(pair: &[u8]) -> Option<u8> {
+    Some(hex_val(pair[0])? * 16 + hex_val(pair[1])?)
+}
+
 fn hex_val(c: u8) -> Option<u8> {
-    (c as char).to_digit(16).map(|d| d as u8)
+    char::from(c).to_digit(16).map(|d| d as u8)
 }
 
 // ---------- HTML tokenizer ----------
 
 enum Tok<'a> {
-    Open { name: String, attrs: &'a str },
-    Close(String),
+    Open { name: Cow<'a, str>, attrs: &'a str },
+    Close(Cow<'a, str>),
     Text(&'a str),
 }
 
@@ -306,7 +299,7 @@ fn tokenize(html: &str) -> Vec<Tok<'_>> {
             let name_end = inner
                 .find(|c: char| c.is_whitespace() || c == '/')
                 .unwrap_or(inner.len());
-            let name = inner[..name_end].to_lowercase();
+            let name = lowercased(&inner[..name_end]);
             if name.is_empty() {
                 continue;
             }
@@ -325,6 +318,14 @@ fn tokenize(html: &str) -> Vec<Tok<'_>> {
         }
     }
     toks
+}
+
+fn lowercased(text: &str) -> Cow<'_, str> {
+    if text.bytes().any(|b| b.is_ascii_uppercase()) {
+        Cow::Owned(text.to_lowercase())
+    } else {
+        Cow::Borrowed(text)
+    }
 }
 
 fn tag_end(html: &str, start: usize) -> usize {
@@ -349,29 +350,24 @@ fn tag_end(html: &str, start: usize) -> usize {
     bytes.len().saturating_sub(1)
 }
 
-fn attr(attrs: &str, name: &str) -> Option<String> {
-    let lower = attrs.to_lowercase();
-    let pat = format!("{name}=");
-    let mut from = 0;
-    while let Some(rel) = lower[from..].find(&pat) {
-        let at = from + rel;
-        let boundary = at == 0 || {
-            let prev = lower.as_bytes()[at - 1];
-            !prev.is_ascii_alphanumeric() && prev != b'-'
-        };
-        if !boundary {
-            from = at + pat.len();
+fn attr<'a>(attrs: &'a str, name: &str) -> Option<&'a str> {
+    let bytes = attrs.as_bytes();
+    for at in 0..bytes.len() {
+        let eq = at + name.len();
+        if bytes.get(eq) != Some(&b'=') || !bytes[at..eq].eq_ignore_ascii_case(name.as_bytes()) {
             continue;
         }
-        let value = attrs[at + pat.len()..].trim_start();
-        let mut chars = value.chars();
-        return Some(match chars.next() {
-            Some(q @ ('"' | '\'')) => value[1..].split(q).next().unwrap_or("").to_string(),
-            _ => value
-                .split(|c: char| c.is_whitespace())
-                .next()
-                .unwrap_or("")
-                .to_string(),
+        let starts_a_name = at == 0 || {
+            let before = bytes[at - 1];
+            !before.is_ascii_alphanumeric() && before != b'-'
+        };
+        if !starts_a_name {
+            continue;
+        }
+        let value = attrs[eq + 1..].trim_start();
+        return Some(match value.chars().next() {
+            Some(quote @ ('"' | '\'')) => value[1..].split(quote).next().unwrap_or(""),
+            _ => value.split(char::is_whitespace).next().unwrap_or(""),
         });
     }
     None
@@ -434,6 +430,7 @@ struct Inline {
     italic: bool,
 }
 
+#[derive(Default)]
 struct Para {
     runs: Vec<(Inline, String)>,
     is_title: bool,
@@ -446,6 +443,34 @@ struct PageBuild {
     blocks: Vec<String>,
 }
 
+// OneNote's exporter marks a page's heading and its date/time stamp by inline
+// style rather than by tag
+const TITLE_STYLE: &str = "font-size:20.0pt";
+const META_STYLE: &str = "color:#767676";
+// every export closes with a title-less footer page
+const FOOTER_TEXT: &str = "Created with OneNote.";
+
+fn finish_page(page: &mut Option<PageBuild>, pages: &mut Vec<RawPage>) {
+    let Some(built) = page.take() else { return };
+    let filled: Vec<&str> = built
+        .blocks
+        .iter()
+        .filter(|b| !b.is_empty())
+        .map(String::as_str)
+        .collect();
+    if built.title.is_empty() && (filled.is_empty() || filled == [FOOTER_TEXT]) {
+        return;
+    }
+    pages.push(RawPage {
+        title: if built.title.is_empty() {
+            "Untitled".into()
+        } else {
+            built.title
+        },
+        blocks: built.blocks,
+    });
+}
+
 fn html_to_pages(html: &str) -> Vec<RawPage> {
     let mut pages: Vec<RawPage> = Vec::new();
     let mut page: Option<PageBuild> = None;
@@ -456,29 +481,9 @@ fn html_to_pages(html: &str) -> Vec<RawPage> {
     let mut link: Option<(String, String)> = None;
     let mut table: Option<Vec<Vec<String>>> = None;
 
-    let finish_page = |page: &mut Option<PageBuild>, pages: &mut Vec<RawPage>| {
-        if let Some(built) = page.take() {
-            let content: Vec<&String> = built.blocks.iter().filter(|b| !b.is_empty()).collect();
-            // OneNote closes every export with a title-less footer page
-            let footer = built.title.is_empty()
-                && content.len() == 1
-                && content[0].as_str() == "Created with OneNote.";
-            if !footer && (!built.title.is_empty() || !content.is_empty()) {
-                pages.push(RawPage {
-                    title: if built.title.is_empty() {
-                        "Untitled".into()
-                    } else {
-                        built.title
-                    },
-                    blocks: built.blocks,
-                });
-            }
-        }
-    };
-
     for tok in tokenize(html) {
         match tok {
-            Tok::Open { name, attrs } => match name.as_str() {
+            Tok::Open { name, attrs } => match name.as_ref() {
                 "body" => in_body = true,
                 "div" if in_body => {
                     if div_depth == 0 {
@@ -490,41 +495,34 @@ fn html_to_pages(html: &str) -> Vec<RawPage> {
                 "p" if page.is_some() && table.is_none() => {
                     let style = attr(attrs, "style").unwrap_or_default();
                     para = Some(Para {
-                        runs: vec![],
-                        is_title: style.contains("font-size:20.0pt"),
-                        is_meta: style.contains("color:#767676"),
+                        is_title: style.contains(TITLE_STYLE),
+                        is_meta: style.contains(META_STYLE),
+                        ..Para::default()
                     });
                 }
                 "span" | "font" => {
                     let style = attr(attrs, "style").unwrap_or_default();
-                    let mut top = *inline_stack.last().unwrap_or(&Inline::default());
-                    if style.contains("font-weight:bold") {
-                        top.bold = true;
-                    }
-                    if style.contains("font-style:italic") {
-                        top.italic = true;
-                    }
-                    inline_stack.push(top);
+                    let mut nested = inline_stack.last().copied().unwrap_or_default();
+                    nested.bold |= style.contains("font-weight:bold");
+                    nested.italic |= style.contains("font-style:italic");
+                    inline_stack.push(nested);
                 }
-                "b" | "strong" => {
-                    let mut top = *inline_stack.last().unwrap_or(&Inline::default());
-                    top.bold = true;
-                    inline_stack.push(top);
+                "b" | "strong" | "i" | "em" => {
+                    let mut nested = inline_stack.last().copied().unwrap_or_default();
+                    nested.bold |= matches!(name.as_ref(), "b" | "strong");
+                    nested.italic |= matches!(name.as_ref(), "i" | "em");
+                    inline_stack.push(nested);
                 }
-                "i" | "em" => {
-                    let mut top = *inline_stack.last().unwrap_or(&Inline::default());
-                    top.italic = true;
-                    inline_stack.push(top);
+                "a" => {
+                    link = Some((
+                        attr(attrs, "href").unwrap_or_default().to_string(),
+                        String::new(),
+                    ))
                 }
-                "a" => link = Some((attr(attrs, "href").unwrap_or_default(), String::new())),
                 "br" => {
                     if let Some(p) = para.take() {
                         flush_para(p, &mut page);
-                        para = Some(Para {
-                            runs: vec![],
-                            is_title: false,
-                            is_meta: false,
-                        });
+                        para = Some(Para::default());
                     }
                 }
                 "img" => {
@@ -561,7 +559,7 @@ fn html_to_pages(html: &str) -> Vec<RawPage> {
                 }
                 _ => {}
             },
-            Tok::Close(name) => match name.as_str() {
+            Tok::Close(name) => match name.as_ref() {
                 "body" => {
                     finish_page(&mut page, &mut pages);
                     in_body = false;
@@ -617,7 +615,7 @@ fn html_to_pages(html: &str) -> Vec<RawPage> {
                 } else if let Some(rows) = table.as_mut() {
                     append_cell(rows, &collapse_ws(&decode_entities(raw)));
                 } else if let Some(p) = para.as_mut() {
-                    let style = *inline_stack.last().unwrap_or(&Inline::default());
+                    let style = inline_stack.last().copied().unwrap_or_default();
                     p.runs.push((style, normalized_run(raw)));
                 }
             }
@@ -629,23 +627,26 @@ fn html_to_pages(html: &str) -> Vec<RawPage> {
 
 // keeps a single leading/trailing space so words split across tags stay apart
 fn normalized_run(raw: &str) -> String {
-    let decoded = decode_entities(raw).replace('\u{a0}', " ");
-    let collapsed = collapse_ws(&decoded);
-    let lead = decoded.starts_with(|c: char| c.is_whitespace());
-    let trail = decoded.ends_with(|c: char| c.is_whitespace());
-    format!(
-        "{}{}{}",
-        if lead { " " } else { "" },
-        collapsed,
-        if trail && !collapsed.is_empty() { " " } else { "" }
-    )
+    let decoded = decode_entities(raw);
+    let mut run = collapse_ws(&decoded);
+    if decoded.ends_with(char::is_whitespace) && !run.is_empty() {
+        run.push(' ');
+    }
+    if decoded.starts_with(char::is_whitespace) {
+        run.insert(0, ' ');
+    }
+    run
 }
 
 fn collapse_ws(text: &str) -> String {
-    text.replace('\u{a0}', " ")
-        .split_whitespace()
-        .collect::<Vec<_>>()
-        .join(" ")
+    let mut out = String::with_capacity(text.len());
+    for word in text.split_whitespace() {
+        if !out.is_empty() {
+            out.push(' ');
+        }
+        out.push_str(word);
+    }
+    out
 }
 
 fn append_cell(rows: &mut [Vec<String>], text: &str) {
@@ -690,11 +691,13 @@ fn flush_para(para: Para, page: &mut Option<PageBuild>) {
 }
 
 fn render_runs(runs: &[(Inline, String)]) -> String {
-    let mut merged: Vec<(Inline, String)> = Vec::new();
+    let mut merged: Vec<(Inline, Cow<str>)> = Vec::new();
     for (style, text) in runs {
         match merged.last_mut() {
-            Some((last_style, last_text)) if last_style == style => last_text.push_str(text),
-            _ => merged.push((*style, text.clone())),
+            Some((last_style, last_text)) if last_style == style => {
+                last_text.to_mut().push_str(text)
+            }
+            _ => merged.push((*style, Cow::Borrowed(text.as_str()))),
         }
     }
     let mut out = String::new();
@@ -704,18 +707,19 @@ fn render_runs(runs: &[(Inline, String)]) -> String {
             out.push_str(&text);
             continue;
         }
-        let lead = text.starts_with(' ');
-        let trail = text.ends_with(' ');
-        if lead {
+        if text.starts_with(' ') {
             out.push(' ');
         }
-        match (style.bold, style.italic) {
-            (true, true) => out.push_str(&format!("***{trimmed}***")),
-            (true, false) => out.push_str(&format!("**{trimmed}**")),
-            (false, true) => out.push_str(&format!("*{trimmed}*")),
-            (false, false) => out.push_str(trimmed),
-        }
-        if trail {
+        let emphasis = match (style.bold, style.italic) {
+            (true, true) => "***",
+            (true, false) => "**",
+            (false, true) => "*",
+            (false, false) => "",
+        };
+        out.push_str(emphasis);
+        out.push_str(trimmed);
+        out.push_str(emphasis);
+        if text.ends_with(' ') {
             out.push(' ');
         }
     }
@@ -736,10 +740,9 @@ fn bulletize(text: &str) -> String {
 
 fn render_table(rows: Vec<Vec<String>>) -> String {
     let rows: Vec<Vec<String>> = rows.into_iter().filter(|r| !r.is_empty()).collect();
-    if rows.is_empty() {
+    let Some(cols) = rows.iter().map(|r| r.len()).max() else {
         return String::new();
-    }
-    let cols = rows.iter().map(|r| r.len()).max().unwrap_or(1);
+    };
     let line = |row: &[String]| {
         let cells: Vec<String> = (0..cols)
             .map(|i| {
@@ -774,45 +777,57 @@ fn resolve_images(
             out_blocks.push(String::new());
             continue;
         }
-        let mut out = String::new();
-        let mut rest = block.as_str();
-        while let Some(at) = rest.find(IMG_MARKER) {
-            out.push_str(&rest[..at]);
-            let after = &rest[at + 1..];
-            let Some(close) = after.find(IMG_MARKER) else {
-                rest = after;
-                break;
-            };
-            let src = &after[..close];
-            rest = &after[close + 1..];
-            if let Some(rel) = save_part(store, page_id, src, parts, &mut counter)? {
-                out.push_str(&format!("![]({rel})"));
-            }
-        }
-        out.push_str(rest);
+        let expanded = expand_markers(store, page_id, block, parts, &mut counter)?;
         // a block emptied by an unresolved image is dropped, not kept as a gap
-        if !out.trim().is_empty() {
-            out_blocks.push(out);
+        if !expanded.trim().is_empty() {
+            out_blocks.push(expanded);
         }
     }
     Ok(join_blocks(&out_blocks))
 }
 
-// each blank marker adds one newline beyond the standard paragraph separator;
+fn expand_markers(
+    store: &Store,
+    page_id: &str,
+    block: &str,
+    parts: &[MimePart],
+    counter: &mut usize,
+) -> Result<String, String> {
+    let mut out = String::new();
+    let mut rest = block;
+    while let Some(at) = rest.find(IMG_MARKER) {
+        out.push_str(&rest[..at]);
+        let after = &rest[at + 1..];
+        let Some(close) = after.find(IMG_MARKER) else {
+            rest = after;
+            break;
+        };
+        let src = &after[..close];
+        rest = &after[close + 1..];
+        if let Some(rel) = save_part(store, page_id, src, parts, counter)? {
+            out.push_str("![](");
+            out.push_str(&rel);
+            out.push(')');
+        }
+    }
+    out.push_str(rest);
+    Ok(out)
+}
+
 // the preview renders blank-line runs verbatim, so imported gaps survive
 fn join_blocks(blocks: &[String]) -> String {
     let mut out = String::new();
-    let mut extra = 0usize;
+    let mut pending_blank_lines = 0usize;
     for block in blocks {
         if block.is_empty() {
-            extra += 1;
+            pending_blank_lines += 1;
             continue;
         }
         if !out.is_empty() {
             out.push_str("\n\n");
         }
-        out.push_str(&"\n".repeat(extra));
-        extra = 0;
+        out.push_str(&"\n".repeat(pending_blank_lines));
+        pending_blank_lines = 0;
         out.push_str(block);
     }
     out.push('\n');
@@ -826,49 +841,38 @@ fn save_part(
     parts: &[MimePart],
     counter: &mut usize,
 ) -> Result<Option<String>, String> {
-    let src = percent_decode_str(src).decode_utf8_lossy().to_string();
+    let src = percent_decode_str(src).decode_utf8_lossy();
     let src_name = file_name_of(&src);
     let part = parts.iter().find(|p| {
-        let loc = percent_decode_str(&p.location).decode_utf8_lossy().to_string();
-        loc.ends_with(&src) || (!src_name.is_empty() && file_name_of(&loc) == src_name)
+        p.location.ends_with(src.as_ref())
+            || (!src_name.is_empty() && p.location_file_name == src_name)
     });
     let Some(part) = part else { return Ok(None) };
     if part.bytes.is_empty() {
         return Ok(None);
     }
     let ext = image_ext(&src_name, &part.content_type);
-    let dir = store.root.join("assets").join(page_id);
+    let dir = store.assets_dir(page_id);
     fs::create_dir_all(&dir).map_err(err)?;
     *counter += 1;
     let name = format!("img-{counter:03}.{ext}");
     fs::write(dir.join(&name), &part.bytes).map_err(err)?;
-    Ok(Some(format!("assets/{page_id}/{name}")))
+    Ok(Some(store::assets_rel(page_id, &name)))
 }
 
 fn file_name_of(path: &str) -> String {
     path.rsplit(['/', '\\']).next().unwrap_or("").to_lowercase()
 }
 
-fn image_ext(file_name: &str, content_type: &str) -> String {
+fn image_ext(file_name: &str, content_type: &str) -> &'static str {
     let from_name = file_name.rsplit('.').next().unwrap_or("");
-    match from_name {
-        "png" | "jpg" | "jpeg" | "gif" | "webp" | "bmp" => return from_name.to_string(),
-        _ => {}
-    }
-    match content_type.to_lowercase().trim() {
-        "image/png" => "png",
-        "image/jpeg" | "image/jpg" => "jpg",
-        "image/gif" => "gif",
-        "image/webp" => "webp",
-        "image/bmp" => "bmp",
-        _ => "png",
-    }
-    .to_string()
+    assets::written_ext(from_name).unwrap_or_else(|| assets::ext_for_mime(content_type))
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::store::Section;
     use tempfile::tempdir;
 
     const SINGLE_PART: &str = "MIME-Version: 1.0\r\nContent-Location: file:///C:/X/Work Notes.htm\r\nContent-Transfer-Encoding: quoted-printable\r\nContent-Type: text/html; charset=\"utf-8\"\r\n\r\n<html>\r\n<head></head>\r\n<body lang=3Den-US style=3D'font-family:Calibri'>\r\n<div style=3D'direction:ltr;border-width:100%'>\r\n<div>\r\n<p style=3D'margin:0in;font-family:\"Calibri Light\";font-size:20.0pt'>First =\r\nPage</p>\r\n<p style=3D'font-size:10.0pt;color:#767676'>Thursday, 10 October 2019</p>\r\n<p style=3D'font-size:10.0pt;color:#767676'>10:20</p>\r\n<p style=3D'font-size:11.0pt'>Hello <span style=3D'font-weight:bold'>bold</span> world</p>\r\n<p style=3D'font-size:11.0pt'>&nbsp;</p>\r\n<p style=3D'font-size:11.0pt'>=C2=B7 bullet item</p>\r\n<p style=3D'font-size:11.0pt'>=E2=80=A2 dot item</p>\r\n<p style=3D'font-size:11.0pt'>See <a href=3D\"https://example.com\">the site</a> now</p>\r\n</div>\r\n</div>\r\n<p style=3D'margin:0in'>&nbsp;</p>\r\n<div style=3D'direction:ltr;border-width:100%'>\r\n<div>\r\n<p style=3D'font-size:20.0pt'>&nbsp;</p>\r\n<p>It=E2=80=99s the second page</p>\r\n</div>\r\n</div>\r\n<div style=3D'direction:ltr;border-width:100%'>\r\n<div>\r\n<p style=3D'font-size:20.0pt'>&nbsp;</p>\r\n<p>Created with OneNote.</p>\r\n</div>\r\n</div>\r\n</body>\r\n</html>\r\n";
@@ -879,6 +883,15 @@ mod tests {
         path.to_string_lossy().to_string()
     }
 
+    fn imported_section<'a>(store: &'a Store, outcome: &ImportOutcome) -> &'a Section {
+        store
+            .notebook
+            .sections
+            .iter()
+            .find(|s| s.id == outcome.section_ids[0])
+            .unwrap()
+    }
+
     #[test]
     fn qp_decodes_hex_and_soft_breaks() {
         let decoded = String::from_utf8(decode_qp("It=E2=80=99s a bro=\r\nken=3D line")).unwrap();
@@ -887,7 +900,7 @@ mod tests {
 
     #[test]
     fn splits_pages_and_converts_markdown() {
-        let doc = parse_mht(SINGLE_PART).unwrap();
+        let doc = parse_mht(SINGLE_PART, Attachments::Decode).unwrap();
         let pages = html_to_pages(&doc.html);
         assert_eq!(pages.len(), 2);
 
@@ -944,23 +957,11 @@ mod tests {
         assert_eq!(outcome.page_count, 2);
         assert_eq!(outcome.section_ids.len(), 1);
 
-        let (section_name, page_count, first_page_title, first_page_id) = {
-            let section = store
-                .notebook
-                .sections
-                .iter()
-                .find(|s| s.id == outcome.section_ids[0])
-                .unwrap();
-            (
-                section.name.clone(),
-                section.pages.len(),
-                section.pages[0].title.clone(),
-                section.pages[0].id.clone(),
-            )
-        };
-        assert_eq!(section_name, "Work Notes");
-        assert_eq!(page_count, 2);
-        assert_eq!(first_page_title, "First Page");
+        let section = imported_section(&store, &outcome);
+        assert_eq!(section.name, "Work Notes");
+        assert_eq!(section.pages.len(), 2);
+        assert_eq!(section.pages[0].title, "First Page");
+        let first_page_id = section.pages[0].id.clone();
 
         let content = store.read_page(&first_page_id).unwrap();
         assert!(content.starts_with("# First Page\n\n"));
@@ -985,15 +986,9 @@ mod tests {
         let path = write_fixture(dir.path(), "Pics.mht", &mht);
 
         let outcome = import(&mut store, &[path]).unwrap();
-        let section = store
-            .notebook
-            .sections
-            .iter()
-            .find(|s| s.id == outcome.section_ids[0])
-            .unwrap();
-        let page_id = &section.pages[0].id;
+        let page_id = &imported_section(&store, &outcome).pages[0].id;
         let content = store.read_page(page_id).unwrap();
-        let rel = format!("assets/{page_id}/img-001.png");
+        let rel = store::assets_rel(page_id, "img-001.png");
         assert!(content.contains(&format!("![]({rel})")));
         assert!(dir.path().join(&rel).exists());
     }

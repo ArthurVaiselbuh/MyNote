@@ -1,35 +1,27 @@
-import fs from "node:fs";
 import { expect, test } from "../app";
 
 test("Ctrl+J Color opens the picker and a swatch wraps the selection", async ({ app }) => {
   await app.newTitledPage("Tint", 1);
 
-  await app.page.keyboard.press("Control+2");
-  const cm = app.page.locator(".cm-content");
-  await expect(cm).toBeFocused();
   // new pages carry a date-stamp body — replace it, then re-select the text
-  await app.page.keyboard.press("Control+a");
+  await app.selectWholeBody();
   await app.page.keyboard.type("turn me cyan");
   await app.page.keyboard.press("Control+a");
 
   await app.page.keyboard.press("Control+j");
-  const filter = app.page.locator(".modal input");
-  await expect(filter).toBeFocused();
+  await expect(app.modal.locator("input")).toBeFocused();
   await app.page.keyboard.type("color");
   await expect(app.page.locator(".insert-item")).toHaveCount(1);
   await app.page.keyboard.press("Enter");
 
-  const grid = app.page.locator(".color-grid");
-  await expect(grid).toBeFocused();
+  await expect(app.page.locator(".color-grid")).toBeFocused();
   await app.page.keyboard.press("ArrowDown"); // red -> cyan (one grid row down)
   await app.page.keyboard.press("Enter");
-  await expect(app.page.locator(".modal")).toHaveCount(0);
+  await expect(app.modal).toHaveCount(0);
 
   await app.page.keyboard.press("Control+s");
   const [id] = await app.treeIds();
-  await expect.poll(() => fs.readFileSync(app.mdPath(id), "utf8")).toContain(
-    "[turn me cyan]{.cyan}",
-  );
+  await expect.poll(() => app.readMd(id)).toContain("[turn me cyan]{.cyan}");
 
   await app.page.keyboard.press("Control+e");
   const span = app.page.locator("#preview-scroll p span");
@@ -42,11 +34,10 @@ test("Ctrl+J Color opens the picker and a swatch wraps the selection", async ({ 
 test("color picker lists named colors + custom; Esc steps back to insert", async ({ app }) => {
   await app.newTitledPage("Palette", 1);
   await app.page.keyboard.press("Control+2");
-  await expect(app.page.locator(".cm-content")).toBeFocused();
+  await expect(app.editorBody).toBeFocused();
 
   await app.page.keyboard.press("Control+j");
-  const filter = app.page.locator(".modal input");
-  await expect(filter).toBeFocused();
+  await expect(app.modal.locator("input")).toBeFocused();
   // the synonym still finds the single Color… entry
   await app.page.keyboard.type("colour");
   await expect(app.page.locator(".insert-item")).toHaveCount(1);
@@ -59,8 +50,8 @@ test("color picker lists named colors + custom; Esc steps back to insert", async
 
   await app.page.keyboard.press("Escape"); // peels back to the insert helper
   await expect(app.page.locator(".color-grid")).toHaveCount(0);
-  await expect(app.page.locator(".modal input")).toBeFocused();
+  await expect(app.modal.locator("input")).toBeFocused();
 
   await app.page.keyboard.press("Escape");
-  await expect(app.page.locator(".modal")).toHaveCount(0);
+  await expect(app.modal).toHaveCount(0);
 });

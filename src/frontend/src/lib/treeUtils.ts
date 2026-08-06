@@ -12,15 +12,6 @@ export interface Located {
   index: number;
 }
 
-export function findNode(list: PageNode[], id: string): PageNode | null {
-  for (const node of list) {
-    if (node.id === id) return node;
-    const found = findNode(node.children, id);
-    if (found) return found;
-  }
-  return null;
-}
-
 export function locate(
   list: PageNode[],
   id: string,
@@ -35,30 +26,48 @@ export function locate(
   return null;
 }
 
-export function isDescendant(list: PageNode[], ancestorId: string, id: string): boolean {
-  const ancestor = findNode(list, ancestorId);
-  return ancestor ? findNode(ancestor.children, id) !== null : false;
+export function findNode(list: PageNode[], id: string): PageNode | null {
+  return locate(list, id)?.node ?? null;
 }
 
-function matchFilter(node: PageNode, filter: string): boolean {
-  return (
-    node.title.toLowerCase().includes(filter) ||
-    node.children.some((c) => matchFilter(c, filter))
-  );
+export function hasDescendant(node: PageNode, id: string): boolean {
+  return findNode(node.children, id) !== null;
 }
 
 export function flatten(pages: PageNode[], filter: string): FlatRow[] {
-  const out: FlatRow[] = [];
-  const f = filter.trim().toLowerCase();
-  const walk = (list: PageNode[], depth: number) => {
-    for (const node of list) {
-      if (f && !matchFilter(node, f)) continue;
-      out.push({ node, depth });
-      if (f || node.expanded) walk(node.children, depth + 1);
-    }
-  };
-  walk(pages, 0);
-  return out;
+  const rows: FlatRow[] = [];
+  const needle = filter.trim().toLowerCase();
+  if (needle) appendMatches(pages, needle, 0, rows);
+  else appendExpanded(pages, 0, rows);
+  return rows;
+}
+
+function appendExpanded(list: PageNode[], depth: number, rows: FlatRow[]) {
+  for (const node of list) {
+    rows.push({ node, depth });
+    if (node.expanded) appendExpanded(node.children, depth + 1, rows);
+  }
+}
+
+// A page survives the filter when it or any descendant matches, which is only
+// known once its subtree has been walked — hence append first, drop after.
+function appendMatches(
+  list: PageNode[],
+  needle: string,
+  depth: number,
+  rows: FlatRow[],
+): boolean {
+  let anyMatched = false;
+  for (const node of list) {
+    const rowStart = rows.length;
+    rows.push({ node, depth });
+    const keep =
+      appendMatches(node.children, needle, depth + 1, rows) ||
+      node.title.toLowerCase().includes(needle);
+    if (keep) anyMatched = true;
+    else rows.length = rowStart;
+  }
+  return anyMatched;
 }
 
 export function sectionOfPage(notebook: Notebook, pageId: string): Section | null {
@@ -68,10 +77,10 @@ export function sectionOfPage(notebook: Notebook, pageId: string): Section | nul
   return null;
 }
 
-export function countSubtree(node: PageNode): number {
+export function countSubtree<T extends { children: T[] }>(node: T): number {
   return node.children.reduce((sum, c) => sum + countSubtree(c), 1);
 }
 
-export function countPages(section: Section): number {
+export function countPages<T extends { children: T[] }>(section: { pages: T[] }): number {
   return section.pages.reduce((sum, p) => sum + countSubtree(p), 0);
 }

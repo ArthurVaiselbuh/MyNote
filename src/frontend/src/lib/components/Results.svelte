@@ -23,12 +23,12 @@
     return out;
   }
 
+  let listEl: HTMLDivElement | undefined = $state();
+
   $effect(() => {
     const idx = app.resultsSel;
     requestAnimationFrame(() => {
-      document
-        .querySelector(`.results .hit[data-idx="${idx}"]`)
-        ?.scrollIntoView({ block: "nearest" });
+      listEl?.children[idx]?.scrollIntoView({ block: "nearest" });
     });
   });
 </script>
@@ -38,6 +38,7 @@
   class="results pane-focusable"
   id="results-scroll"
   class:focused={app.focus === "results"}
+  bind:this={listEl}
   oncontextmenu={openResultsMenu}
 >
   {#each app.results as hit, i (i)}
@@ -57,12 +58,11 @@
         {#each segments(hit) as seg}{#if seg.hl}<mark>{seg.text}</mark>{:else}{seg.text}{/if}{/each}
       </div>
     </div>
-  {/each}
-  {#if app.results.length === 0}
+  {:else}
     <div class="empty">
       {app.searchQuery.trim()
         ? "No results"
         : 'Type a query above — keywords, "exact phrase", or regex'}
     </div>
-  {/if}
+  {/each}
 </div>

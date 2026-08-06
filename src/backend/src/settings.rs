@@ -63,28 +63,31 @@ impl Default for Settings {
     }
 }
 
+fn env_path(var: &str) -> Option<PathBuf> {
+    std::env::var_os(var).map(PathBuf::from)
+}
+
+fn working_dir() -> PathBuf {
+    PathBuf::from(".")
+}
+
+#[cfg(target_os = "windows")]
 fn config_root() -> PathBuf {
-    #[cfg(target_os = "windows")]
-    {
-        return std::env::var_os("APPDATA")
-            .map(PathBuf::from)
-            .unwrap_or_else(|| PathBuf::from("."));
-    }
-    #[cfg(target_os = "macos")]
-    {
-        return std::env::var_os("HOME")
-            .map(|home| PathBuf::from(home).join("Library").join("Application Support"))
-            .unwrap_or_else(|| PathBuf::from("."));
-    }
-    #[cfg(not(any(target_os = "windows", target_os = "macos")))]
-    {
-        if let Some(xdg) = std::env::var_os("XDG_CONFIG_HOME") {
-            return PathBuf::from(xdg);
-        }
-        return std::env::var_os("HOME")
-            .map(|home| PathBuf::from(home).join(".config"))
-            .unwrap_or_else(|| PathBuf::from("."));
-    }
+    env_path("APPDATA").unwrap_or_else(working_dir)
+}
+
+#[cfg(target_os = "macos")]
+fn config_root() -> PathBuf {
+    env_path("HOME")
+        .map(|home| home.join("Library").join("Application Support"))
+        .unwrap_or_else(working_dir)
+}
+
+#[cfg(not(any(target_os = "windows", target_os = "macos")))]
+fn config_root() -> PathBuf {
+    env_path("XDG_CONFIG_HOME")
+        .or_else(|| env_path("HOME").map(|home| home.join(".config")))
+        .unwrap_or_else(working_dir)
 }
 
 pub fn app_dir() -> PathBuf {
@@ -100,24 +103,21 @@ pub fn default_notebook_dir() -> PathBuf {
 }
 
 pub const LOG_FILE_STEM: &str = "MyNote";
+pub const RECENT_LIMIT: usize = 5;
 
 impl Settings {
     pub fn log_level_filter(&self) -> LevelFilter {
         match self.log_level.trim().to_ascii_lowercase().as_str() {
             "off" | "none" => LevelFilter::Off,
             "error" => LevelFilter::Error,
+            "warn" | "warning" => LevelFilter::Warn,
             "info" => LevelFilter::Info,
             "debug" => LevelFilter::Debug,
-            "warn" | "warning" => LevelFilter::Warn,
             "verbose" | "trace" => LevelFilter::Trace,
             _ => LevelFilter::Info,
         }
     }
-}
 
-pub const RECENT_LIMIT: usize = 5;
-
-impl Settings {
     pub fn remember_notebook(&mut self, path: &str) {
         self.recent_notebooks
             .retain(|p| !p.eq_ignore_ascii_case(path));
@@ -154,11 +154,13 @@ mod tests {
     }
 
     #[test]
-    fn log_level_parses_known_names_and_defaults_to_warn() {
+    fn log_level_parses_known_names_and_defaults_to_info() {
         let level = |name: &str| {
-            let mut s = Settings::default();
-            s.log_level = name.into();
-            s.log_level_filter()
+            Settings {
+                log_level: name.into(),
+                ..Settings::default()
+            }
+            .log_level_filter()
         };
         assert_eq!(level("off"), LevelFilter::Off);
         assert_eq!(level("error"), LevelFilter::Error);

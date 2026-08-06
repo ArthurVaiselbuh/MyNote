@@ -7,11 +7,10 @@
   import { onMount } from "svelte";
   import * as act from "../actions";
   import { labelOf } from "../keys/bindings";
+  import { clampIndex } from "../listIndex";
   import { app } from "../state/app.svelte";
 
   const SEEN_KEY = "mynote.welcome.v1";
-  // the tour speaks in the user's own chords, so a rebound key never reads as a lie
-  const K = labelOf;
 
   type Key = { combo: string; label: string };
   type Slide = {
@@ -23,8 +22,8 @@
     intro?: boolean;
   };
 
-  // derived, not a plain const: settings (and with them the user's chords) load
-  // after this component mounts
+  // derived, not a plain const: the tour spells the user's own chords so a rebound
+  // key never reads as a lie, and settings load after this component mounts
   const slides: Slide[] = $derived([
     {
       title: "Welcome to MyNote",
@@ -34,53 +33,53 @@
     },
     {
       title: "Write, insert, preview",
-      lead: `${K("app.insertHelper")} opens a searchable palette — code blocks, tables, links, task lists, dates. ${K("app.toggleMode")} flips between the editor and a live rendered preview.`,
+      lead: `${labelOf("app.insertHelper")} opens a searchable palette — code blocks, tables, links, task lists, dates. ${labelOf("app.toggleMode")} flips between the editor and a live rendered preview.`,
       gif: "/tutorial/edit-preview.gif",
       alt: "Inserting a code block with the palette, then switching to preview",
       keys: [
-        { combo: K("app.insertHelper"), label: "Insert palette" },
-        { combo: K("app.toggleMode"), label: "Edit / Preview" },
+        { combo: labelOf("app.insertHelper"), label: "Insert palette" },
+        { combo: labelOf("app.toggleMode"), label: "Edit / Preview" },
       ],
     },
     {
       title: "Organize without the mouse",
-      lead: `${K("page.new")} adds a page, ${K("tree.newSubpage")} a subpage. Fold and unfold subtrees with ← / →, and hop between sections with ${K("section.prev")} / ${K("section.next")}.`,
+      lead: `${labelOf("page.new")} adds a page, ${labelOf("tree.newSubpage")} a subpage. Fold and unfold subtrees with ← / →, and hop between sections with ${labelOf("section.prev")} / ${labelOf("section.next")}.`,
       gif: "/tutorial/tree-sections.gif",
       alt: "Creating subpages, folding them, switching sections",
       keys: [
-        { combo: K("page.new"), label: "New page" },
-        { combo: K("tree.newSubpage"), label: "New subpage" },
-        { combo: `${K("section.prev")} / ${K("section.next")}`, label: "Switch section" },
+        { combo: labelOf("page.new"), label: "New page" },
+        { combo: labelOf("tree.newSubpage"), label: "New subpage" },
+        { combo: `${labelOf("section.prev")} / ${labelOf("section.next")}`, label: "Switch section" },
       ],
     },
     {
       title: "Never memorize a shortcut",
-      lead: `Press ${K("app.help")} at any time for a context-aware cheat sheet with live search. ${K("app.search")} searches every note — fuzzy or regex — with highlighted snippets.`,
+      lead: `Press ${labelOf("app.help")} at any time for a context-aware cheat sheet with live search. ${labelOf("app.search")} searches every note — fuzzy or regex — with highlighted snippets.`,
       gif: "/tutorial/help-search.gif",
       alt: "The ? shortcut overlay with live filtering",
       keys: [
-        { combo: K("app.help"), label: "Shortcut cheat sheet" },
-        { combo: K("app.search"), label: "Search everything" },
+        { combo: labelOf("app.help"), label: "Shortcut cheat sheet" },
+        { combo: labelOf("app.search"), label: "Search everything" },
       ],
     },
     {
       title: "Optional: full history",
-      lead: `With git installed, MyNote snapshots the notebook so every page keeps a timeline of revisions. ${K("history.open")} diffs one against what's on disk and restores it as a single undoable edit; ${K("history.openDeleted")} brings back deleted pages.`,
+      lead: `With git installed, MyNote snapshots the notebook so every page keeps a timeline of revisions. ${labelOf("history.open")} diffs one against what's on disk and restores it as a single undoable edit; ${labelOf("history.openDeleted")} brings back deleted pages.`,
       gif: "/tutorial/history.gif",
       alt: "Diffing a page against an earlier snapshot, then restoring it",
       keys: [
-        { combo: K("history.open"), label: "Page history" },
-        { combo: K("history.openDeleted"), label: "Deleted pages" },
+        { combo: labelOf("history.open"), label: "Page history" },
+        { combo: labelOf("history.openDeleted"), label: "Deleted pages" },
       ],
     },
     {
       title: "You're all set",
       lead: "A notebook is ready in your default folder — or pick where your notes should live. Every page is plain Markdown you can edit with any tool.",
       keys: [
-        { combo: K("notebook.open"), label: "Open / switch notebook" },
-        { combo: K("notebook.import"), label: "Import OneNote .mht" },
-        { combo: `${K("app.undo")} / ${K("app.redo")}`, label: "Undo / redo" },
-        { combo: K("app.help"), label: "Help anytime" },
+        { combo: labelOf("notebook.open"), label: "Open / switch notebook" },
+        { combo: labelOf("notebook.import"), label: "Import OneNote .mht" },
+        { combo: `${labelOf("app.undo")} / ${labelOf("app.redo")}`, label: "Undo / redo" },
+        { combo: labelOf("app.help"), label: "Help anytime" },
       ],
     },
   ]);
@@ -91,17 +90,15 @@
 
   let wasOpen = false;
   $effect(() => {
-    if (app.modal === "welcome") {
-      if (!wasOpen) idx = 0; // every fresh open (first run or replay) starts at slide 1
-      wasOpen = true;
-    } else if (wasOpen) {
-      wasOpen = false;
-      rememberSeen();
-    }
+    const open = app.modal === "welcome";
+    if (open === wasOpen) return;
+    wasOpen = open;
+    if (open) idx = 0;
+    else rememberSeen();
   });
 
   onMount(() => {
-    if (!hasSeen()) app.modal = "welcome";
+    if (!hasSeen()) act.openModal("welcome");
   });
 
   function hasSeen(): boolean {
@@ -126,11 +123,7 @@
   }
 
   function back() {
-    if (idx > 0) idx -= 1;
-  }
-
-  function chooseNotebook() {
-    void act.openNotebookModal();
+    idx = clampIndex(idx - 1, slides.length);
   }
 
   function keys(e: KeyboardEvent) {
@@ -172,7 +165,7 @@
           </div>
         {/if}
         {#if isLast}
-          <button class="welcome-link" onclick={chooseNotebook}>
+          <button class="welcome-link" onclick={() => void act.openNotebookModal()}>
             Choose where to store your notes…
           </button>
         {/if}

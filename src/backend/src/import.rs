@@ -1,18 +1,16 @@
 use serde::Serialize;
 use std::collections::HashSet;
+use std::ffi::OsStr;
 
-use crate::store::{flatten_pages, Store};
+use crate::store::{flatten_pages, new_id, subtree_len, PageNode, Section, Store};
 
-// Shared preview/outcome shapes for every importer so the import pane renders
-// one tree regardless of source. OneNote import produces flat sections (no
-// page children); Markdown-folder import nests them.
+// OneNote import produces flat sections; Markdown-folder import nests them.
 
 #[derive(Serialize, Clone)]
 #[serde(rename_all = "camelCase")]
 pub struct PagePreview {
     pub title: String,
     pub duplicate: bool,
-    #[serde(default)]
     pub children: Vec<PagePreview>,
 }
 
@@ -35,11 +33,11 @@ pub struct ImportPreview {
 
 impl ImportPreview {
     pub fn from_sections(sections: Vec<SectionPreview>) -> Self {
-        let mut page_count = 0;
-        let mut duplicate_count = 0;
-        for section in &sections {
-            tally(&section.pages, &mut page_count, &mut duplicate_count);
-        }
+        let (page_count, duplicate_count) =
+            sections.iter().fold((0, 0), |(pages, dups), section| {
+                let (section_pages, section_dups) = tally(&section.pages);
+                (pages + section_pages, dups + section_dups)
+            });
         ImportPreview {
             sections,
             page_count,
@@ -48,25 +46,34 @@ impl ImportPreview {
     }
 }
 
-fn tally(pages: &[PagePreview], page_count: &mut usize, duplicate_count: &mut usize) {
-    for page in pages {
-        *page_count += 1;
-        if page.duplicate {
-            *duplicate_count += 1;
-        }
-        tally(&page.children, page_count, duplicate_count);
-    }
+fn tally(pages: &[PagePreview]) -> (usize, usize) {
+    pages.iter().fold((0, 0), |(count, dups), page| {
+        let (child_count, child_dups) = tally(&page.children);
+        (
+            count + 1 + child_count,
+            dups + usize::from(page.duplicate) + child_dups,
+        )
+    })
 }
 
-#[derive(Serialize)]
+#[derive(Serialize, Default)]
 #[serde(rename_all = "camelCase")]
 pub struct ImportOutcome {
     pub section_ids: Vec<String>,
     pub page_count: usize,
 }
 
-// Flags a title as a duplicate when it collides with an existing notebook page
-// or an earlier page in the same import batch (case-insensitive).
+impl ImportOutcome {
+    pub fn add_section(&mut self, store: &mut Store, name: String, pages: Vec<PageNode>) {
+        let id = new_id();
+        self.page_count += pages.iter().map(subtree_len).sum::<usize>();
+        self.section_ids.push(id.clone());
+        store.notebook.sections.push(Section { id, name, pages });
+    }
+}
+
+// Flags a title as a duplicate against an earlier page in the same import
+// batch as well as against the notebook (case-insensitive).
 pub struct DupTracker {
     seen: HashSet<String>,
 }
@@ -91,4 +98,11 @@ pub fn section_exists(store: &Store, name: &str) -> bool {
         .sections
         .iter()
         .any(|s| s.name.eq_ignore_ascii_case(name))
+}
+
+pub fn name_or(component: Option<&OsStr>, fallback: &str) -> String {
+    component
+        .map(|s| s.to_string_lossy().into_owned())
+        .filter(|s| !s.is_empty())
+        .unwrap_or_else(|| fallback.into())
 }

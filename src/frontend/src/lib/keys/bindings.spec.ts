@@ -15,14 +15,7 @@ import {
   unassign,
 } from "./bindings";
 import { app } from "../state/app.svelte";
-
-function press(
-  key: string,
-  code: string,
-  mods: { ctrlKey?: boolean; shiftKey?: boolean; altKey?: boolean; metaKey?: boolean } = {},
-): KeyboardEvent {
-  return { key, code, ctrlKey: false, shiftKey: false, altKey: false, metaKey: false, ...mods } as KeyboardEvent;
-}
+import { press } from "./testPress";
 
 beforeEach(() => resetAllToDefaults());
 

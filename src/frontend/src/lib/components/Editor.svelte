@@ -1,44 +1,11 @@
-<script lang="ts">
-  import { onMount } from "svelte";
+<script lang="ts" module>
   import { defaultKeymap, history, historyKeymap, indentWithTab } from "@codemirror/commands";
   import { markdown, markdownLanguage } from "@codemirror/lang-markdown";
   import { syntaxHighlighting } from "@codemirror/language";
   import { languages } from "@codemirror/language-data";
-  import {
-    closeSearchPanel,
-    findNext as cmFindNext,
-    findPrevious as cmFindPrev,
-    openSearchPanel,
-    search,
-    searchKeymap,
-    searchPanelOpen,
-    SearchQuery,
-    setSearchQuery,
-  } from "@codemirror/search";
-  import { EditorState } from "@codemirror/state";
+  import { search, searchKeymap } from "@codemirror/search";
   import { oneDarkHighlightStyle } from "@codemirror/theme-one-dark";
   import { drawSelection, EditorView, keymap } from "@codemirror/view";
-  import * as act from "../actions";
-  import { api } from "../api";
-  import { editorCtl } from "../editorCtl";
-  import { hintOf, labelOf } from "../keys/bindings";
-  import { app, type FindPrefill } from "../state/app.svelte";
-  import { findNode } from "../treeUtils";
-  import { takeModeAnchor, viewPosChanged, viewPosOf, type ModeAnchor } from "../viewPos";
-  import Preview from "./Preview.svelte";
-
-  let host: HTMLElement | undefined = $state();
-  let titleInput: HTMLInputElement | undefined = $state();
-  let title = $state("");
-  let previewText = $state("");
-  let dirty = $state(false);
-
-  let view: EditorView | undefined;
-  let loadedId: string | null = null;
-  let loadSeq = 0;
-  let saveTimer: ReturnType<typeof setTimeout> | undefined;
-  let lastEditorReq = 0;
-  let lastTitleReq = 0;
 
   const cmTheme = EditorView.theme(
     {
@@ -71,7 +38,10 @@
     { dark: true },
   );
 
-  const extensions = [
+  // Everything that doesn't close over an instance is built once: this component
+  // remounts every time the results view is left, and a fresh theme means
+  // another copy of its stylesheet injected into the document for the session.
+  const BASE_EXTENSIONS = [
     history(),
     drawSelection(),
     EditorView.lineWrapping,
@@ -79,6 +49,47 @@
     syntaxHighlighting(oneDarkHighlightStyle, { fallback: true }),
     search({ top: true }),
     keymap.of([...defaultKeymap, ...historyKeymap, ...searchKeymap, indentWithTab]),
+  ];
+
+  const AUTOSAVE_MS = 3000;
+</script>
+
+<script lang="ts">
+  import { onMount, untrack } from "svelte";
+  import {
+    closeSearchPanel,
+    findNext as cmFindNext,
+    findPrevious as cmFindPrev,
+    openSearchPanel,
+    searchPanelOpen,
+    SearchQuery,
+    setSearchQuery,
+  } from "@codemirror/search";
+  import { EditorState } from "@codemirror/state";
+  import * as act from "../actions";
+  import { api } from "../api";
+  import { focusSelect } from "../autofocus";
+  import { hintOf, labelOf } from "../keys/bindings";
+  import { onRequest } from "../onRequest.svelte";
+  import { editorCtl } from "../paneCtl";
+  import { app, type FindPrefill } from "../state/app.svelte";
+  import { findNode } from "../treeUtils";
+  import { takeModeAnchor, viewPosChanged, viewPosOf, type ModeAnchor } from "../viewPos";
+  import Preview from "./Preview.svelte";
+
+  let host: HTMLElement | undefined = $state();
+  let titleInput: HTMLInputElement | undefined = $state();
+  let title = $state("");
+  let previewText = $state("");
+  let dirty = $state(false);
+
+  let view: EditorView | undefined;
+  let loadedId: string | null = null;
+  let loadSeq = 0;
+  let saveTimer: ReturnType<typeof setTimeout> | undefined;
+
+  const extensions = [
+    ...BASE_EXTENSIONS,
     EditorView.updateListener.of((u) => {
       if (u.docChanged) {
         dirty = true;
@@ -94,11 +105,20 @@
     cmTheme,
   ];
 
-  const AUTOSAVE_MS = 3000;
-
   function scheduleSave() {
     clearTimeout(saveTimer);
     saveTimer = setTimeout(() => void save(), AUTOSAVE_MS);
+  }
+
+  function enterEditMode() {
+    if (app.mode !== "edit") app.mode = "edit";
+  }
+
+  // the view can be destroyed between a dispatch and the frame that measures it
+  function afterLayout(run: (v: EditorView) => void) {
+    requestAnimationFrame(() => {
+      if (view) run(view);
+    });
   }
 
   function splitDoc(content: string): { title: string; body: string } {
@@ -135,13 +155,13 @@
     view?.setState(EditorState.create({ doc: body, extensions }));
   }
 
-  function heightAtViewportTop(): number {
-    return view!.scrollDOM.getBoundingClientRect().top - view!.documentTop;
+  function heightAtViewportTop(v: EditorView): number {
+    return v.scrollDOM.getBoundingClientRect().top - v.documentTop;
   }
 
   function editorAnchor(): ModeAnchor | null {
     if (!view || !loadedId) return null;
-    const heightAtTop = heightAtViewportTop();
+    const heightAtTop = heightAtViewportTop(view);
     const block = view.lineBlockAtHeight(Math.max(0, heightAtTop));
     return {
       pageId: loadedId,
@@ -153,44 +173,44 @@
   function rememberEditorPos() {
     if (!view || !loadedId) return;
     const pos = viewPosOf(loadedId);
-    pos.editorCursor = view.state.selection.main.head;
+    const cursor = view.state.selection.main.head;
     // in preview the host is display:none, so its scrollTop is not the one the
     // user left behind — that was recorded when the mode flipped
-    if (app.mode === "edit") pos.editorScrollTop = view.scrollDOM.scrollTop;
+    const scrollTop = app.mode === "edit" ? view.scrollDOM.scrollTop : pos.editorScrollTop;
+    if (pos.editorCursor === cursor && pos.editorScrollTop === scrollTop) return;
+    pos.editorCursor = cursor;
+    pos.editorScrollTop = scrollTop;
     viewPosChanged(loadedId);
   }
 
-  function cursorAtAnchor(anchor: ModeAnchor): number {
-    const doc = view!.state.doc;
+  function cursorAtAnchor(v: EditorView, anchor: ModeAnchor): number {
+    const doc = v.state.doc;
     const line = doc.line(Math.min(anchor.bodyLine + 1, doc.lines));
     const column = anchor.text ? line.text.toLowerCase().indexOf(anchor.text.toLowerCase()) : -1;
     return column < 0 ? line.from : line.from + column;
   }
 
-  function restoreEditorPos(pageId: string) {
-    if (!view) return;
-    const pos = viewPosOf(pageId);
-    const cursor = Math.min(pos.editorCursor, view.state.doc.length);
+  function restoreEditorPos() {
+    if (!view || !loadedId) return;
+    const pos = viewPosOf(loadedId);
     const scrollTop = pos.editorScrollTop;
-    view.dispatch({ selection: { anchor: cursor } });
-    requestAnimationFrame(() => {
-      if (view) view.scrollDOM.scrollTop = scrollTop;
-    });
+    view.dispatch({ selection: { anchor: Math.min(pos.editorCursor, view.state.doc.length) } });
+    afterLayout((v) => (v.scrollDOM.scrollTop = scrollTop));
   }
 
   // only a deliberate mode flip carries an anchor; entering the editor any other
   // way (insert helper, revision restore) keeps the position that path chose
-  function landOnModeAnchor(pageId: string) {
-    const anchor = takeModeAnchor(pageId);
-    if (!view || !anchor) return;
-    const cursor = cursorAtAnchor(anchor);
-    viewPosOf(pageId).editorCursor = cursor;
-    viewPosChanged(pageId);
+  function landOnModeAnchor() {
+    if (!view || !loadedId) return;
+    const anchor = takeModeAnchor(loadedId);
+    if (!anchor) return;
+    const cursor = cursorAtAnchor(view, anchor);
+    viewPosOf(loadedId).editorCursor = cursor;
+    viewPosChanged(loadedId);
     view.dispatch({ selection: { anchor: cursor } });
-    requestAnimationFrame(() => {
-      if (!view) return;
-      view.scrollDOM.scrollTop +=
-        view.lineBlockAt(cursor).top - anchor.offsetFromTop - heightAtViewportTop();
+    afterLayout((v) => {
+      v.scrollDOM.scrollTop +=
+        v.lineBlockAt(cursor).top - anchor.offsetFromTop - heightAtViewportTop(v);
     });
   }
 
@@ -218,22 +238,26 @@
       dirty = false;
       // in preview the editor is hidden and unmeasurable — its position is
       // restored when the mode flips back
-      if (app.mode === "edit") restoreEditorPos(id);
+      if (app.mode === "edit") restoreEditorPos();
       if (app.findPrefill) {
         const prefill = app.findPrefill;
         app.findPrefill = null;
         // opening a search result lands in preview, so the prefill has to reach
         // the preview's find rather than force the page back into the editor
-        requestAnimationFrame(() => act.activeFindCtl()?.openFind(prefill));
+        requestAnimationFrame(() => act.activePaneCtl()?.openFind(prefill));
       }
     } catch (e) {
       app.status = String(e);
     }
   }
 
+  function findIsOpen(): boolean {
+    return !!view && searchPanelOpen(view.state);
+  }
+
   function ctlOpenFind(prefill?: FindPrefill | null) {
     if (!view) return;
-    if (app.mode !== "edit") app.mode = "edit";
+    enterEditMode();
     openSearchPanel(view);
     if (prefill?.text) {
       view.dispatch({
@@ -243,6 +267,49 @@
       });
       cmFindNext(view);
     }
+  }
+
+  function ctlCloseFind(): boolean {
+    if (!view || !findIsOpen()) return false;
+    closeSearchPanel(view);
+    return true;
+  }
+
+  function ctlFindNext() {
+    if (view) cmFindNext(view);
+  }
+
+  function ctlFindPrev() {
+    if (view) cmFindPrev(view);
+  }
+
+  function ctlInsert(before: string, after = "") {
+    if (!view) return;
+    enterEditMode();
+    const { from, to } = view.state.selection.main;
+    const selected = view.state.sliceDoc(from, to);
+    const text = before + selected + after;
+    const anchor = selected ? from + text.length : from + before.length;
+    view.dispatch({ changes: { from, to, insert: text }, selection: { anchor } });
+    view.focus();
+  }
+
+  function ctlReplaceAll(content: string) {
+    if (!view || !loadedId) return;
+    enterEditMode();
+    const parsed = splitDoc(content);
+    if (parsed.title) {
+      title = parsed.title;
+      act.updateTreeTitle(loadedId, parsed.title);
+    }
+    // a real transaction over the whole doc — NOT setState(), which would
+    // wipe CodeMirror's undo history and make this restore un-undoable
+    view.dispatch({
+      changes: { from: 0, to: view.state.doc.length, insert: parsed.body },
+      selection: { anchor: 0 },
+      scrollIntoView: true,
+    });
+    view.focus();
   }
 
   function handlePaste(e: ClipboardEvent): boolean {
@@ -261,16 +328,24 @@
     return false;
   }
 
+  // save_image takes base64 over IPC; readAsDataURL produces it natively, where
+  // btoa would first need the whole image copied into a binary string
+  function base64Of(blob: Blob): Promise<string> {
+    return new Promise((resolve, reject) => {
+      const reader = new FileReader();
+      reader.onerror = () => reject(reader.error);
+      reader.onload = () => {
+        const dataUrl = reader.result as string;
+        resolve(dataUrl.slice(dataUrl.indexOf(",") + 1));
+      };
+      reader.readAsDataURL(blob);
+    });
+  }
+
   async function insertImage(file: File, ext: string) {
     if (!view || !loadedId) return;
     try {
-      const bytes = new Uint8Array(await file.arrayBuffer());
-      let binary = "";
-      const chunk = 0x8000;
-      for (let i = 0; i < bytes.length; i += chunk) {
-        binary += String.fromCharCode(...bytes.subarray(i, i + chunk));
-      }
-      const rel = await api.saveImage(loadedId, btoa(binary), ext);
+      const rel = await api.saveImage(loadedId, await base64Of(file), ext);
       const pos = view.state.selection.main.head;
       view.dispatch({
         changes: { from: pos, insert: `![](${rel})` },
@@ -282,41 +357,42 @@
   }
 
   $effect(() => {
-    void switchTo(app.currentPageId);
+    const id = app.currentPageId;
+    untrack(() => void switchTo(id));
   });
 
-  $effect(() => {
-    if (app.editorFocusReq !== lastEditorReq) {
-      lastEditorReq = app.editorFocusReq;
+  onRequest(
+    () => app.editorFocusReq,
+    () => {
       // gate on app.focus: a remount (leaving results view) replays the last
       // request, which must not steal focus aimed at another pane — nor pull
       // keystrokes under an open modal (Ctrl+H from results remounts us)
       if (app.mode === "edit" && app.focus === "editor" && app.modal === "none") view?.focus();
-    }
-  });
+    },
+  );
 
-  $effect(() => {
-    if (app.titleFocusReq !== lastTitleReq) {
-      lastTitleReq = app.titleFocusReq;
+  onRequest(
+    () => app.titleFocusReq,
+    () => {
       if (app.focus !== "editor") return;
-      requestAnimationFrame(() => {
-        titleInput?.focus();
-        titleInput?.select();
-      });
-    }
-  });
+      requestAnimationFrame(() => focusSelect(titleInput));
+    },
+  );
 
   let shownMode = app.mode;
   $effect(() => {
     const mode = app.mode;
-    if (!view || mode === shownMode) return;
+    const v = view;
+    if (!v || mode === shownMode) return;
     shownMode = mode;
-    if (mode === "preview") {
-      previewText = view.state.doc.toString();
-      void save();
-    } else if (loadedId) {
-      landOnModeAnchor(loadedId);
-    }
+    untrack(() => {
+      if (mode === "preview") {
+        previewText = v.state.doc.toString();
+        void save();
+      } else {
+        landOnModeAnchor();
+      }
+    });
   });
 
   function titleKeys(e: KeyboardEvent) {
@@ -335,50 +411,14 @@
       save,
       anchor: editorAnchor,
       openFind: ctlOpenFind,
-      closeFind() {
-        if (view && searchPanelOpen(view.state)) {
-          closeSearchPanel(view);
-          return true;
-        }
-        return false;
-      },
-      findOpen: () => !!view && searchPanelOpen(view.state),
-      findNext() {
-        if (view) cmFindNext(view);
-      },
-      findPrev() {
-        if (view) cmFindPrev(view);
-      },
-      insert(before: string, after = "") {
-        if (!view) return;
-        if (app.mode !== "edit") app.mode = "edit";
-        const { from, to } = view.state.selection.main;
-        const selected = view.state.sliceDoc(from, to);
-        const text = before + selected + after;
-        const anchor = selected ? from + text.length : from + before.length;
-        view.dispatch({ changes: { from, to, insert: text }, selection: { anchor } });
-        view.focus();
-      },
-      setTitle(t: string) {
-        title = t;
-      },
-      replaceAll(content: string) {
-        if (!view || !loadedId) return;
-        if (app.mode !== "edit") app.mode = "edit";
-        const parsed = splitDoc(content);
-        if (parsed.title) {
-          title = parsed.title;
-          act.updateTreeTitle(loadedId, parsed.title);
-        }
-        // a real transaction over the whole doc — NOT setState(), which would
-        // wipe CodeMirror's undo history and make this restore un-undoable
-        view.dispatch({
-          changes: { from: 0, to: view.state.doc.length, insert: parsed.body },
-          selection: { anchor: 0 },
-          scrollIntoView: true,
-        });
-        view.focus();
-      },
+      closeFind: ctlCloseFind,
+      findOpen: findIsOpen,
+      findNext: ctlFindNext,
+      findPrev: ctlFindPrev,
+      scroller: () => view?.scrollDOM ?? null,
+      insert: ctlInsert,
+      replaceAll: ctlReplaceAll,
+      setTitle: (t: string) => (title = t),
     };
     return () => {
       void save();

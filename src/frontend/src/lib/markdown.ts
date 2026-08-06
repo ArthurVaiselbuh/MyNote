@@ -3,8 +3,10 @@ import dos from "highlight.js/lib/languages/dos";
 import powershell from "highlight.js/lib/languages/powershell";
 import "highlight.js/styles/atom-one-dark.css";
 import MarkdownIt from "markdown-it";
+import type { RenderRule } from "markdown-it/lib/renderer.mjs";
 import type StateInline from "markdown-it/lib/rules_inline/state_inline.mjs";
 import { MOD_LABEL } from "./keys/platform";
+import { isExternalHref } from "./regex";
 
 hljs.registerLanguage("powershell", powershell);
 hljs.registerLanguage("dos", dos);
@@ -29,17 +31,15 @@ const md = new MarkdownIt({
   highlight: highlightCode,
 });
 
-const defaultImage =
-  md.renderer.rules.image ??
-  ((tokens, idx, opts, _env, self) => self.renderToken(tokens, idx, opts));
+const renderToken: RenderRule = (tokens, idx, opts, _env, self) =>
+  self.renderToken(tokens, idx, opts);
 
-const defaultLinkOpen =
-  md.renderer.rules.link_open ??
-  ((tokens, idx, opts, _env, self) => self.renderToken(tokens, idx, opts));
+const defaultImage = md.renderer.rules.image ?? renderToken;
+const defaultLinkOpen = md.renderer.rules.link_open ?? renderToken;
 
 md.renderer.rules.link_open = (tokens, idx, opts, env, self) => {
   const href = tokens[idx].attrGet("href") ?? "";
-  if (/^https?:\/\//i.test(href)) {
+  if (isExternalHref(href)) {
     tokens[idx].attrSet("title", `${MOD_LABEL}+Click to open in browser`);
   }
   return defaultLinkOpen(tokens, idx, opts, env, self);
@@ -68,6 +68,8 @@ export const COLOR_PALETTE: Record<string, string> = {
   gray: "#7f848e",
 };
 
+export const COLOR_PALETTE_GRADIENT = `linear-gradient(90deg, ${Object.values(COLOR_PALETTE).join(",")})`;
+
 const WIDTH_RE = /^\{\s*width=(\d{1,4})\s*\}/;
 
 function imageWidth(state: StateInline, silent: boolean): boolean {
@@ -94,6 +96,9 @@ function colorSpan(state: StateInline, silent: boolean): boolean {
   if (state.src.charCodeAt(state.pos) !== 0x5b /* [ */) return false;
   const labelEnd = state.md.helpers.parseLinkLabel(state, state.pos);
   if (labelEnd < 0) return false;
+  // every ordinary link and image reaches this point; the char test rejects them
+  // before the attribute block is sliced out of the source
+  if (state.src.charCodeAt(labelEnd + 1) !== 0x7b /* { */) return false;
   const m = COLOR_ATTR_RE.exec(state.src.slice(labelEnd + 1, state.posMax));
   if (!m) return false;
   const open = state.push("color_span_open", "span", 1);
@@ -113,10 +118,13 @@ function colorSpan(state: StateInline, silent: boolean): boolean {
 md.inline.ruler.push("image_width", imageWidth);
 md.inline.ruler.push("color_span", colorSpan);
 
+const HAS_CONTENT = /\S/;
+const FENCE_RE = /^\s*(```|~~~)/;
+
 // markdown collapses blank-line runs into one paragraph break; the preview keeps
 // them as nbsp spacer paragraphs so typed vertical gaps match the editor. The
 // spacers shift every following line, so the rewrite hands back the body line
-// each rendered line came from \u2014 that map is what LINE_ATTR reports to the DOM.
+// each rendered line came from - that map is what LINE_ATTR reports to the DOM.
 function preserveBlankRuns(body: string): { text: string; bodyLines: number[] } {
   const out: string[] = [];
   const bodyLines: number[] = [];
@@ -125,28 +133,18 @@ function preserveBlankRuns(body: string): { text: string; bodyLines: number[] } 
     bodyLines.push(bodyLine);
   };
   let inFence = false;
-  let blanks = 0;
-  let blankStart = 0;
-  const flushBlanks = () => {
-    if (blanks === 0) return;
-    emit("", blankStart);
-    for (let i = 1; i < blanks; i++) {
-      emit("\u00a0", blankStart + i);
-      emit("", blankStart + i);
-    }
-    blanks = 0;
-  };
+  let afterBlank = false;
   body.split("\n").forEach((line, bodyLine) => {
-    if (!inFence && line.trim() === "") {
-      if (blanks === 0) blankStart = bodyLine;
-      blanks++;
-      return;
+    const blank = !inFence && !HAS_CONTENT.test(line);
+    if (blank) {
+      if (afterBlank) emit("\u00a0", bodyLine);
+      emit("", bodyLine);
+    } else {
+      if (FENCE_RE.test(line)) inFence = !inFence;
+      emit(line, bodyLine);
     }
-    flushBlanks();
-    if (/^\s*(```|~~~)/.test(line)) inFence = !inFence;
-    emit(line, bodyLine);
+    afterBlank = blank;
   });
-  flushBlanks();
   return { text: out.join("\n"), bodyLines };
 }
 

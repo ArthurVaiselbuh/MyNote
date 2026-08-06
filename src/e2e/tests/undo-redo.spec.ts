@@ -4,8 +4,7 @@ import { expect, test, type App } from "../app";
 async function twoPages(app: App): Promise<[string, string]> {
   await app.newPageToTree(1);
   await app.newPageToTree(2);
-  const [a, b] = await app.treeIds();
-  return [a, b];
+  return (await app.treeIds()) as [string, string];
 }
 
 test("move page undo/redo restores order", async ({ app }) => {
@@ -52,37 +51,33 @@ test("demote to subpage and undo", async ({ app }) => {
 test("Ctrl+Z while typing stays native editor undo", async ({ app }) => {
   const [A, B] = await twoPages(app);
   await app.page.keyboard.press("Control+2");
-  const body = app.page.locator(".cm-content");
-  await expect(body).toBeFocused();
+  await expect(app.editorBody).toBeFocused();
   await app.page.keyboard.type("guardprobe");
-  await expect(body).toContainText("guardprobe");
+  await expect(app.editorBody).toContainText("guardprobe");
 
   for (let i = 0; i < 5; i++) {
-    if (!(await body.textContent())!.includes("guardprobe")) break;
+    if (!(await app.editorBody.textContent())!.includes("guardprobe")) break;
     await app.page.keyboard.press("Control+z");
   }
-  await expect(body).not.toContainText("guardprobe");
+  await expect(app.editorBody).not.toContainText("guardprobe");
   expect(await app.treeIds()).toEqual([A, B]);
 });
 
 test("delete section undo restores its pages and jumps back", async ({ app }) => {
   const [A, B] = await twoPages(app);
-  await app.page.keyboard.press("Control+Shift+N");
-  await expect(app.page.locator(".section-strip input")).toBeFocused();
-  await app.page.keyboard.press("Enter");
-  await expect(app.page.locator(".section-strip .name")).toContainText("New Section");
+  await app.newSection();
 
   await app.page.keyboard.press("Control+g");
   await expect(app.page.locator(".picker-list")).toBeVisible();
-  await expect(app.page.locator(".modal input")).toBeFocused();
+  await expect(app.modal.locator("input")).toBeFocused();
   await app.page.keyboard.press("ArrowUp"); // current New Section is preselected -> Notes
   await app.page.keyboard.press("Shift+Delete"); // delete "Notes"
   await app.confirmDanger();
-  await expect(app.page.locator(".section-strip .name")).toContainText("1/1");
+  await expect(app.sectionName).toContainText("1/1");
   expect(app.mdExists(A) && app.mdExists(B)).toBe(true);
 
   await app.page.keyboard.press("Control+z");
-  await expect(app.page.locator(".section-strip .name")).toContainText("Notes");
+  await expect(app.sectionName).toContainText("Notes");
   await expect.poll(() => app.treeIds()).toEqual([A, B]);
 });
 

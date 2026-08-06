@@ -13,6 +13,8 @@ if (-not (Test-Path (Join-Path $frontend 'node_modules'))) {
     Invoke-InDirectory $frontend 'npm install' { npm install --no-audit --no-fund }
 }
 
+# Not Invoke-InDirectory: Ctrl-C out of a dev session exits non-zero, and that
+# is not a failure to report.
 Push-Location $backend
 try {
     & $tauri dev

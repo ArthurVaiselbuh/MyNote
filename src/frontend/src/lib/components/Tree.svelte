@@ -4,50 +4,52 @@
   import { dndCancel, dndDown, dndMove, dndUp } from "../dnd";
   import { labelOf } from "../keys/bindings";
   import { openTreeMenu } from "../menus";
+  import { onRequest } from "../onRequest.svelte";
   import { app } from "../state/app.svelte";
 
+  type InputKeyEvent = KeyboardEvent & { currentTarget: HTMLInputElement };
+
+  let treeEl: HTMLDivElement | undefined = $state();
   let filterInput: HTMLInputElement | undefined = $state();
-  let lastFilterReq = 0;
 
-  const rows = $derived.by(() => act.visibleRows());
+  const rows = $derived(act.visibleRows());
 
-  $effect(() => {
-    if (app.filterFocusReq !== lastFilterReq) {
-      lastFilterReq = app.filterFocusReq;
-      requestAnimationFrame(() => filterInput?.select());
-    }
-  });
+  onRequest(
+    () => app.filterFocusReq,
+    () => requestAnimationFrame(() => filterInput?.select()),
+  );
 
   $effect(() => {
     const id = app.selectedId;
     if (!id) return;
     requestAnimationFrame(() => {
-      document
-        .querySelector(`.tree .row[data-id="${id}"]`)
-        ?.scrollIntoView({ block: "nearest" });
+      treeEl?.querySelector(`.row[data-id="${id}"]`)?.scrollIntoView({ block: "nearest" });
     });
   });
+
+  function leaveFilter() {
+    filterInput?.blur();
+    app.focus = "tree";
+  }
 
   function filterKeys(e: KeyboardEvent) {
     if (e.key === "Escape") {
       e.stopPropagation();
       app.treeFilter = "";
       app.filterActive = false;
-      app.focus = "tree";
-      (e.currentTarget as HTMLInputElement).blur();
+      leaveFilter();
     } else if (e.key === "Enter" || e.key === "ArrowDown") {
       e.preventDefault();
-      (e.currentTarget as HTMLInputElement).blur();
-      app.focus = "tree";
+      leaveFilter();
       if (e.key === "ArrowDown") act.selectOffset(1);
       else if (!app.selectedId && rows.length) act.selectAndOpen(rows[0].node.id);
     }
   }
 
-  function renameKeys(e: KeyboardEvent, id: string) {
+  function renameKeys(e: InputKeyEvent, id: string) {
     if (e.key === "Enter") {
       e.preventDefault();
-      void act.commitRename(id, (e.currentTarget as HTMLInputElement).value);
+      void act.commitRename(id, e.currentTarget.value);
     } else if (e.key === "Escape") {
       e.stopPropagation();
       app.renamingId = null;
@@ -66,6 +68,7 @@
 <div
   class="tree"
   role="tree"
+  bind:this={treeEl}
   onpointermove={dndMove}
   onpointerup={dndUp}
   onpointercancel={dndCancel}
@@ -83,48 +86,50 @@
     />
   {/if}
   {#each rows as row (row.node.id)}
+    {@const node = row.node}
+    {@const dropZone = app.dropTarget?.id === node.id ? app.dropTarget.zone : null}
     <!-- svelte-ignore a11y_interactive_supports_focus -->
     <!-- svelte-ignore a11y_click_events_have_key_events -->
     <div
       class="row"
-      class:selected={row.node.id === app.selectedId}
-      class:current={row.node.id === app.currentPageId}
-      class:dragging={row.node.id === app.dragId}
-      class:drop-before={app.dropTarget?.id === row.node.id && app.dropTarget.zone === "before"}
-      class:drop-after={app.dropTarget?.id === row.node.id && app.dropTarget.zone === "after"}
-      class:drop-inside={app.dropTarget?.id === row.node.id && app.dropTarget.zone === "inside"}
-      data-id={row.node.id}
+      class:selected={node.id === app.selectedId}
+      class:current={node.id === app.currentPageId}
+      class:dragging={node.id === app.dragId}
+      class:drop-before={dropZone === "before"}
+      class:drop-after={dropZone === "after"}
+      class:drop-inside={dropZone === "inside"}
+      data-id={node.id}
       role="treeitem"
-      aria-selected={row.node.id === app.selectedId}
-      onpointerdown={(e) => dndDown(e, row.node.id)}
-      onclick={(e) => rowClick(e, row.node.id)}
-      ondblclick={() => act.startRename(row.node.id)}
+      aria-selected={node.id === app.selectedId}
+      onpointerdown={(e) => dndDown(e, node.id)}
+      onclick={(e) => rowClick(e, node.id)}
+      ondblclick={() => act.startRename(node.id)}
     >
-      {#each Array.from({ length: row.depth }) as _}
+      {#each Array(row.depth) as _}
         <span class="guide"></span>
       {/each}
       <button
         class="chev"
-        class:hidden-chev={row.node.children.length === 0}
+        class:hidden-chev={node.children.length === 0}
         tabindex="-1"
         onclick={(e) => {
           e.stopPropagation();
-          void act.toggleExpand(row.node.id);
+          void act.toggleExpand(node.id);
         }}
       >
-        {row.node.expanded ? "▾" : "▸"}
+        {node.expanded ? "▾" : "▸"}
       </button>
-      {#if app.renamingId === row.node.id}
+      {#if app.renamingId === node.id}
         <input
           class="rename"
           data-esc-local
-          value={row.node.title}
+          value={node.title}
           use:autofocusSelect
-          onkeydown={(e) => renameKeys(e, row.node.id)}
-          onblur={(e) => void act.commitRename(row.node.id, e.currentTarget.value)}
+          onkeydown={(e) => renameKeys(e, node.id)}
+          onblur={(e) => void act.commitRename(node.id, e.currentTarget.value)}
         />
       {:else}
-        <span class="title">{row.node.title}</span>
+        <span class="title">{node.title}</span>
       {/if}
     </div>
   {/each}

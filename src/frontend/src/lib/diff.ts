@@ -43,32 +43,38 @@ export interface DiffResult {
   lineEndingsDiffer: boolean;
 }
 
-const LCS_CELL_CAP = 4_000_000;
+export const LCS_CELL_CAP = 4_000_000;
 const WORD_SPAN_BUDGET = 800;
 const MAX_WORD_TOKENS = 400;
 const SIMILARITY_THRESHOLD = 0.3;
 
 function splitLines(text: string): { lines: string[]; hadTrailingNewline: boolean } {
   const lines = text.split("\n");
-  let hadTrailingNewline = false;
-  if (lines.length > 0 && lines[lines.length - 1] === "") {
-    lines.pop();
-    hadTrailingNewline = true;
-  }
+  const hadTrailingNewline = lines[lines.length - 1] === "";
+  if (hadTrailingNewline) lines.pop();
   return { lines, hadTrailingNewline };
 }
 
-function internKey(raw: string, key: Map<string, number>, next: { v: number }): number {
-  let id = key.get(raw);
-  if (id === undefined) {
-    id = next.v++;
-    key.set(raw, id);
-  }
-  return id;
+function endsWithCR(line: string): boolean {
+  return line.endsWith("\r");
 }
 
-function internLines(lines: string[], key: Map<string, number>, next: { v: number }): number[] {
-  return lines.map((line) => internKey(line.endsWith("\r") ? line.slice(0, -1) : line, key, next));
+function withoutCR(line: string): string {
+  return endsWithCR(line) ? line.slice(0, -1) : line;
+}
+
+/** Maps strings to dense ids so the LCS can compare numbers. */
+class Interner {
+  private readonly ids = new Map<string, number>();
+
+  idOf(text: string): number {
+    let id = this.ids.get(text);
+    if (id === undefined) {
+      id = this.ids.size;
+      this.ids.set(text, id);
+    }
+    return id;
+  }
 }
 
 function trimCommon(a: number[], b: number[]): { prefix: number; suffix: number } {
@@ -90,19 +96,17 @@ type Op = "same" | "del" | "add";
 function lcsOps(a: number[], b: number[]): { ops: Op[]; degraded: boolean } {
   const n = a.length;
   const m = b.length;
-  if (n === 0 && m === 0) return { ops: [], degraded: false };
   if (n * m > LCS_CELL_CAP) {
-    const ops: Op[] = [];
-    for (let i = 0; i < n; i++) ops.push("del");
-    for (let j = 0; j < m; j++) ops.push("add");
-    return { ops, degraded: true };
+    return { ops: new Array<Op>(n).fill("del").concat(new Array<Op>(m).fill("add")), degraded: true };
   }
   const width = m + 1;
   const dp = new Int32Array((n + 1) * width);
   for (let i = n - 1; i >= 0; i--) {
+    const row = i * width;
+    const rowBelow = row + width;
+    const ai = a[i];
     for (let j = m - 1; j >= 0; j--) {
-      dp[i * width + j] =
-        a[i] === b[j] ? dp[(i + 1) * width + (j + 1)] + 1 : Math.max(dp[(i + 1) * width + j], dp[i * width + (j + 1)]);
+      dp[row + j] = ai === b[j] ? dp[rowBelow + j + 1] + 1 : Math.max(dp[rowBelow + j], dp[row + j + 1]);
     }
   }
   const ops: Op[] = [];
@@ -135,31 +139,24 @@ function lcsOps(a: number[], b: number[]): { ops: Op[]; degraded: boolean } {
 type LineOp = { kind: "same"; ai: number; bi: number } | { kind: "del"; ai: number } | { kind: "add"; bi: number };
 
 function buildLineOps(leftLines: string[], rightLines: string[]): { ops: LineOp[]; degraded: boolean } {
-  const key = new Map<string, number>();
-  const next = { v: 0 };
-  const a = internLines(leftLines, key, next);
-  const b = internLines(rightLines, key, next);
+  const interner = new Interner();
+  const a = leftLines.map((line) => interner.idOf(withoutCR(line)));
+  const b = rightLines.map((line) => interner.idOf(withoutCR(line)));
   const { prefix, suffix } = trimCommon(a, b);
 
   const ops: LineOp[] = [];
   for (let k = 0; k < prefix; k++) ops.push({ kind: "same", ai: k, bi: k });
 
-  const aMid = a.slice(prefix, a.length - suffix);
-  const bMid = b.slice(prefix, b.length - suffix);
-  const { ops: midOps, degraded } = lcsOps(aMid, bMid);
+  const { ops: midOps, degraded } = lcsOps(a.slice(prefix, a.length - suffix), b.slice(prefix, b.length - suffix));
   let ai = prefix;
   let bi = prefix;
   for (const kind of midOps) {
     if (kind === "same") {
-      ops.push({ kind: "same", ai, bi });
-      ai++;
-      bi++;
+      ops.push({ kind: "same", ai: ai++, bi: bi++ });
     } else if (kind === "del") {
-      ops.push({ kind: "del", ai });
-      ai++;
+      ops.push({ kind: "del", ai: ai++ });
     } else {
-      ops.push({ kind: "add", bi });
-      bi++;
+      ops.push({ kind: "add", bi: bi++ });
     }
   }
 
@@ -171,8 +168,10 @@ function buildLineOps(leftLines: string[], rightLines: string[]): { ops: LineOp[
   return { ops, degraded };
 }
 
+const WORD_TOKEN = /[\p{L}\p{N}_]+|\s+|[^\s\p{L}\p{N}_]/gu;
+
 function tokenizeForDiff(line: string): string[] {
-  return line.match(/[\p{L}\p{N}_]+|\s+|[^\s\p{L}\p{N}_]/gu) ?? (line.length ? [line] : []);
+  return line.match(WORD_TOKEN) ?? (line.length ? [line] : []);
 }
 
 function bagSimilarity(a: string[], b: string[]): number {
@@ -190,9 +189,12 @@ function bagSimilarity(a: string[], b: string[]): number {
   return (2 * common) / (a.length + b.length);
 }
 
-function isSimilar(a: string, b: string): boolean {
-  if (a === b) return true;
-  return bagSimilarity(tokenizeForDiff(a), tokenizeForDiff(b)) >= SIMILARITY_THRESHOLD;
+function spansOf(text: string, hl: boolean): Span[] {
+  return [{ text, hl }];
+}
+
+function wholeLineChanged(a: string, b: string): { left: Span[]; right: Span[] } {
+  return { left: spansOf(a, true), right: spansOf(b, true) };
 }
 
 function pushSpan(spans: Span[], text: string, hl: boolean) {
@@ -204,18 +206,24 @@ function pushSpan(spans: Span[], text: string, hl: boolean) {
   }
 }
 
-function diffWords(a: string, b: string): { left: Span[]; right: Span[] } {
-  if (a === b) return { left: [{ text: a, hl: false }], right: [{ text: b, hl: false }] };
+/** Word-level spans for one changed line pair, falling back to whole-line
+ * highlighting once the page has more changes than are worth tokenizing, when
+ * either line is huge, or when the two lines are too unalike to have been an
+ * edit of each other. */
+function diffWords(a: string, b: string, changedSoFar: number): { left: Span[]; right: Span[] } {
+  if (changedSoFar >= WORD_SPAN_BUDGET) return wholeLineChanged(a, b);
+  if (a === b) return { left: spansOf(a, false), right: spansOf(b, false) };
+
   const leftTokens = tokenizeForDiff(a);
   const rightTokens = tokenizeForDiff(b);
-  if (leftTokens.length > MAX_WORD_TOKENS || rightTokens.length > MAX_WORD_TOKENS) {
-    return { left: [{ text: a, hl: true }], right: [{ text: b, hl: true }] };
-  }
-  const key = new Map<string, number>();
-  const next = { v: 0 };
-  const ai = leftTokens.map((t) => internKey(t, key, next));
-  const bi = rightTokens.map((t) => internKey(t, key, next));
-  const { ops } = lcsOps(ai, bi);
+  if (leftTokens.length > MAX_WORD_TOKENS || rightTokens.length > MAX_WORD_TOKENS) return wholeLineChanged(a, b);
+  if (bagSimilarity(leftTokens, rightTokens) < SIMILARITY_THRESHOLD) return wholeLineChanged(a, b);
+
+  const interner = new Interner();
+  const { ops } = lcsOps(
+    leftTokens.map((t) => interner.idOf(t)),
+    rightTokens.map((t) => interner.idOf(t)),
+  );
 
   const left: Span[] = [];
   const right: Span[] = [];
@@ -223,52 +231,80 @@ function diffWords(a: string, b: string): { left: Span[]; right: Span[] } {
   let ri = 0;
   for (const kind of ops) {
     if (kind === "same") {
-      pushSpan(left, leftTokens[li], false);
-      pushSpan(right, rightTokens[ri], false);
-      li++;
-      ri++;
+      pushSpan(left, leftTokens[li++], false);
+      pushSpan(right, rightTokens[ri++], false);
     } else if (kind === "del") {
-      pushSpan(left, leftTokens[li], true);
-      li++;
+      pushSpan(left, leftTokens[li++], true);
     } else {
-      pushSpan(right, rightTokens[ri], true);
-      ri++;
+      pushSpan(right, rightTokens[ri++], true);
     }
   }
   return { left, right };
 }
 
-function diffWordsBudgeted(a: string, b: string, changedSoFar: number): { left: Span[]; right: Span[] } {
-  if (changedSoFar >= WORD_SPAN_BUDGET) {
-    return { left: [{ text: a, hl: true }], right: [{ text: b, hl: true }] };
+/** Collects both renderings at once, so the side-by-side and unified views
+ * can never drift apart. Line indices are 0-based; the rows carry them 1-based. */
+class DiffRows {
+  readonly rows: AlignedRow[] = [];
+  readonly unified: UnifiedRow[] = [];
+  readonly anchors: number[] = [];
+  readonly unifiedAnchors: number[] = [];
+  added = 0;
+  removed = 0;
+  changed = 0;
+
+  startRun() {
+    this.anchors.push(this.rows.length);
+    this.unifiedAnchors.push(this.unified.length);
   }
-  return isSimilar(a, b) ? diffWords(a, b) : { left: [{ text: a, hl: true }], right: [{ text: b, hl: true }] };
+
+  same(ai: number, bi: number, leftText: string, rightText: string) {
+    this.rows.push({
+      kind: "same",
+      leftNo: ai + 1,
+      left: spansOf(leftText, false),
+      rightNo: bi + 1,
+      right: spansOf(rightText, false),
+    });
+    this.unified.push({ kind: "same", leftNo: ai + 1, rightNo: bi + 1, spans: spansOf(leftText, false) });
+  }
+
+  change(ai: number, bi: number, left: Span[], right: Span[]) {
+    this.rows.push({ kind: "change", leftNo: ai + 1, left, rightNo: bi + 1, right });
+    this.unified.push({ kind: "del", leftNo: ai + 1, rightNo: null, spans: left });
+    this.unified.push({ kind: "add", leftNo: null, rightNo: bi + 1, spans: right });
+    this.changed++;
+  }
+
+  del(ai: number, text: string) {
+    this.rows.push({ kind: "del", leftNo: ai + 1, left: spansOf(text, true), rightNo: null, right: null });
+    this.unified.push({ kind: "del", leftNo: ai + 1, rightNo: null, spans: spansOf(text, true) });
+    this.removed++;
+  }
+
+  add(bi: number, text: string) {
+    this.rows.push({ kind: "add", leftNo: null, left: null, rightNo: bi + 1, right: spansOf(text, true) });
+    this.unified.push({ kind: "add", leftNo: null, rightNo: bi + 1, spans: spansOf(text, true) });
+    this.added++;
+  }
+
+  finish(flags: Pick<DiffResult, "degraded" | "trailingNewlineChanged" | "lineEndingsDiffer">): DiffResult {
+    const { rows, unified, anchors, unifiedAnchors, added, removed, changed } = this;
+    return { rows, unified, anchors, unifiedAnchors, stats: { added, removed, changed }, ...flags };
+  }
 }
 
 export function diffText(leftText: string, rightText: string): DiffResult {
   const { lines: leftLines, hadTrailingNewline: leftTrail } = splitLines(leftText);
   const { lines: rightLines, hadTrailingNewline: rightTrail } = splitLines(rightText);
-  const leftHasCR = leftLines.some((l) => l.endsWith("\r"));
-  const rightHasCR = rightLines.some((l) => l.endsWith("\r"));
-
   const { ops, degraded } = buildLineOps(leftLines, rightLines);
 
-  const rows: AlignedRow[] = [];
-  const unified: UnifiedRow[] = [];
-  const anchors: number[] = [];
-  const unifiedAnchors: number[] = [];
-  let added = 0;
-  let removed = 0;
-  let changed = 0;
-
+  const out = new DiffRows();
   let i = 0;
   while (i < ops.length) {
     const op = ops[i];
     if (op.kind === "same") {
-      const l = leftLines[op.ai];
-      const r = rightLines[op.bi];
-      rows.push({ kind: "same", leftNo: op.ai + 1, left: [{ text: l, hl: false }], rightNo: op.bi + 1, right: [{ text: r, hl: false }] });
-      unified.push({ kind: "same", leftNo: op.ai + 1, rightNo: op.bi + 1, spans: [{ text: l, hl: false }] });
+      out.same(op.ai, op.bi, leftLines[op.ai], rightLines[op.bi]);
       i++;
       continue;
     }
@@ -276,46 +312,24 @@ export function diffText(leftText: string, rightText: string): DiffResult {
     const dels: number[] = [];
     const adds: number[] = [];
     while (i < ops.length && ops[i].kind !== "same") {
-      const o = ops[i];
+      const o = ops[i++];
       if (o.kind === "del") dels.push(o.ai);
       else if (o.kind === "add") adds.push(o.bi);
-      i++;
     }
-    anchors.push(rows.length);
-    unifiedAnchors.push(unified.length);
+    out.startRun();
 
-    const pairCount = Math.min(dels.length, adds.length);
-    for (let k = 0; k < pairCount; k++) {
-      const li = dels[k];
-      const ri = adds[k];
-      const { left, right } = diffWordsBudgeted(leftLines[li], rightLines[ri], changed);
-      rows.push({ kind: "change", leftNo: li + 1, left, rightNo: ri + 1, right });
-      unified.push({ kind: "del", leftNo: li + 1, rightNo: null, spans: left });
-      unified.push({ kind: "add", leftNo: null, rightNo: ri + 1, spans: right });
-      changed++;
+    const paired = Math.min(dels.length, adds.length);
+    for (let k = 0; k < paired; k++) {
+      const { left, right } = diffWords(leftLines[dels[k]], rightLines[adds[k]], out.changed);
+      out.change(dels[k], adds[k], left, right);
     }
-    for (let k = pairCount; k < dels.length; k++) {
-      const li = dels[k];
-      rows.push({ kind: "del", leftNo: li + 1, left: [{ text: leftLines[li], hl: true }], rightNo: null, right: null });
-      unified.push({ kind: "del", leftNo: li + 1, rightNo: null, spans: [{ text: leftLines[li], hl: true }] });
-      removed++;
-    }
-    for (let k = pairCount; k < adds.length; k++) {
-      const ri = adds[k];
-      rows.push({ kind: "add", leftNo: null, left: null, rightNo: ri + 1, right: [{ text: rightLines[ri], hl: true }] });
-      unified.push({ kind: "add", leftNo: null, rightNo: ri + 1, spans: [{ text: rightLines[ri], hl: true }] });
-      added++;
-    }
+    for (let k = paired; k < dels.length; k++) out.del(dels[k], leftLines[dels[k]]);
+    for (let k = paired; k < adds.length; k++) out.add(adds[k], rightLines[adds[k]]);
   }
 
-  return {
-    rows,
-    unified,
-    anchors,
-    unifiedAnchors,
-    stats: { added, removed, changed },
+  return out.finish({
     degraded,
     trailingNewlineChanged: leftTrail !== rightTrail,
-    lineEndingsDiffer: leftHasCR !== rightHasCR,
-  };
+    lineEndingsDiffer: leftLines.some(endsWithCR) !== rightLines.some(endsWithCR),
+  });
 }

@@ -1,12 +1,23 @@
 <script lang="ts">
   import * as act from "../../actions";
-  import { api, type DeletedChild, type DeletedHistory, type DeletedItem, type PageRevision } from "../../api";
-  import { diffText, type DiffResult } from "../../diff";
+  import {
+    api,
+    type DeletedChild,
+    type DeletedHistory,
+    type DeletedItem,
+    type PageRevision,
+    type RevisionText,
+  } from "../../api";
+  import { diffText, type Span } from "../../diff";
   import { commandFor } from "../../keys/bindings";
+  import { clampIndex, wrapIndex } from "../../listIndex";
   import { renderBody } from "../../markdown";
   import { app, type HistoryMode } from "../../state/app.svelte";
+  import { countSubtree } from "../../treeUtils";
 
   const gitReady = $derived(!!app.git?.enabled && !!app.git?.repo);
+  const onPageTab = $derived(app.historyTab === "page");
+  const diffing = $derived(app.historyMode === "split" || app.historyMode === "inline");
 
   // ---------- page tab ----------
 
@@ -61,24 +72,19 @@
   }
 
   $effect(() => {
-    if (
-      app.historyTab === "page" &&
-      app.currentPageId &&
-      gitReady &&
-      loadedForPage !== app.currentPageId
-    ) {
+    if (onPageTab && app.currentPageId && gitReady && loadedForPage !== app.currentPageId) {
       loadedForPage = app.currentPageId;
       void loadPageRevisions();
     }
   });
 
-  const textCache = new Map<string, { text: string; truncated: boolean; missing: boolean }>();
-  let baseText = $state("");
-  let targetText = $state("");
-  let baseTruncated = $state(false);
-  let targetTruncated = $state(false);
-  let baseMissing = $state(false);
-  let targetMissing = $state(false);
+  function emptyRevision(): RevisionText {
+    return { text: "", truncated: false, missing: false };
+  }
+
+  const textCache = new Map<string, RevisionText>();
+  let base = $state.raw(emptyRevision());
+  let target = $state.raw(emptyRevision());
   let textBusy = $state(false);
   // scoped to the content pane only — must never alias `pageError`, which
   // gates whether the rail itself renders (a failure loading one revision's
@@ -86,16 +92,20 @@
   let textError = $state("");
   let textLoadSeq = 0;
 
-  async function fetchRev(sha: string): Promise<{ text: string; truncated: boolean; missing: boolean }> {
+  const tooLargeToDiff = $derived(base.truncated || target.truncated);
+
+  async function fetchRev(pageId: string, sha: string): Promise<RevisionText> {
     const cached = textCache.get(sha);
     if (cached) return cached;
-    const res = await api.revisionText(app.currentPageId!, sha);
+    const res = await api.revisionText(pageId, sha);
     textCache.set(sha, res);
     return res;
   }
 
   $effect(() => {
-    if (app.historyTab !== "page" || !app.currentPageId || !gitReady) return;
+    if (!onPageTab || !gitReady) return;
+    const pageId = app.currentPageId;
+    if (!pageId) return;
     const baseSha = railSha(app.historyRevBase);
     const targetSha = railSha(app.historyRevSel);
     const seq = ++textLoadSeq;
@@ -103,16 +113,12 @@
     textError = "";
     // sequential on purpose: two parallel invokes would spawn two git batches
     // that just queue on the backend's history gate anyway
-    fetchRev(baseSha)
-      .then(async (b) => [b, await fetchRev(targetSha)] as const)
+    fetchRev(pageId, baseSha)
+      .then(async (b) => [b, await fetchRev(pageId, targetSha)] as const)
       .then(([b, t]) => {
         if (seq !== textLoadSeq) return;
-        baseText = b.text;
-        baseTruncated = b.truncated;
-        baseMissing = b.missing;
-        targetText = t.text;
-        targetTruncated = t.truncated;
-        targetMissing = t.missing;
+        base = b;
+        target = t;
       })
       .catch((e) => {
         if (seq !== textLoadSeq) return;
@@ -125,12 +131,11 @@
 
   // diffing a truncated blob would lie about what changed
   $effect(() => {
-    if ((baseTruncated || targetTruncated) && (app.historyMode === "split" || app.historyMode === "inline")) {
-      app.historyMode = "text";
-    }
+    if (tooLargeToDiff && diffing) app.historyMode = "text";
   });
 
-  const diffRes = $derived.by((): DiffResult => diffText(baseText, targetText));
+  const diffRes = $derived(diffText(base.text, target.text));
+  const anchors = $derived(app.historyMode === "inline" ? diffRes.unifiedAnchors : diffRes.anchors);
 
   let anchorPos = $state(0);
   $effect(() => {
@@ -138,17 +143,13 @@
     anchorPos = 0;
   });
 
-  const currentAnchorRow = $derived.by((): number => {
-    const anchors = app.historyMode === "inline" ? diffRes.unifiedAnchors : diffRes.anchors;
-    return anchors[anchorPos] ?? -1;
-  });
+  const currentAnchorRow = $derived(anchors[anchorPos] ?? -1);
 
   let contentEl: HTMLElement | undefined = $state();
 
   function jumpChange(dir: number) {
-    const anchors = app.historyMode === "inline" ? diffRes.unifiedAnchors : diffRes.anchors;
     if (anchors.length === 0) return;
-    anchorPos = ((anchorPos + dir) % anchors.length + anchors.length) % anchors.length;
+    anchorPos = wrapIndex(anchorPos + dir, anchors.length);
     const rowIdx = anchors[anchorPos];
     requestAnimationFrame(() => {
       contentEl?.querySelector(`[data-row="${rowIdx}"]`)?.scrollIntoView({ block: "center" });
@@ -161,70 +162,68 @@
   }
 
   function moveRailSel(delta: number) {
-    app.historyRevSel = Math.min(railCount - 1, Math.max(0, app.historyRevSel + delta));
+    app.historyRevSel = clampIndex(app.historyRevSel + delta, railCount);
   }
   function moveRailBase(delta: number) {
-    app.historyRevBase = Math.min(railCount - 1, Math.max(0, app.historyRevBase + delta));
+    app.historyRevBase = clampIndex(app.historyRevBase + delta, railCount);
   }
   function selectRail(idx: number, asBase: boolean) {
     if (asBase) app.historyRevBase = idx;
     else app.historyRevSel = idx;
   }
 
+  // restoring while the text is still loading would write the empty
+  // placeholder, and a missing revision has no content to restore to
+  // (the page didn't exist yet)
+  const canRestore = $derived(app.historyRevSel !== 0 && !textBusy && !target.missing);
+
   // ---------- deleted tab ----------
 
-  interface FlatDeletedRow {
-    sha: string;
-    id: string;
-    title: string;
+  interface FlatDeletedRow
+    extends Pick<DeletedItem, "sha" | "id" | "title" | "at" | "sectionName" | "sectionExists"> {
     depth: number;
     isTop: boolean;
     count: number;
-    at: number;
-    sectionName: string | null;
-    sectionExists: boolean;
     resolved: boolean;
   }
 
-  function countChild(c: DeletedChild): number {
-    return 1 + c.children.reduce((n, cc) => n + countChild(cc), 0);
+  // every row of one deleted subtree shares the deletion's own facts
+  type DeletedGroup = Omit<FlatDeletedRow, "id" | "title" | "depth" | "isTop" | "count">;
+
+  function groupOf(item: DeletedItem): DeletedGroup {
+    return {
+      sha: item.sha,
+      at: item.at,
+      sectionName: item.sectionName,
+      sectionExists: item.sectionExists,
+      // a placement was found in the notebook.json history, so section and
+      // nesting are known rather than guessed from the page's own H1
+      resolved: item.sectionId !== null,
+    };
   }
 
   function flattenDeleted(items: DeletedItem[]): FlatDeletedRow[] {
     const rows: FlatDeletedRow[] = [];
     for (const item of items) {
-      rows.push({
-        sha: item.sha,
-        id: item.id,
-        title: item.title,
-        depth: 0,
-        isTop: true,
-        count: item.pageCount,
-        at: item.at,
-        sectionName: item.sectionName,
-        sectionExists: item.sectionExists,
-        resolved: item.resolved,
-      });
-      const walk = (children: DeletedChild[], depth: number) => {
-        for (const c of children) {
-          rows.push({
-            sha: item.sha,
-            id: c.id,
-            title: c.title,
-            depth,
-            isTop: false,
-            count: countChild(c),
-            at: item.at,
-            sectionName: item.sectionName,
-            sectionExists: item.sectionExists,
-            resolved: item.resolved,
-          });
-          walk(c.children, depth + 1);
-        }
-      };
-      walk(item.children, 1);
+      const group = groupOf(item);
+      const { id, title, pageCount: count } = item;
+      rows.push({ ...group, id, title, count, depth: 0, isTop: true });
+      appendChildren(item.children, group, 1, rows);
     }
     return rows;
+  }
+
+  function appendChildren(
+    children: DeletedChild[],
+    group: DeletedGroup,
+    depth: number,
+    rows: FlatDeletedRow[],
+  ) {
+    for (const child of children) {
+      const { id, title } = child;
+      rows.push({ ...group, id, title, count: countSubtree(child), depth, isTop: false });
+      appendChildren(child.children, group, depth + 1, rows);
+    }
   }
 
   let deletedHistory = $state<DeletedHistory | null>(null);
@@ -234,14 +233,14 @@
   let deletedMode = $state<"rendered" | "text">("rendered");
 
   const flatDeleted = $derived(deletedHistory ? flattenDeleted(deletedHistory.items) : []);
+  const selectedDeleted: FlatDeletedRow | undefined = $derived(flatDeleted[app.historyDeletedSel]);
 
   async function loadDeleted() {
     deletedBusy = true;
     deletedError = "";
     try {
       deletedHistory = await api.deletedPages();
-      const rows = flattenDeleted(deletedHistory.items);
-      if (app.historyDeletedSel >= rows.length) app.historyDeletedSel = 0;
+      if (app.historyDeletedSel >= flatDeleted.length) app.historyDeletedSel = 0;
     } catch (e) {
       deletedError = String(e);
       deletedHistory = null;
@@ -251,7 +250,7 @@
   }
 
   $effect(() => {
-    if (app.historyTab === "deleted" && gitReady && !deletedLoaded) {
+    if (!onPageTab && gitReady && !deletedLoaded) {
       deletedLoaded = true;
       void loadDeleted();
     }
@@ -263,8 +262,8 @@
   let deletedLoadSeq = 0;
 
   $effect(() => {
-    if (app.historyTab !== "deleted") return;
-    const row = flatDeleted[app.historyDeletedSel];
+    if (onPageTab) return;
+    const row = selectedDeleted;
     if (!row) {
       deletedPreviewText = "";
       return;
@@ -272,7 +271,7 @@
     const seq = ++deletedLoadSeq;
     deletedPreviewBusy = true;
     api
-      .deletedPageText(row.sha, row.id)
+      .deletedPageText(row.id, row.sha)
       .then((res) => {
         if (seq !== deletedLoadSeq) return;
         deletedPreviewText = res.text;
@@ -289,7 +288,7 @@
 
   function moveDeletedSel(delta: number) {
     if (flatDeleted.length === 0) return;
-    app.historyDeletedSel = Math.min(flatDeleted.length - 1, Math.max(0, app.historyDeletedSel + delta));
+    app.historyDeletedSel = clampIndex(app.historyDeletedSel + delta, flatDeleted.length);
   }
 
   // ---------- shared ----------
@@ -303,21 +302,15 @@
   }
 
   function doRestore() {
-    if (app.historyTab === "page") {
-      // same guard as the restore button: Enter while the revision text is
-      // still loading would "restore" the empty placeholder; a missing
-      // revision has no content to restore to (the page didn't exist yet)
-      if (app.historyRevSel === 0 || textBusy || targetMissing || !app.currentPageId) return;
-      act.restoreRevision(app.currentPageId, targetText, railLabel(app.historyRevSel));
-    } else {
-      const row = flatDeleted[app.historyDeletedSel];
-      if (!row) return;
-      act.recoverDeletedPage(row.sha, row.id, row.title, row.count);
+    if (onPageTab) {
+      const pageId = app.currentPageId;
+      if (!canRestore || !pageId) return;
+      act.restoreRevision(pageId, target.text, railLabel(app.historyRevSel));
+    } else if (selectedDeleted) {
+      const { id, sha, title, count } = selectedDeleted;
+      act.recoverDeletedPage(id, sha, title, count);
     }
   }
-
-  const onPageTab = $derived(app.historyTab === "page");
-  const diffing = $derived(app.historyMode === "split" || app.historyMode === "inline");
 
   function keys(e: KeyboardEvent) {
     // still mounted behind its own confirm dialog — that dialog owns the keyboard then
@@ -398,19 +391,18 @@
 
 <svelte:window onkeydown={keys} />
 
+<!-- one line: .diff-cell is `white-space: pre-wrap`, so any indentation here would render -->
+{#snippet spanRun(spans: Span[])}{#each spans as s, si (si)}{#if s.hl}<mark class="word">{s.text}</mark>{:else}{s.text}{/if}{/each}{/snippet}
+
 <div class="history-layout" role="dialog" tabindex="-1">
     <div class="history-head">
       <div class="modal-title">History</div>
 
       <div class="import-modes">
-        <button class="import-mode" class:active={app.historyTab === "page"} onclick={() => (app.historyTab = "page")}>
+        <button class="import-mode" class:active={onPageTab} onclick={() => (app.historyTab = "page")}>
           This page
         </button>
-        <button
-          class="import-mode"
-          class:active={app.historyTab === "deleted"}
-          onclick={() => (app.historyTab = "deleted")}
-        >
+        <button class="import-mode" class:active={!onPageTab} onclick={() => (app.historyTab = "deleted")}>
           Deleted pages
         </button>
       </div>
@@ -426,7 +418,7 @@
         <p>Version history isn't turned on for this notebook yet.</p>
         <button class="primary" onclick={() => void enableGit()}>Enable version history</button>
       </div>
-    {:else if app.historyTab === "page"}
+    {:else if onPageTab}
       <div class="history-body">
         <div class="history-rail">
           {#if pageBusy}
@@ -457,12 +449,12 @@
         <div class="history-pane">
           <div class="history-toolbar">
             <div class="history-modes">
-              <button class:active={app.historyMode === "split"} disabled={baseTruncated || targetTruncated} onclick={() => (app.historyMode = "split")}>Side-by-side</button>
-              <button class:active={app.historyMode === "inline"} disabled={baseTruncated || targetTruncated} onclick={() => (app.historyMode = "inline")}>Inline</button>
+              <button class:active={app.historyMode === "split"} disabled={tooLargeToDiff} onclick={() => (app.historyMode = "split")}>Side-by-side</button>
+              <button class:active={app.historyMode === "inline"} disabled={tooLargeToDiff} onclick={() => (app.historyMode = "inline")}>Inline</button>
               <button class:active={app.historyMode === "rendered"} onclick={() => (app.historyMode = "rendered")}>Rendered</button>
               <button class:active={app.historyMode === "text"} onclick={() => (app.historyMode = "text")}>Text</button>
             </div>
-            {#if app.historyMode === "split" || app.historyMode === "inline"}
+            {#if diffing}
               <div class="history-stats">
                 <span class="add">+{diffRes.stats.added}</span>
                 <span class="del">−{diffRes.stats.removed}</span>
@@ -471,22 +463,22 @@
             {/if}
             <button
               class="danger history-restore"
-              disabled={app.historyRevSel === 0 || textBusy || targetMissing}
+              disabled={!canRestore}
               onclick={doRestore}
             >
               Restore
             </button>
           </div>
 
-          {#if diffRes.degraded && (app.historyMode === "split" || app.historyMode === "inline")}
+          {#if diffRes.degraded && diffing}
             <div class="history-note">file too large for a precise line match — the changed region is shown as one block</div>
           {/if}
-          {#if baseTruncated || targetTruncated}
+          {#if tooLargeToDiff}
             <div class="history-note">a revision is too large to diff — showing text mode</div>
           {/if}
-          {#if targetMissing}
+          {#if target.missing}
             <div class="history-note">the page didn't exist at this revision</div>
-          {:else if baseMissing}
+          {:else if base.missing}
             <div class="history-note">the page didn't exist at the base revision</div>
           {/if}
 
@@ -507,11 +499,11 @@
                   <div class="diff-row" class:cursor={i === currentAnchorRow} data-row={i}>
                     <span class="diff-num">{row.leftNo ?? ""}</span>
                     <span class="diff-cell" class:tint-del={row.left !== null && row.kind !== "same"}>
-                      {#if row.left}{#each row.left as s, si (si)}{#if s.hl}<mark class="word">{s.text}</mark>{:else}{s.text}{/if}{/each}{/if}
+                      {#if row.left}{@render spanRun(row.left)}{/if}
                     </span>
                     <span class="diff-num">{row.rightNo ?? ""}</span>
                     <span class="diff-cell" class:tint-add={row.right !== null && row.kind !== "same"}>
-                      {#if row.right}{#each row.right as s, si (si)}{#if s.hl}<mark class="word">{s.text}</mark>{:else}{s.text}{/if}{/each}{/if}
+                      {#if row.right}{@render spanRun(row.right)}{/if}
                     </span>
                   </div>
                 {/each}
@@ -530,15 +522,15 @@
                     <span class="diff-num">{row.rightNo ?? ""}</span>
                     <span class="diff-marker">{row.kind === "del" ? "−" : row.kind === "add" ? "+" : ""}</span>
                     <span class="diff-cell">
-                      {#each row.spans as s, si (si)}{#if s.hl}<mark class="word">{s.text}</mark>{:else}{s.text}{/if}{/each}
+                      {@render spanRun(row.spans)}
                     </span>
                   </div>
                 {/each}
               </div>
             {:else if app.historyMode === "rendered"}
-              <div class="preview history-rendered">{@html renderBody(targetText)}</div>
+              <div class="preview history-rendered">{@html renderBody(target.text)}</div>
             {:else}
-              <pre class="history-raw">{targetText}</pre>
+              <pre class="history-raw">{target.text}</pre>
             {/if}
           </div>
         </div>
@@ -585,7 +577,7 @@
               <button class:active={deletedMode === "rendered"} onclick={() => (deletedMode = "rendered")}>Rendered</button>
               <button class:active={deletedMode === "text"} onclick={() => (deletedMode = "text")}>Text</button>
             </div>
-            <button class="danger history-restore" disabled={!flatDeleted[app.historyDeletedSel]} onclick={doRestore}>
+            <button class="danger history-restore" disabled={!selectedDeleted} onclick={doRestore}>
               Recover
             </button>
           </div>
