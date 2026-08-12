@@ -76,6 +76,22 @@ test("PgDn scrolls the peek, not the results list", async ({ app }) => {
   await expect.poll(scrollTop).toBeGreaterThan(before);
 });
 
+test("refining the query updates the peek's highlights without reloading the page", async ({ app }) => {
+  await app.newPageWithBody("Note", "milk chocolate and milkshake", 1);
+
+  await app.search("milk");
+  const peek = app.page.locator(".peek");
+  await expect(peek.locator(".peek-head")).toContainText("Note");
+  await expect(peek.locator("mark.find-hit")).toHaveCount(2);
+
+  // same single page stays the top (and only) hit, so the peek's cached body
+  // is reused; only the highlight terms should change
+  await app.search("milkshake");
+  await expect(peek.locator(".peek-head")).toContainText("Note");
+  await expect(peek.locator("mark.find-hit")).toHaveCount(1);
+  await expect(peek.locator("mark.find-hit").first()).toHaveText("milkshake");
+});
+
 test("keywords rank by how many matched; quotes match the phrase whole", async ({ app }) => {
   await app.newPageWithBody("Loud", "alpha alpha alpha", 1);
   await app.newPageWithBody("Quiet", "alpha and beta", 2);
