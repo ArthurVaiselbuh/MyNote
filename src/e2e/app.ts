@@ -316,8 +316,17 @@ export class App {
     await this.page.keyboard.press("Control+a");
   }
 
-  /** Replaces the whole body of the current page and saves; ends in the tree. */
   async setBody(body: string) {
+    await this.selectWholeBody();
+    await this.page.keyboard.insertText(body);
+    await this.page.keyboard.press("Control+s");
+    await this.page.keyboard.press("Escape");
+    await expect(this.editorBody).not.toBeFocused();
+  }
+
+  /** Slower than setBody: lets the UI handle the input, one real keystroke at
+   * a time, instead of one bulk insert. Some tests rely on that. */
+  async setBodyFromInput(body: string) {
     await this.selectWholeBody();
     await this.page.keyboard.type(body);
     await this.page.keyboard.press("Control+s");
@@ -328,6 +337,11 @@ export class App {
   async newPageWithBody(title: string, body: string, expectedCount: number) {
     await this.newTitledPage(title, expectedCount);
     await this.setBody(body);
+  }
+
+  async newPageWithBodyFromInput(title: string, body: string, expectedCount: number) {
+    await this.newTitledPage(title, expectedCount);
+    await this.setBodyFromInput(body);
   }
 
   /** Ctrl+Shift+N, name the section (bare Enter keeps "New Section"); ends in
