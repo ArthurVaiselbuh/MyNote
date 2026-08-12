@@ -8,12 +8,26 @@ const RAIL_READY = { timeout: 10_000 };
 const rail = (app: App) => app.page.locator(".history-rail .picker-item");
 const historyLayout = (app: App) => app.page.locator(".history-layout");
 
-/** One page with `v1` committed by a close snapshot and `v2` live on disk. */
-async function pageWithTwoRevisions(app: App, title: string, v1: string, v2: string) {
+/** One page with `v1` committed by a close snapshot and `v2` live on disk.
+ * `fromInput` drives real keystrokes for the body instead — only needed when
+ * the test itself asserts on CodeMirror's undo history (see setBodyFromInput). */
+async function pageWithTwoRevisions(
+  app: App,
+  title: string,
+  v1: string,
+  v2: string,
+  fromInput = false,
+) {
   await app.enableGitSnapshots();
-  await app.newPageWithBody(title, v1, 1);
-  await app.relaunch();
-  await app.setBody(v2);
+  if (fromInput) {
+    await app.newPageWithBodyFromInput(title, v1, 1);
+    await app.relaunch();
+    await app.setBodyFromInput(v2);
+  } else {
+    await app.newPageWithBody(title, v1, 1);
+    await app.relaunch();
+    await app.setBody(v2);
+  }
 }
 
 /** Deletes the selected page and relaunches twice, so the deletion is both
@@ -26,7 +40,7 @@ async function deleteSelectedAndCommit(app: App) {
 }
 
 test("page history: diff shows the whole file, restore is undoable", async ({ app }) => {
-  await pageWithTwoRevisions(app, "Doc", "v1 line\nkeep me", "v2 line\nkeep me");
+  await pageWithTwoRevisions(app, "Doc", "v1 line\nkeep me", "v2 line\nkeep me", true);
 
   await app.page.keyboard.press("Control+h");
   await expect(historyLayout(app)).toBeVisible();

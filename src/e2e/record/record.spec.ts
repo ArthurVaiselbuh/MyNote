@@ -272,7 +272,7 @@ test("history: snapshots, diff, restore", async ({ app }) => {
   test.skip(!hasGit(), NO_GIT_REASON);
 
   await app.enableGitSnapshots();
-  await app.newPageWithBody("Scratch pad", "throwaway numbers from the sync", 1);
+  await app.newPageWithBodyFromInput("Scratch pad", "throwaway numbers from the sync", 1);
   await app.newTitledPage("Release checklist", 2);
   await setBodyLines(app, CHECKLIST_V1);
   await app.relaunch(); // close-commit: the first snapshot
