@@ -2,7 +2,7 @@
 name = "MyNote"
 # Not significant — tauri.conf.json holds the shipped version.
 # Bump both with scripts/version_stamp.ps1.
-version = "1.2.9999"
+version = "1.3.9999"
 edition = "2021"
 rust-version = "1.77"
 
