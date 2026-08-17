@@ -34,24 +34,33 @@ function lastBlockWhile(
 export function previewPositionAt(
   container: HTMLElement,
   focused: Element | null,
-): { bodyLine: number; offsetFromTop: number } | null {
+): { bodyLine: number; offsetRatio: number } | null {
   const containerTop = topOf(container);
   const block =
     focused?.closest<HTMLElement>(`[${LINE_ATTR}]`) ??
     lastBlockWhile(container, (b) => offsetBelow(containerTop, b) <= 1);
   if (!block) return null;
+  const height = block.getBoundingClientRect().height;
   return {
     bodyLine: bodyLineOf(block),
-    offsetFromTop: offsetBelow(containerTop, block),
+    offsetRatio: height > 0 ? clampRatio(-offsetBelow(containerTop, block) / height) : 0,
   };
 }
 
 export function scrollPreviewToBodyLine(
   container: HTMLElement,
   bodyLine: number,
-  offsetFromTop: number,
+  offsetRatio: number,
 ) {
   const block = lastBlockWhile(container, (b) => bodyLineOf(b) <= bodyLine);
   if (!block) return;
-  container.scrollTop += offsetBelow(topOf(container), block) - offsetFromTop;
+  const height = block.getBoundingClientRect().height;
+  // getBoundingClientRect is viewport-relative, so raising scrollTop moves a
+  // block's on-screen top *up* — the delta needed is the block's current
+  // offset plus how far into it we want to land, not minus
+  container.scrollTop += offsetBelow(topOf(container), block) + offsetRatio * height;
+}
+
+function clampRatio(x: number): number {
+  return Math.min(1, Math.max(0, x));
 }

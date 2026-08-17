@@ -55,12 +55,15 @@ export async function loadViewPositions() {
 }
 
 /** The spot the mode being left was showing, for the mode being entered to land
- * on. `text` is the matched string under the preview's find, so the editor can
- * put the caret on the hit itself rather than at the start of its line. */
+ * on. `offsetRatio` is fraction-of-block-height, not pixels — the editor and
+ * preview render the same body line at different heights, so a raw pixel
+ * offset from one doesn't mean the same thing in the other. `text` is the
+ * matched string under the preview's find, so the editor can put the caret on
+ * the hit itself rather than at the start of its line. */
 export interface ModeAnchor {
   pageId: string;
   bodyLine: number;
-  offsetFromTop: number;
+  offsetRatio: number;
   text?: string;
 }
 
