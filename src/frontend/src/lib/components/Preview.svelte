@@ -87,7 +87,7 @@
       // a find match owns the scroll — opening a search result lands here
       if (!containerEl || currentMatch()) return;
       const pos = viewPosOf(pageId);
-      if (anchor) scrollPreviewToBodyLine(containerEl, anchor.bodyLine, anchor.offsetFromTop);
+      if (anchor) scrollPreviewToBodyLine(containerEl, anchor.bodyLine, anchor.offsetRatio);
       else containerEl.scrollTop = pos.previewScrollTop;
       pos.previewScrollTop = containerEl.scrollTop;
     });

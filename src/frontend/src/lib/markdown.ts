@@ -164,3 +164,24 @@ export function renderBody(body: string): string {
   const { text, bodyLines } = preserveBlankRuns(body);
   return md.render(text, { bodyLines });
 }
+
+/** The body-line span of the preview block containing `bodyLine` — a paragraph,
+ * list item, or fenced code block collapses several source lines into one
+ * rendered element, so the editor (one CM block per source line) needs this to
+ * know how many of its own lines correspond to that single preview block. */
+export function blockRangeAt(body: string, bodyLine: number): { start: number; end: number } {
+  const { text, bodyLines } = preserveBlankRuns(body);
+  const starts = md
+    .parse(text, { bodyLines })
+    .map((t) => t.attrGet(LINE_ATTR))
+    .filter((v): v is string => v !== null)
+    .map(Number);
+  const totalLines = body.split("\n").length;
+  let start = 0;
+  let end = totalLines;
+  for (let i = 0; i < starts.length && starts[i] <= bodyLine; i++) {
+    start = starts[i];
+    end = i + 1 < starts.length ? starts[i + 1] : totalLines;
+  }
+  return { start, end };
+}

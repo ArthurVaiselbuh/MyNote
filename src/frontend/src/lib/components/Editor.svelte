@@ -70,6 +70,7 @@
   import { api } from "../api";
   import { focusSelect } from "../autofocus";
   import { hintOf, labelOf } from "../keys/bindings";
+  import { blockRangeAt } from "../markdown";
   import { onRequest } from "../onRequest.svelte";
   import { editorCtl } from "../paneCtl";
   import { app, type FindPrefill } from "../state/app.svelte";
@@ -163,11 +164,34 @@
     if (!view || !loadedId) return null;
     const heightAtTop = heightAtViewportTop(view);
     const block = view.lineBlockAtHeight(Math.max(0, heightAtTop));
+    const bodyLine = view.state.doc.lineAt(block.from).number - 1;
+    const dims = blockHeight(view, blockRangeAt(view.state.doc.toString(), bodyLine));
     return {
       pageId: loadedId,
-      bodyLine: view.state.doc.lineAt(block.from).number - 1,
-      offsetFromTop: block.top - heightAtTop,
+      bodyLine,
+      offsetRatio: dims.height > 0 ? clampRatio((heightAtTop - dims.top) / dims.height) : 0,
     };
+  }
+
+  function clampRatio(x: number): number {
+    return Math.min(1, Math.max(0, x));
+  }
+
+  function lineTop(v: EditorView, bodyLine: number): number {
+    return v.lineBlockAt(v.state.doc.line(Math.min(bodyLine + 1, v.state.doc.lines)).from).top;
+  }
+
+  // a preview block (paragraph, list item, fenced code block) can merge many
+  // source lines into one rendered element — this is the editor's own height
+  // across that same body-line span, so offsetRatio means the same fraction on
+  // both sides of the toggle instead of "fraction of one CM line" vs "fraction
+  // of the whole merged block"
+  function blockHeight(v: EditorView, range: { start: number; end: number }): { top: number; height: number } {
+    const top = lineTop(v, range.start);
+    const totalLines = v.state.doc.lines;
+    const bottom =
+      range.end >= totalLines ? v.lineBlockAt(v.state.doc.line(totalLines).from).bottom : lineTop(v, range.end);
+    return { top, height: bottom - top };
   }
 
   function rememberEditorPos() {
@@ -183,9 +207,12 @@
     viewPosChanged(loadedId);
   }
 
+  function lineAtAnchor(v: EditorView, anchor: ModeAnchor) {
+    return v.state.doc.line(Math.min(anchor.bodyLine + 1, v.state.doc.lines));
+  }
+
   function cursorAtAnchor(v: EditorView, anchor: ModeAnchor): number {
-    const doc = v.state.doc;
-    const line = doc.line(Math.min(anchor.bodyLine + 1, doc.lines));
+    const line = lineAtAnchor(v, anchor);
     const column = anchor.text ? line.text.toLowerCase().indexOf(anchor.text.toLowerCase()) : -1;
     return column < 0 ? line.from : line.from + column;
   }
@@ -199,18 +226,24 @@
   }
 
   // only a deliberate mode flip carries an anchor; entering the editor any other
-  // way (insert helper, revision restore) keeps the position that path chose
+  // way (insert helper, revision restore) keeps the position that path chose.
+  // The anchor's line is the top-of-viewport target for scroll — the caret
+  // itself only follows it when landing on a preview find match; otherwise the
+  // real caret spot (saved by rememberEditorPos before preview took over) wins.
   function landOnModeAnchor() {
     if (!view || !loadedId) return;
     const anchor = takeModeAnchor(loadedId);
     if (!anchor) return;
-    const cursor = cursorAtAnchor(view, anchor);
-    viewPosOf(loadedId).editorCursor = cursor;
+    const pos = viewPosOf(loadedId);
+    const cursor = anchor.text
+      ? cursorAtAnchor(view, anchor)
+      : Math.min(pos.editorCursor, view.state.doc.length);
+    pos.editorCursor = cursor;
     viewPosChanged(loadedId);
     view.dispatch({ selection: { anchor: cursor } });
     afterLayout((v) => {
-      v.scrollDOM.scrollTop +=
-        v.lineBlockAt(cursor).top - anchor.offsetFromTop - heightAtViewportTop(v);
+      const dims = blockHeight(v, blockRangeAt(v.state.doc.toString(), anchor.bodyLine));
+      v.scrollDOM.scrollTop += dims.top + anchor.offsetRatio * dims.height - heightAtViewportTop(v);
     });
   }
 
