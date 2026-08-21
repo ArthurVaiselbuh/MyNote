@@ -15,6 +15,7 @@ import {
   type Pane,
 } from "./state/app.svelte";
 import {
+  ancestorsOf,
   countPages,
   countSubtree,
   findNode,
@@ -522,6 +523,16 @@ export function activateSelected() {
   focusPane("editor");
 }
 
+export function expandAncestors(pageId: string) {
+  const section = currentSection();
+  if (!section) return;
+  for (const ancestor of ancestorsOf(section.pages, pageId)) {
+    if (ancestor.expanded) continue;
+    ancestor.expanded = true;
+    void api.setExpanded(ancestor.id, true).catch(() => {});
+  }
+}
+
 export async function toggleExpand(id: string) {
   const section = currentSection();
   if (!section) return;
@@ -656,6 +667,7 @@ export function openResult(idx: number) {
   const sectionIdx = app.notebook.sections.findIndex((s) => s.id === hit.sectionId);
   if (sectionIdx < 0) return;
   app.sectionIdx = sectionIdx;
+  expandAncestors(hit.pageId);
   // the editor remounts when leaving the results view and consumes the prefill on load
   app.findPrefill = resultFindPrefill();
   app.mode = "preview";
