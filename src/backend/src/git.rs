@@ -46,6 +46,8 @@ const GITIGNORE: &str = "\
 notebook.json.bak
 notebook.user.json
 *.tmp
+files/
+trash/
 
 .DS_Store
 Thumbs.db
@@ -355,7 +357,10 @@ pub fn ensure_repo(root: &Path) -> Result<(), String> {
     fs::create_dir_all(root.join(HOOKS_PATH)).map_err(err)?;
     seed_file_if_absent(&root.join(".gitattributes"), GITATTRIBUTES)?;
     seed_file_if_absent(&root.join(".gitignore"), GITIGNORE)?;
-    ensure_excluded(root, &[crate::store::USER_STATE_FILE])?;
+    ensure_excluded(
+        root,
+        &[crate::store::USER_STATE_FILE, "files/", "trash/"],
+    )?;
     for (key, value) in PERSISTED_CONFIG {
         run_config(root, key, value)?;
     }
@@ -782,6 +787,8 @@ mod tests {
         assert!(GITIGNORE.contains("notebook.json.bak"));
         assert!(GITIGNORE.contains(crate::store::USER_STATE_FILE));
         assert!(GITIGNORE.contains("*.tmp"));
+        assert!(GITIGNORE.contains("files/"));
+        assert!(GITIGNORE.contains("trash/"));
         assert!(GITATTRIBUTES.contains("* -text"));
     }
 
@@ -1065,6 +1072,38 @@ mod tests {
         assert!(snap(dir.path()));
         let files = git_text(dir.path(), &["ls-files"]);
         assert!(!files.contains(crate::store::USER_STATE_FILE));
+    }
+
+    #[test]
+    fn a_user_owned_gitignore_still_gets_files_and_trash_excluded() {
+        need_git!();
+        let dir = init_temp_repo();
+        fs::write(dir.path().join(".gitignore"), "custom-edit\n").unwrap();
+        ensure_repo(dir.path()).unwrap();
+        ensure_repo(dir.path()).unwrap();
+
+        let exclude =
+            fs::read_to_string(dir.path().join(".git").join("info").join("exclude")).unwrap();
+        for pattern in ["files/", "trash/"] {
+            assert_eq!(
+                exclude.lines().filter(|l| l.trim() == pattern).count(),
+                1,
+                "{pattern} is appended once, not on every ensure_repo"
+            );
+        }
+
+        fs::write(dir.path().join("notebook.json"), "{}").unwrap();
+        let files_dir = dir.path().join("files").join("some-page");
+        fs::create_dir_all(&files_dir).unwrap();
+        fs::write(files_dir.join("a.txt"), "x").unwrap();
+        let trash_dir = dir.path().join("trash").join("some-page");
+        fs::create_dir_all(&trash_dir).unwrap();
+        fs::write(trash_dir.join("b.txt"), "y").unwrap();
+
+        assert!(snap(dir.path()));
+        let files = git_text(dir.path(), &["ls-files"]);
+        assert!(!files.contains("files/"));
+        assert!(!files.contains("trash/"));
     }
 
     // -----------------------------------------------------------------

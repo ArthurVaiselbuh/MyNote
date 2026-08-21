@@ -840,8 +840,9 @@ export function askConfirm(
   action: () => void | Promise<void>,
   label?: string,
   returnTo?: ModalName,
+  danger = true,
 ) {
-  app.confirm = { message, action: () => void action(), label, returnTo };
+  app.confirm = { message, action: () => void action(), label, returnTo, danger };
   app.modal = "confirm";
 }
 
@@ -850,6 +851,75 @@ export function openInsertHelper() {
   log.verbose("open insert helper");
   if (app.mode !== "edit") app.mode = "edit";
   app.modal = "insert";
+}
+
+// ---------- attachments ----------
+
+const ATTACH_WARNING_KEY = "mynote.filesNotInGit.v1";
+
+function hasAcknowledgedAttachWarning(): boolean {
+  try {
+    return localStorage.getItem(ATTACH_WARNING_KEY) === "1";
+  } catch {
+    return false;
+  }
+}
+
+function rememberAttachWarning() {
+  try {
+    localStorage.setItem(ATTACH_WARNING_KEY, "1");
+  } catch {
+    // private mode / storage disabled — worst case the warning shows again
+  }
+}
+
+// shared by both attachment-ingestion routes — the file picker and a
+// clipboard paste straight into the editor — so neither can bypass the
+// one-time warning the other one shows
+export function confirmAttachOnce(proceed: () => void) {
+  if (hasAcknowledgedAttachWarning() || !app.git?.enabled) {
+    proceed();
+    return;
+  }
+  askConfirm(
+    "Attached files are not stored in git history — snapshots and the History pane can't bring them back if they're lost.",
+    () => {
+      rememberAttachWarning();
+      proceed();
+    },
+    "Attach",
+    undefined,
+    false,
+  );
+}
+
+export function attachFile() {
+  if (app.view !== "page" || !app.currentPageId) return;
+  confirmAttachOnce(() => void doAttachFile());
+}
+
+async function doAttachFile() {
+  const pageId = app.currentPageId;
+  if (!pageId) return;
+  log.verbose("open attach file dialog");
+  const path = await openDialog({ title: "Attach file" });
+  if (typeof path !== "string") return;
+  try {
+    const rel = await api.attachFile(pageId, path);
+    if (app.currentPageId !== pageId) {
+      flashStatus("the open page changed — attachment not inserted");
+      return;
+    }
+    const name = decodeURIComponent(rel.replace(/^.*\//, ""));
+    editorCtl.current?.insert(`[${name}](${rel})`);
+  } catch (e) {
+    app.status = String(e);
+  }
+}
+
+export function revealAttachment(href: string) {
+  log.verbose("reveal attachment in file manager");
+  api.revealAttachment(href).catch((e) => (app.status = String(e)));
 }
 
 export function overwriteAgentsMd() {

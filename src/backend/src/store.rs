@@ -560,6 +560,10 @@ impl Store {
         if assets.is_dir() {
             let _ = fs::remove_dir_all(assets);
         }
+        let files = crate::files::files_dir_in(&self.root, id);
+        if files.is_dir() {
+            let _ = crate::files::move_dir_to_trash(&self.root, &files, id);
+        }
     }
 
     pub fn create_page(
@@ -917,6 +921,7 @@ impl Store {
     pub fn close(self) -> CloseInfo {
         self.purge_deleted_files();
         let _ = crate::assets::prune(&self);
+        let _ = crate::files::prune_to_trash(&self);
         let _ = self.save();
         let _ = self.save_view_state();
         CloseInfo {
@@ -999,13 +1004,25 @@ impl Store {
         let content = if id == page.id {
             page.content
         } else {
-            // the id changed, so the page's own asset links must follow it —
-            // otherwise every image in the restored page renders broken.
-            page.content.replace(&assets_rel_dir(&page.id), &assets_rel_dir(&id))
+            // the id changed, so the page's own asset and attachment links
+            // must follow it — otherwise every image and file link in the
+            // restored page renders broken.
+            page.content
+                .replace(&assets_rel_dir(&page.id), &assets_rel_dir(&id))
+                .replace(&crate::files::files_rel_dir(&page.id), &crate::files::files_rel_dir(&id))
         };
         atomic_write(&self.page_path(&id), content.as_bytes())?;
         for (name, bytes) in &page.assets {
             write_asset_file(&self.assets_dir(&id), name, bytes)?;
+        }
+        if id != page.id {
+            // attachments aren't versioned, so the only copy of them (if any
+            // survived on disk under the old id) has to move with the page —
+            // the content rewrite above already points its links at the new id.
+            let old_files = crate::files::files_dir_in(&self.root, &page.id);
+            if old_files.is_dir() {
+                let _ = fs::rename(&old_files, crate::files::files_dir_in(&self.root, &id));
+            }
         }
         // defensive: a restore must never leave a recovered file eligible
         // for purge by an unrelated still-pending delete of the same id.
@@ -1941,6 +1958,36 @@ mod tests {
     }
 
     #[test]
+    fn insert_restored_mints_a_new_id_when_taken_and_rewrites_attachment_links() {
+        let (_dir, mut store) = open_store();
+        let sid = section_id(&store);
+        let live = store.create_page(&sid, None, None).unwrap();
+        let taken_id = live.id.clone();
+
+        // the attachment survives on disk under the old id — deferred
+        // deletion within the same session, before the file was pruned
+        let old_files = crate::files::files_dir_in(&store.root, &taken_id);
+        fs::create_dir_all(&old_files).unwrap();
+        fs::write(old_files.join("spec.pdf"), b"pdf-bytes").unwrap();
+
+        let page = IncomingPage {
+            id: taken_id.clone(),
+            content: format!("# Recovered\n\n[spec.pdf](files/{taken_id}/spec.pdf)\n"),
+            assets: vec![],
+            children: vec![],
+        };
+        let written = store.insert_restored(&sid, None, vec![page]).unwrap();
+        assert_ne!(written[0].id, taken_id, "the live id must not be clobbered");
+        let new_id = written[0].id.clone();
+
+        let content = store.read_page(&new_id).unwrap();
+        assert!(content.contains(&format!("files/{new_id}/spec.pdf")));
+        assert!(!content.contains(&format!("files/{taken_id}/spec.pdf")));
+        assert!(crate::files::files_dir_in(&store.root, &new_id).join("spec.pdf").exists());
+        assert!(!old_files.exists());
+    }
+
+    #[test]
     fn insert_restored_preserves_nesting() {
         let (_dir, mut store) = open_store();
         let sid = section_id(&store);
@@ -2050,5 +2097,25 @@ mod tests {
         let page = store.find_page(&pid).unwrap();
         assert_eq!(page.title, "Persisted");
         assert!(!page.expanded);
+    }
+
+    #[test]
+    fn delete_page_then_close_moves_its_files_dir_to_trash_instead_of_deleting() {
+        let dir = tempdir().unwrap();
+        let mut store = Store::open(dir.path()).unwrap();
+        let sid = section_id(&store);
+        let page = store.create_page(&sid, None, None).unwrap();
+
+        let files_dir = crate::files::files_dir_in(&store.root, &page.id);
+        fs::create_dir_all(&files_dir).unwrap();
+        fs::write(files_dir.join("note.pdf"), b"pdf").unwrap();
+
+        store.delete_page(&page.id).unwrap();
+        let info = store.close();
+
+        assert!(!crate::files::files_dir_in(&info.root, &page.id).exists());
+        assert!(crate::files::trash_dir_in(&info.root, &page.id)
+            .join("note.pdf")
+            .exists());
     }
 }

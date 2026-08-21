@@ -1,5 +1,6 @@
 mod assets;
 mod commands;
+mod files;
 mod git;
 mod history;
 mod hotkey;
@@ -78,6 +79,11 @@ pub fn run() {
             commands::set_view_positions,
             commands::search_pages,
             commands::save_image,
+            commands::attach_file,
+            commands::attach_file_bytes,
+            commands::reveal_attachment,
+            commands::trash_stats,
+            commands::reveal_trash,
             commands::inspect_mht,
             commands::import_mht,
             commands::inspect_md,

@@ -6,6 +6,7 @@ use std::sync::{mpsc, Mutex};
 use tauri::{Emitter, State};
 
 use crate::assets;
+use crate::files;
 use crate::git::{self, SnapshotKind};
 use crate::history;
 use crate::hotkey;
@@ -395,6 +396,56 @@ pub fn save_image(
     ext: String,
 ) -> Result<String, String> {
     with_store(&state, |s| assets::save_image(s, &page_id, &data, &ext))
+}
+
+#[tauri::command]
+pub fn attach_file(
+    state: State<'_, AppState>,
+    page_id: String,
+    source_path: String,
+) -> Result<String, String> {
+    log::info!("attach file to page {page_id}");
+    with_store(&state, |s| files::attach_path(s, &page_id, Path::new(&source_path)))
+}
+
+#[tauri::command]
+pub fn attach_file_bytes(
+    state: State<'_, AppState>,
+    page_id: String,
+    name: String,
+    data: String,
+) -> Result<String, String> {
+    log::info!("attach pasted file to page {page_id}");
+    with_store(&state, |s| files::attach_bytes(s, &page_id, &name, &data))
+}
+
+#[tauri::command]
+pub fn reveal_attachment(state: State<'_, AppState>, rel: String) -> Result<(), String> {
+    let root = with_store(&state, |s| Ok(s.root.clone()))?;
+    let path = files::resolve_attachment_path(&root, &rel)?;
+    tauri_plugin_opener::reveal_item_in_dir(&path).map_err(|e| e.to_string())
+}
+
+#[derive(Serialize, Clone)]
+#[serde(rename_all = "camelCase")]
+pub struct TrashStats {
+    pub count: usize,
+    pub bytes: u64,
+}
+
+#[tauri::command]
+pub fn trash_stats(state: State<'_, AppState>) -> Result<TrashStats, String> {
+    let root = with_store(&state, |s| Ok(s.root.clone()))?;
+    let (count, bytes) = files::trash_stats(&root);
+    Ok(TrashStats { count, bytes })
+}
+
+#[tauri::command]
+pub fn reveal_trash(state: State<'_, AppState>) -> Result<(), String> {
+    let root = with_store(&state, |s| Ok(s.root.clone()))?;
+    let trash = root.join(files::TRASH_DIR);
+    std::fs::create_dir_all(&trash).map_err(|e| e.to_string())?;
+    tauri_plugin_opener::open_path(&trash, None::<&str>).map_err(|e| e.to_string())
 }
 
 #[tauri::command]

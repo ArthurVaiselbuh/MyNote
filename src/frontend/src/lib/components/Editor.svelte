@@ -358,6 +358,15 @@
         return true;
       }
     }
+    for (const item of items) {
+      if (item.kind === "file") {
+        const file = item.getAsFile();
+        if (!file) continue;
+        e.preventDefault();
+        act.confirmAttachOnce(() => void insertAttachment(file));
+        return true;
+      }
+    }
     return false;
   }
 
@@ -383,6 +392,27 @@
       view.dispatch({
         changes: { from: pos, insert: `![](${rel})` },
         selection: { anchor: pos + 2 },
+      });
+    } catch (e) {
+      app.status = String(e);
+    }
+  }
+
+  async function insertAttachment(file: File) {
+    if (!view || !loadedId) return;
+    const pageId = loadedId;
+    try {
+      const rel = await api.attachFileBytes(pageId, file.name, await base64Of(file));
+      if (!view || loadedId !== pageId) {
+        app.status = "the open page changed — attachment not inserted";
+        return;
+      }
+      const name = decodeURIComponent(rel.replace(/^.*\//, ""));
+      const pos = view.state.selection.main.head;
+      const text = `[${name}](${rel})`;
+      view.dispatch({
+        changes: { from: pos, insert: text },
+        selection: { anchor: pos + text.length },
       });
     } catch (e) {
       app.status = String(e);

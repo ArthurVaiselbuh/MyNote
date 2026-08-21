@@ -30,6 +30,10 @@ export interface ConfirmRequest {
   label?: string;
   /** Modal to step back to on Cancel/Esc instead of closing everything. */
   returnTo?: ModalName;
+  /** The confirm button is red unless this is explicitly false — most
+   * confirmations guard a destructive action, but a few (attaching a file)
+   * are just a heads-up. */
+  danger?: boolean;
 }
 
 export type HelpContext = "app" | "history";

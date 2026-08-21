@@ -120,6 +120,43 @@ describe("color span [text]{...}", () => {
   });
 });
 
+describe("attachment links", () => {
+  const id = "11111111-1111-1111-1111-111111111111";
+
+  it("tags a files/ href with a category class and the reveal hint", () => {
+    const html = renderBody(`[report.pdf](files/${id}/report.pdf)`);
+    expect(html).toContain(`class="attachment attachment-pdf"`);
+    expect(html).toMatch(/title="[^"]*\+Click to show in folder"/);
+  });
+
+  it("categorizes by extension, falling back to generic", () => {
+    const cases: [string, string][] = [
+      ["a.docx", "doc"],
+      ["a.xlsx", "sheet"],
+      ["a.pptx", "slide"],
+      ["a.zip", "archive"],
+      ["a.mp3", "audio"],
+      ["a.mp4", "video"],
+      ["a.ts", "code"],
+      ["a.bin", "generic"],
+    ];
+    for (const [name, category] of cases) {
+      const html = renderBody(`[x](files/${id}/${name})`);
+      expect(html).toContain(`attachment-${category}`);
+    }
+  });
+
+  it("leaves the href itself untouched — it is never rewritten to note-asset:", () => {
+    const html = renderBody(`[x](files/${id}/report.pdf)`);
+    expect(html).toContain(`href="files/${id}/report.pdf"`);
+  });
+
+  it("does not tag a plain page link or an assets/ image", () => {
+    expect(renderBody("[a](b.md)")).not.toContain("attachment");
+    expect(renderBody(`![a](assets/${id}/img.png)`)).not.toContain("attachment");
+  });
+});
+
 describe("body line attributes", () => {
   const lineOf = (html: string, tag: string) =>
     Number(new RegExp(`<${tag} ${LINE_ATTR}="(\\d+)"`).exec(html)?.[1] ?? -1);

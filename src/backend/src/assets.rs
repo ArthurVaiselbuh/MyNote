@@ -69,31 +69,8 @@ pub fn save_image(store: &Store, page_id: &str, data_b64: &str, ext: &str) -> Re
     Ok(assets_rel(page_id, &name))
 }
 
-fn continues_asset_name(c: char) -> bool {
-    !c.is_whitespace() && !matches!(c, '(' | ')' | '"' | '\'' | '<' | '>')
-}
-
 pub fn referenced_assets(content: &str) -> Vec<(String, String)> {
-    let prefix = format!("{}/", store::ASSETS_DIR);
-    let mut found = Vec::new();
-    let mut rest = content;
-    while let Some(at) = rest.find(&prefix) {
-        rest = &rest[at + prefix.len()..];
-        let Some((page_id, tail)) = rest.split_once('/') else {
-            continue;
-        };
-        if !store::is_page_id(page_id) {
-            continue;
-        }
-        let name: String = tail
-            .chars()
-            .take_while(|c| continues_asset_name(*c))
-            .collect();
-        if !name.is_empty() {
-            found.push((page_id.to_string(), name));
-        }
-    }
-    found
+    crate::files::scan_refs(content, store::ASSETS_DIR)
 }
 
 pub fn prune(store: &Store) -> Result<usize, String> {
