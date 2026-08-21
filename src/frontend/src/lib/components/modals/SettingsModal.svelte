@@ -20,6 +20,11 @@
 
   let gitIntervalMinutes = $state(minutesOf(app.git?.intervalSecs));
   let version = $state("");
+  let trash = $state<{ count: number; bytes: number } | null>(null);
+
+  function refreshTrash() {
+    void api.trashStats().then((s) => (trash = s));
+  }
 
   onMount(() => {
     void getVersion().then((v) => (version = v));
@@ -27,11 +32,39 @@
       app.git = s;
       gitIntervalMinutes = minutesOf(s.intervalSecs);
     });
+    refreshTrash();
+    window.addEventListener("focus", refreshTrash);
+    return () => window.removeEventListener("focus", refreshTrash);
   });
 
   async function saveGitSnapshots(enabled: boolean) {
     try {
       app.git = await api.setGitSnapshots(enabled, gitIntervalMinutes * 60);
+    } catch (err) {
+      app.status = String(err);
+    }
+  }
+
+  function formatBytes(bytes: number): string {
+    if (bytes < 1024) return `${bytes} B`;
+    const units = ["KB", "MB", "GB"];
+    let value = bytes / 1024;
+    let i = 0;
+    while (value >= 1024 && i < units.length - 1) {
+      value /= 1024;
+      i++;
+    }
+    return `${value.toFixed(1)} ${units[i]}`;
+  }
+
+  function trashLabel(): string {
+    if (!trash) return "Show trash";
+    return `Show trash (${trash.count} file${trash.count === 1 ? "" : "s"}, ${formatBytes(trash.bytes)})`;
+  }
+
+  async function openTrash() {
+    try {
+      await api.revealTrash();
     } catch (err) {
       app.status = String(err);
     }
@@ -148,6 +181,10 @@
           />
         </div>
       {/if}
+      <div class="settings-row">
+        <span>File attachments</span>
+        <button onclick={() => void openTrash()}>{trashLabel()}</button>
+      </div>
       <div class="settings-row">
         <span>Reset AGENTS.md</span>
         <button onclick={() => act.overwriteAgentsMd()}>Overwrite…</button>

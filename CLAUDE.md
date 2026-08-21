@@ -57,6 +57,9 @@ are supported cross-platform builds off the same code.
 - `notebook.user.json` — volatile per-user view state, not version controlled.
 - `assets/<page-id>/` — pasted images. Orphans are pruned only on notebook
   close/switch, never during a session (preserves editor undo).
+- `files/<page-id>/` — arbitrary attachments, linked as plain CommonMark
+  relative links; gitignored, unlike `assets/`. `trash/<page-id>/` is where
+  pruning and page deletion move them instead of deleting (see below).
 - **Deletes are deferred:** a delete drops the node from `notebook.json`
   immediately, but `.md` files and assets stay on disk until clean close so
   tree undo can restore them. Only ids the app deleted this session are purged
@@ -75,6 +78,13 @@ are supported cross-platform builds off the same code.
   Windows, `note-asset://localhost/` elsewhere); `markdown.ts` picks the base
   by userAgent. CSP `img-src` must keep both forms, and `connect-src` must keep
   `ipc: http://ipc.localhost` or Tauri IPC falls back to slow postMessage.
+- **Attachments are never versioned** (`files.rs`) — living in gitignored
+  `files/`/`trash/` trades away git as a safety net for no size limit and no
+  repo bloat; a deleted attachment moves to `trash/` for the user to clear
+  themselves, never auto-purged. They are **revealed, not launched**:
+  Ctrl+Click only selects the file in the OS file manager
+  (`tauri_plugin_opener::reveal_item_in_dir`), so a shared notebook can never
+  use MyNote as a delivery mechanism.
 - **Open/switch notebook** (Ctrl+O) is an in-app pane, not a bare OS folder
   picker: recent notebooks, plus New (refuses a folder that already has a
   `notebook.json`) and Open (native picker selecting the `notebook.json` file

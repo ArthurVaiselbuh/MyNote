@@ -9,7 +9,7 @@
   import { openPreviewMenu } from "../menus";
   import { previewCtl } from "../paneCtl";
   import { previewPositionAt, scrollPreviewToBodyLine } from "../previewLines";
-  import { pageIdFromHref, searchRegex } from "../regex";
+  import { attachmentFromHref, pageIdFromHref, searchRegex } from "../regex";
   import { app, type FindPrefill } from "../state/app.svelte";
   import { takeModeAnchor, viewPosChanged, viewPosOf } from "../viewPos";
 
@@ -150,8 +150,13 @@
     e.preventDefault();
     const href = link.getAttribute("href") ?? "";
     const pageId = pageIdFromHref(href);
-    if (pageId) act.openPageById(pageId);
-    else if (modPressed(e)) act.openExternalLink(href);
+    if (pageId) {
+      act.openPageById(pageId);
+      return;
+    }
+    if (!modPressed(e)) return;
+    if (attachmentFromHref(href)) act.revealAttachment(href);
+    else act.openExternalLink(href);
   }
 </script>
 

@@ -2,7 +2,7 @@ import * as act from "./actions";
 import { openContextMenu, type MenuEntry } from "./contextMenu.svelte";
 import { labelOf } from "./keys/bindings";
 import { MOD_LABEL } from "./keys/platform";
-import { isExternalHref, pageIdFromHref } from "./regex";
+import { attachmentFromHref, isExternalHref, pageIdFromHref } from "./regex";
 import { app } from "./state/app.svelte";
 import { isTextEntry } from "./textEntry";
 
@@ -81,6 +81,8 @@ export function openPreviewMenu(e: MouseEvent) {
   const pageId = pageIdFromHref(href);
   if (pageId) {
     entries.push({ label: "Open page", run: () => act.openPageById(pageId) });
+  } else if (attachmentFromHref(href)) {
+    entries.push({ label: "Show in folder", run: () => act.revealAttachment(href) });
   } else if (isExternalHref(href)) {
     entries.push({ label: "Open link in browser", run: () => act.openExternalLink(href) });
   }

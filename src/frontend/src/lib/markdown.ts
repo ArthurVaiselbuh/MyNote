@@ -6,7 +6,7 @@ import MarkdownIt from "markdown-it";
 import type { RenderRule } from "markdown-it/lib/renderer.mjs";
 import type StateInline from "markdown-it/lib/rules_inline/state_inline.mjs";
 import { MOD_LABEL } from "./keys/platform";
-import { isExternalHref } from "./regex";
+import { attachmentFromHref, isExternalHref } from "./regex";
 
 hljs.registerLanguage("powershell", powershell);
 hljs.registerLanguage("dos", dos);
@@ -37,10 +37,31 @@ const renderToken: RenderRule = (tokens, idx, opts, _env, self) =>
 const defaultImage = md.renderer.rules.image ?? renderToken;
 const defaultLinkOpen = md.renderer.rules.link_open ?? renderToken;
 
+// one small built-in icon set keyed by extension, not per-extension or
+// OS-extracted icons (which would be Windows-only)
+const ATTACHMENT_CATEGORIES: [RegExp, string][] = [
+  [/\.pdf$/i, "pdf"],
+  [/\.(docx?|rtf|odt)$/i, "doc"],
+  [/\.(xlsx?|csv|ods)$/i, "sheet"],
+  [/\.(pptx?|odp)$/i, "slide"],
+  [/\.(zip|rar|7z|tar|gz)$/i, "archive"],
+  [/\.(mp3|wav|flac|ogg|m4a)$/i, "audio"],
+  [/\.(mp4|mov|avi|mkv|webm)$/i, "video"],
+  [/\.(json|ts|tsx|js|jsx|py|rs|go|java|c|cpp|h|cs|css|html|xml|yml|yaml|sh|ps1)$/i, "code"],
+];
+
+function attachmentCategory(name: string): string {
+  return ATTACHMENT_CATEGORIES.find(([re]) => re.test(name))?.[1] ?? "generic";
+}
+
 md.renderer.rules.link_open = (tokens, idx, opts, env, self) => {
   const href = tokens[idx].attrGet("href") ?? "";
+  const attachment = attachmentFromHref(href);
   if (isExternalHref(href)) {
     tokens[idx].attrSet("title", `${MOD_LABEL}+Click to open in browser`);
+  } else if (attachment) {
+    tokens[idx].attrSet("class", `attachment attachment-${attachmentCategory(attachment.name)}`);
+    tokens[idx].attrSet("title", `${MOD_LABEL}+Click to show in folder`);
   }
   return defaultLinkOpen(tokens, idx, opts, env, self);
 };

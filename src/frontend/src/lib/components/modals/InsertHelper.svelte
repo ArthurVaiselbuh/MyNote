@@ -58,6 +58,17 @@
       search: `colour text ${Object.keys(COLOR_PALETTE).join(" ")} grey`,
       action: () => act.openModal("colorPicker"),
     },
+    {
+      label: "Attach file…",
+      before: "",
+      after: "",
+      hint: "[name](files/…)",
+      search: "attachment attach upload pdf document file",
+      action: () => {
+        act.closeModal();
+        act.attachFile();
+      },
+    },
   ];
 
   const chord = $derived(labelOf("app.insertHelper"));

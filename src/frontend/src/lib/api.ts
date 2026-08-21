@@ -118,6 +118,11 @@ export interface Settings {
   window: WindowGeom | null;
 }
 
+export interface TrashStats {
+  count: number;
+  bytes: number;
+}
+
 export interface GitStatus {
   available: boolean;
   enabled: boolean;
@@ -206,6 +211,13 @@ export const api = {
     invoke<SearchResults>("search_pages", { query, mode }),
   saveImage: (pageId: string, data: string, ext: string) =>
     invoke<string>("save_image", { pageId, data, ext }),
+  attachFile: (pageId: string, sourcePath: string) =>
+    invoke<string>("attach_file", { pageId, sourcePath }),
+  attachFileBytes: (pageId: string, name: string, data: string) =>
+    invoke<string>("attach_file_bytes", { pageId, name, data }),
+  revealAttachment: (rel: string) => invoke<void>("reveal_attachment", { rel }),
+  trashStats: () => invoke<TrashStats>("trash_stats"),
+  revealTrash: () => invoke<void>("reveal_trash"),
   inspectMht: (paths: string[]) =>
     invoke<ImportPreview>("inspect_mht", { paths }),
   importMht: (paths: string[]) =>
