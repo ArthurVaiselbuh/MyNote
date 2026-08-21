@@ -126,6 +126,37 @@ pub fn revision_text(root: &Path, id: &str, sha: &str) -> Result<RevisionText, S
     page_text_at(root, sha, id)
 }
 
+pub fn missing_revision_assets(
+    root: &Path,
+    id: &str,
+    sha: &str,
+) -> Result<Vec<store::IncomingAsset>, String> {
+    check_page_id(id)?;
+    check_sha(sha)?;
+    let revision = page_text_at(root, sha, id)?;
+    if revision.missing {
+        return Ok(Vec::new());
+    }
+    let absent: Vec<(String, String)> = crate::assets::referenced_assets(&revision.text)
+        .into_iter()
+        .collect::<BTreeSet<_>>()
+        .into_iter()
+        .filter(|(owner, name)| !store::assets_dir_in(root, owner).join(name).exists())
+        .collect();
+
+    let specs: Vec<String> = absent
+        .iter()
+        .map(|(owner, name)| format!("{sha}:{}", store::assets_rel(owner, name)))
+        .collect();
+    Ok(git::read_blobs(root, &specs)?
+        .into_iter()
+        .zip(absent)
+        .filter_map(|(blob, (page_id, name))| {
+            Some(store::IncomingAsset { page_id, name, bytes: blob? })
+        })
+        .collect())
+}
+
 /// The text of a page as it stood right before `sha` deleted it.
 pub fn deleted_page_text(root: &Path, sha: &str, id: &str) -> Result<RevisionText, String> {
     check_page_id(id)?;
@@ -514,6 +545,58 @@ mod tests {
             .map(|r| revision_text(&store.root, &parent_id, &r.sha).unwrap())
             .collect();
         assert_eq!(texts.iter().filter(|t| t.missing).count(), 1, "only the delete commit is missing");
+    }
+
+    #[test]
+    fn missing_revision_assets_brings_back_a_pruned_image() {
+        need_git!();
+        let dir = tempdir().unwrap();
+        let (page_id, img_rel) = {
+            let mut store = Store::open(dir.path()).unwrap();
+            let sid = store.notebook.sections[0].id.clone();
+            let page = store.create_page(&sid, None, None).unwrap();
+            let img = assets::save_image(&store, &page.id, TINY_PNG_B64, "png").unwrap();
+            store.write_page(&page.id, &format!("# Shot\n\n![x]({img})\n")).unwrap();
+            git::ensure_repo(&store.root).unwrap();
+            assert!(snapshot(&store.root, SnapshotKind::Open));
+
+            store.write_page(&page.id, "# Shot\n\nthe image is gone now\n").unwrap();
+            let info = store.close();
+            assert!(git::snapshot(&info.root, SnapshotKind::Close).unwrap());
+            (page.id, img)
+        };
+        assert!(!dir.path().join(&img_rel).exists(), "close should have pruned it");
+
+        let store = Store::open(dir.path()).unwrap();
+        let revs = page_revisions(&store.root, &page_id).unwrap();
+        let with_image = revs.last().unwrap();
+
+        let recovered = missing_revision_assets(&store.root, &page_id, &with_image.sha).unwrap();
+        assert_eq!(recovered.len(), 1);
+        assert_eq!(recovered[0].page_id, page_id);
+        assert_eq!(store.restore_assets(&recovered).unwrap(), 1);
+        assert!(dir.path().join(&img_rel).exists());
+
+        assert!(
+            missing_revision_assets(&store.root, &page_id, &with_image.sha).unwrap().is_empty(),
+            "nothing is missing once it is back on disk"
+        );
+    }
+
+    #[test]
+    fn missing_revision_assets_is_empty_for_a_revision_with_no_images() {
+        need_git!();
+        let dir = tempdir().unwrap();
+        let mut store = Store::open(dir.path()).unwrap();
+        let sid = store.notebook.sections[0].id.clone();
+        let page = store.create_page(&sid, None, None).unwrap();
+        store.write_page(&page.id, "# Plain\n\nno pictures\n").unwrap();
+        git::ensure_repo(&store.root).unwrap();
+        assert!(snapshot(&store.root, SnapshotKind::Open));
+
+        let revs = page_revisions(&store.root, &page.id).unwrap();
+        assert!(missing_revision_assets(&store.root, &page.id, &revs[0].sha).unwrap().is_empty());
+        assert!(missing_revision_assets(&store.root, &page.id, "not-a-sha").is_err());
     }
 
     #[test]

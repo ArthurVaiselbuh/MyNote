@@ -510,6 +510,21 @@ pub async fn deleted_page_text(state: State<'_, AppState>, sha: String, id: Stri
     history::deleted_page_text(&root, &sha, &id)
 }
 
+#[tauri::command]
+pub async fn restore_revision_assets(state: State<'_, AppState>, id: String, sha: String) -> Result<usize, String> {
+    let root = with_store(&state, |s| Ok(s.root.clone()))?;
+    let assets = {
+        let _gate = state.history_gate.lock().map_err(lock_err)?;
+        history::missing_revision_assets(&root, &id, &sha)?
+    }; // gate dropped here — restore_assets (a write) must not run under it
+    if assets.is_empty() {
+        return Ok(0);
+    }
+    let written = with_store(&state, |s| s.restore_assets(&assets))?;
+    log::info!("restored {written} asset(s) a revision still references");
+    Ok(written)
+}
+
 #[derive(Serialize, Clone)]
 #[serde(rename_all = "camelCase")]
 pub struct RestoreOutcome {

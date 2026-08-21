@@ -69,6 +69,33 @@ pub fn save_image(store: &Store, page_id: &str, data_b64: &str, ext: &str) -> Re
     Ok(assets_rel(page_id, &name))
 }
 
+fn continues_asset_name(c: char) -> bool {
+    !c.is_whitespace() && !matches!(c, '(' | ')' | '"' | '\'' | '<' | '>')
+}
+
+pub fn referenced_assets(content: &str) -> Vec<(String, String)> {
+    let prefix = format!("{}/", store::ASSETS_DIR);
+    let mut found = Vec::new();
+    let mut rest = content;
+    while let Some(at) = rest.find(&prefix) {
+        rest = &rest[at + prefix.len()..];
+        let Some((page_id, tail)) = rest.split_once('/') else {
+            continue;
+        };
+        if !store::is_page_id(page_id) {
+            continue;
+        }
+        let name: String = tail
+            .chars()
+            .take_while(|c| continues_asset_name(*c))
+            .collect();
+        if !name.is_empty() {
+            found.push((page_id.to_string(), name));
+        }
+    }
+    found
+}
+
 pub fn prune(store: &Store) -> Result<usize, String> {
     let assets_dir = store.root.join(store::ASSETS_DIR);
     if !assets_dir.is_dir() {
@@ -167,6 +194,35 @@ mod tests {
         assert_eq!(written_ext("svg"), None);
         assert_eq!(ext_for_mime(" image/jpg "), "jpg");
         assert_eq!(ext_for_mime("image/svg+xml"), "png");
+    }
+
+    #[test]
+    fn referenced_assets_reads_names_out_of_a_page_body() {
+        let id = "11111111-1111-1111-1111-111111111111";
+        let other = "22222222-2222-2222-2222-222222222222";
+        let body = format!(
+            "# T\n\n![a](assets/{id}/img-1.png)\n![b](assets/{id}/img-2.jpg){{width=420}}\n\
+             ![c](assets/{other}/shared.gif)\n![a again](assets/{id}/img-1.png)\n"
+        );
+        let found = referenced_assets(&body);
+        assert_eq!(
+            found,
+            vec![
+                (id.to_string(), "img-1.png".to_string()),
+                (id.to_string(), "img-2.jpg".to_string()),
+                (other.to_string(), "shared.gif".to_string()),
+                (id.to_string(), "img-1.png".to_string()),
+            ]
+        );
+    }
+
+    #[test]
+    fn referenced_assets_skips_paths_that_are_not_page_assets() {
+        let id = "11111111-1111-1111-1111-111111111111";
+        assert!(referenced_assets("![x](assets/not-a-page-id/img.png)").is_empty());
+        assert!(referenced_assets("![x](assets/img.png)").is_empty());
+        assert!(referenced_assets(&format!("![x](assets/{id}/)")).is_empty());
+        assert!(referenced_assets("plain text with no links at all").is_empty());
     }
 
     #[test]

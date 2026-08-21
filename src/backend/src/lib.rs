@@ -91,7 +91,8 @@ pub fn run() {
             commands::revision_text,
             commands::deleted_pages,
             commands::deleted_page_text,
-            commands::restore_deleted_page
+            commands::restore_deleted_page,
+            commands::restore_revision_assets
         ])
         .setup(|app| {
             let mut builder =
