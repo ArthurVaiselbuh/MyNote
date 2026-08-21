@@ -34,6 +34,15 @@ export function hasDescendant(node: PageNode, id: string): boolean {
   return findNode(node.children, id) !== null;
 }
 
+export function ancestorsOf(list: PageNode[], id: string, trail: PageNode[] = []): PageNode[] {
+  for (const node of list) {
+    if (node.id === id) return trail;
+    const found = ancestorsOf(node.children, id, [...trail, node]);
+    if (found.length > 0) return found;
+  }
+  return [];
+}
+
 export function flatten(pages: PageNode[], filter: string): FlatRow[] {
   const rows: FlatRow[] = [];
   const needle = filter.trim().toLowerCase();
