@@ -224,4 +224,6 @@ export const api = {
   deletedPageText: (id: string, sha: string) => invoke<RevisionText>("deleted_page_text", { sha, id }),
   restoreDeletedPage: (id: string, sha: string, fallbackSectionId: string | null) =>
     invoke<RestoreOutcome>("restore_deleted_page", { sha, id, fallbackSectionId }),
+  restoreRevisionAssets: (id: string, sha: string) =>
+    invoke<number>("restore_revision_assets", { id, sha }),
 };

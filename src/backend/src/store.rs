@@ -73,6 +73,10 @@ pub fn page_path_in(root: &Path, id: &str) -> PathBuf {
     root.join(page_rel(id))
 }
 
+pub fn assets_dir_in(root: &Path, page_id: &str) -> PathBuf {
+    root.join(ASSETS_DIR).join(page_id)
+}
+
 pub fn assets_rel_dir(page_id: &str) -> String {
     format!("{ASSETS_DIR}/{page_id}/")
 }
@@ -476,7 +480,7 @@ impl Store {
     }
 
     pub fn assets_dir(&self, page_id: &str) -> PathBuf {
-        self.root.join(ASSETS_DIR).join(page_id)
+        assets_dir_in(&self.root, page_id)
     }
 
     pub fn create_section(&mut self, name: &str) -> Result<Section, String> {
@@ -1000,18 +1004,8 @@ impl Store {
             page.content.replace(&assets_rel_dir(&page.id), &assets_rel_dir(&id))
         };
         atomic_write(&self.page_path(&id), content.as_bytes())?;
-        if !page.assets.is_empty() {
-            let dir = self.assets_dir(&id);
-            fs::create_dir_all(&dir).map_err(err)?;
-            for (name, bytes) in &page.assets {
-                let Some(safe_name) = Path::new(name).file_name().and_then(|f| f.to_str()) else {
-                    continue; // reject traversal / empty names rather than fail the whole restore
-                };
-                let path = dir.join(safe_name);
-                if !path.exists() {
-                    fs::write(&path, bytes).map_err(err)?;
-                }
-            }
+        for (name, bytes) in &page.assets {
+            write_asset_file(&self.assets_dir(&id), name, bytes)?;
         }
         // defensive: a restore must never leave a recovered file eligible
         // for purge by an unrelated still-pending delete of the same id.
@@ -1066,6 +1060,42 @@ impl Store {
         self.save()?;
         Ok(written)
     }
+
+    pub fn restore_assets(&self, assets: &[IncomingAsset]) -> Result<usize, String> {
+        let mut written = 0;
+        for asset in assets {
+            if !is_page_id(&asset.page_id) {
+                continue;
+            }
+            if write_asset_file(&self.assets_dir(&asset.page_id), &asset.name, &asset.bytes)? {
+                written += 1;
+            }
+        }
+        if written > 0 {
+            self.touch();
+        }
+        Ok(written)
+    }
+}
+
+fn write_asset_file(dir: &Path, name: &str, bytes: &[u8]) -> Result<bool, String> {
+    let Some(safe_name) = Path::new(name).file_name().and_then(|f| f.to_str()) else {
+        return Ok(false);
+    };
+    let path = dir.join(safe_name);
+    if path.exists() {
+        return Ok(false);
+    }
+    fs::create_dir_all(dir).map_err(err)?;
+    fs::write(&path, bytes).map_err(err)?;
+    Ok(true)
+}
+
+/// One asset file ready to be written back under `assets/<page_id>/`.
+pub struct IncomingAsset {
+    pub page_id: String,
+    pub name: String,
+    pub bytes: Vec<u8>,
 }
 
 /// One recovered page (and its recovered subtree) ready to be written by

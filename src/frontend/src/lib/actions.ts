@@ -952,16 +952,24 @@ export async function openHistory(tab: "page" | "deleted") {
   app.modal = "history";
 }
 
-export function restoreRevision(pageId: string, text: string, when: string) {
+export function restoreRevision(pageId: string, sha: string, text: string, when: string) {
   askConfirm(
     `Replace the current text of this page with the version from ${when}? ${labelOf("app.undo")} undoes it.`,
-    () => {
+    async () => {
+      const revived = await api.restoreRevisionAssets(pageId, sha).catch(() => {
+        log.warn("could not bring back the images this revision references");
+        return 0;
+      });
       if (app.currentPageId !== pageId) {
         flashStatus("the open page changed — restore cancelled");
         return;
       }
       editorCtl.current?.replaceAll(text);
-      flashStatus(`restored the version from ${when}`);
+      flashStatus(
+        revived > 0
+          ? `restored the version from ${when}, with ${revived} image(s)`
+          : `restored the version from ${when}`,
+      );
     },
     "Restore",
     "history",

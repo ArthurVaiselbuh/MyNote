@@ -305,7 +305,7 @@
     if (onPageTab) {
       const pageId = app.currentPageId;
       if (!canRestore || !pageId) return;
-      act.restoreRevision(pageId, target.text, railLabel(app.historyRevSel));
+      act.restoreRevision(pageId, railSha(app.historyRevSel), target.text, railLabel(app.historyRevSel));
     } else if (selectedDeleted) {
       const { id, sha, title, count } = selectedDeleted;
       act.recoverDeletedPage(id, sha, title, count);
