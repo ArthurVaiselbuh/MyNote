@@ -14,6 +14,18 @@ test("close prunes orphan assets but keeps referenced ones", async ({ app }) => 
   expect(fs.existsSync(orphan)).toBe(false);
 });
 
+test("a page deleted this session is unlinked at close, not parked in trash", async ({ app }) => {
+  await app.newTitledPage("Doomed", 1);
+  const [id] = await app.treeIds();
+  await app.page.keyboard.press("Delete");
+  await app.confirmDanger();
+  await expect.poll(() => app.treeIds()).toEqual([]);
+
+  await app.close();
+  expect(fs.existsSync(app.mdPath(id))).toBe(false);
+  expect(fs.existsSync(path.join(app.notebookDir, "trash", id))).toBe(false);
+});
+
 test("AGENTS.md is seeded once, user edits survive, settings can overwrite", async ({ app }) => {
   const template = fs.readFileSync(app.agentsPath, "utf8");
   expect(template).toContain("MyNote notebook");
@@ -29,15 +41,26 @@ test("AGENTS.md is seeded once, user edits survive, settings can overwrite", asy
   expect(fs.readFileSync(app.agentsPath, "utf8")).toBe(template);
 });
 
-test("close never touches files the app did not create", async ({ app }) => {
+test("close trashes page files it can't vouch for, and Empty is what deletes them", async ({
+  app,
+}) => {
   await app.newTitledPage("Mine", 1);
   // an agent-style stray page file and a plain markdown file in the root
-  const strayUuid = path.join(app.notebookDir, "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee.md");
+  const strayId = "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee";
+  const strayUuid = path.join(app.notebookDir, `${strayId}.md`);
   const strayPlain = path.join(app.notebookDir, "todo.md");
   fs.writeFileSync(strayUuid, "# Not registered\n");
   fs.writeFileSync(strayPlain, "# Scratch notes\n");
 
-  await app.close();
-  expect(fs.existsSync(strayUuid)).toBe(true);
+  await app.relaunch();
+  const trashed = path.join(app.notebookDir, "trash", strayId, `${strayId}.md`);
+  expect(fs.existsSync(strayUuid)).toBe(false);
+  expect(fs.readFileSync(trashed, "utf8")).toBe("# Not registered\n");
   expect(fs.existsSync(strayPlain)).toBe(true);
+
+  await app.page.keyboard.press("Control+,");
+  await app.page.getByRole("button", { name: "Empty…" }).click();
+  await app.confirmDanger();
+  await expect(app.page.locator(".status-toast")).toContainText("deleted 1 file");
+  expect(fs.existsSync(trashed)).toBe(false);
 });

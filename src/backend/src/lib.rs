@@ -84,6 +84,7 @@ pub fn run() {
             commands::reveal_attachment,
             commands::trash_stats,
             commands::reveal_trash,
+            commands::empty_trash,
             commands::inspect_mht,
             commands::import_mht,
             commands::inspect_md,

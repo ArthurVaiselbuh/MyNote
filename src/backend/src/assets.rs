@@ -91,11 +91,9 @@ pub fn prune(store: &Store) -> Result<usize, String> {
             continue;
         }
         let page_id = entry.file_name().to_string_lossy().into_owned();
-        removed += if live_pages.contains(page_id.as_str()) {
-            drop_unreferenced(store, &dir, &page_id)?
-        } else {
-            drop_whole_dir(&dir)
-        };
+        if live_pages.contains(page_id.as_str()) {
+            removed += drop_unreferenced(store, &dir, &page_id)?;
+        }
     }
     Ok(removed)
 }
@@ -124,18 +122,6 @@ fn drop_unreferenced(store: &Store, dir: &Path, page_id: &str) -> Result<usize, 
         let _ = fs::remove_dir(dir);
     }
     Ok(removed)
-}
-
-fn drop_whole_dir(dir: &Path) -> usize {
-    let removed = count_files(dir);
-    let _ = fs::remove_dir_all(dir);
-    removed
-}
-
-fn count_files(dir: &Path) -> usize {
-    fs::read_dir(dir)
-        .map(|entries| entries.filter_map(|e| e.ok()).filter(|e| e.path().is_file()).count())
-        .unwrap_or(0)
 }
 
 #[cfg(test)]
@@ -203,7 +189,7 @@ mod tests {
     }
 
     #[test]
-    fn prune_removes_orphans_and_keeps_referenced() {
+    fn prune_removes_unreferenced_images_of_live_pages_only() {
         let dir = tempdir().unwrap();
         let mut store = Store::open(dir.path()).unwrap();
         let sid = store.notebook.sections[0].id.clone();
@@ -215,16 +201,32 @@ mod tests {
             .write_page(&page.id, &format!("# Pics\n\n![shot]({kept})\n"))
             .unwrap();
 
-        // a whole directory for a page that no longer exists
-        let ghost_dir = dir.path().join("assets").join("no-such-page");
+        let ghost_dir = dir
+            .path()
+            .join("assets")
+            .join("22222222-2222-2222-2222-222222222222");
         std::fs::create_dir_all(&ghost_dir).unwrap();
         std::fs::write(ghost_dir.join("stray.png"), b"x").unwrap();
 
         let removed = prune(&store).unwrap();
-        assert_eq!(removed, 2);
+        assert_eq!(removed, 1);
         assert!(dir.path().join(&kept).exists());
         assert!(!dir.path().join(&orphan).exists());
-        assert!(!ghost_dir.exists());
+        assert!(ghost_dir.exists());
+    }
+
+    #[test]
+    fn prune_leaves_a_deleted_pages_images_for_close_to_handle() {
+        let dir = tempdir().unwrap();
+        let mut store = Store::open(dir.path()).unwrap();
+        let sid = store.notebook.sections[0].id.clone();
+        let page = store.create_page(&sid, None, None).unwrap();
+        save_image(&store, &page.id, TINY_PNG_B64, "png").unwrap();
+
+        store.delete_page(&page.id).unwrap();
+
+        assert_eq!(prune(&store).unwrap(), 0);
+        assert!(store.assets_dir(&page.id).is_dir());
     }
 
     #[test]
