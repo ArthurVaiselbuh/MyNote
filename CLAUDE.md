@@ -59,11 +59,9 @@ are supported cross-platform builds off the same code.
   close/switch, never during a session (preserves editor undo).
 - `files/<page-id>/` — arbitrary attachments, linked as plain CommonMark
   relative links; gitignored, unlike `assets/`. `trash/<page-id>/` is where
-  pruning and page deletion move them instead of deleting (see below).
+  files go instead of being deleted (see below).
 - **Deletes are deferred:** a delete drops the node from `notebook.json`
   immediately, but `.md` files and assets stay on disk until clean close so
-  tree undo can restore them. Only ids the app deleted this session are purged
-  — files it didn't delete are never touched.
 - App settings (theme colors, zoom, window geometry, keybinding overrides…)
   live in `<config>\MyNote\settings.json`, not in the notebook. Window geometry
   and the MRU are backend-owned: `set_settings` ignores the frontend's copies.
@@ -80,8 +78,7 @@ are supported cross-platform builds off the same code.
   `ipc: http://ipc.localhost` or Tauri IPC falls back to slow postMessage.
 - **Attachments are never versioned** (`files.rs`) — living in gitignored
   `files/`/`trash/` trades away git as a safety net for no size limit and no
-  repo bloat; a deleted attachment moves to `trash/` for the user to clear
-  themselves, never auto-purged. They are **revealed, not launched**:
+  repo bloat. They are **revealed, not launched**:
   Ctrl+Click only selects the file in the OS file manager
   (`tauri_plugin_opener::reveal_item_in_dir`), so a shared notebook can never
   use MyNote as a delivery mechanism.

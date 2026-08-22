@@ -326,6 +326,8 @@ pub struct Store {
     pub notebook: Notebook,
     undo_stack: Vec<UndoOp>,
     redo_stack: Vec<UndoOp>,
+    /// Never persisted: the authority to unlink dies with the process, so a
+    /// later session can only trash what it doesn't recognize.
     session_deleted: HashSet<String>,
     view_positions: BTreeMap<String, ViewPos>,
     #[allow(dead_code)]
@@ -532,11 +534,11 @@ impl Store {
             .position(|s| s.id == id)
             .ok_or("section not found")?;
         let section = self.notebook.sections.remove(index);
-        let mut ids = Vec::new();
         for page in &section.pages {
+            let mut ids = Vec::new();
             collect_ids(page, &mut ids);
+            self.session_deleted.extend(ids);
         }
-        self.session_deleted.extend(ids);
         let mut default_added = None;
         if self.notebook.sections.is_empty() {
             let default = Section {
@@ -552,18 +554,6 @@ impl Store {
             index,
             default_added,
         })
-    }
-
-    fn remove_page_files(&self, id: &str) {
-        let _ = fs::remove_file(self.page_path(id));
-        let assets = self.assets_dir(id);
-        if assets.is_dir() {
-            let _ = fs::remove_dir_all(assets);
-        }
-        let files = crate::files::files_dir_in(&self.root, id);
-        if files.is_dir() {
-            let _ = crate::files::move_dir_to_trash(&self.root, &files, id);
-        }
     }
 
     pub fn create_page(
@@ -908,18 +898,58 @@ impl Store {
         Ok(Some(outcome))
     }
 
-    /// Deleted pages keep their files on disk for the whole session so undo
-    /// can restore them; this runs only on clean close / notebook switch.
-    pub fn purge_deleted_files(&self) {
+    /// Git holds the `.md` and its images; attachments are unversioned, which
+    /// is why they alone go to trash rather than being unlinked with the rest.
+    pub fn purge_pages_deleted_this_session(&self) {
         for id in &self.session_deleted {
             if self.find_page(id).is_none() {
-                self.remove_page_files(id);
+                let _ = fs::remove_file(self.page_path(id));
+                let assets = self.assets_dir(id);
+                if assets.is_dir() {
+                    let _ = fs::remove_dir_all(assets);
+                }
+                let files = crate::files::files_dir_in(&self.root, id);
+                if files.is_dir() {
+                    let _ = crate::files::move_dir_to_trash(&self.root, &files, id);
+                }
             }
         }
     }
 
+    pub fn trash_pages_not_in_tree(&self) -> usize {
+        let mut trashed = 0;
+        for id in pages_not_in_tree(&self.root, &self.notebook) {
+            // one locked file must not strand every other page's convergence
+            match self.trash_page_files(&id) {
+                Ok(()) => trashed += 1,
+                Err(e) => log::warn!("could not trash page {id}: {e}"),
+            }
+        }
+        if trashed > 0 {
+            log::info!("trashed {trashed} page(s) missing from the tree");
+        }
+        trashed
+    }
+
+    fn trash_page_files(&self, id: &str) -> Result<(), String> {
+        let md = self.page_path(id);
+        if md.is_file() {
+            crate::files::move_file_to_trash(&self.root, id, &md)?;
+        }
+        let assets = self.assets_dir(id);
+        if assets.is_dir() {
+            crate::files::move_dir_to_trash(&self.root, &assets, id)?;
+        }
+        let files = crate::files::files_dir_in(&self.root, id);
+        if files.is_dir() {
+            crate::files::move_dir_to_trash(&self.root, &files, id)?;
+        }
+        Ok(())
+    }
+
     pub fn close(self) -> CloseInfo {
-        self.purge_deleted_files();
+        self.purge_pages_deleted_this_session();
+        self.trash_pages_not_in_tree();
         let _ = crate::assets::prune(&self);
         let _ = crate::files::prune_to_trash(&self);
         let _ = self.save();
@@ -1270,6 +1300,42 @@ pub(crate) fn locate_page_in<'a>(
 /// session, or a stray `.md` the app never wrote, must never be clobbered).
 pub(crate) fn id_available_in(root: &Path, notebook: &Notebook, id: &str) -> bool {
     find_page_in(notebook, id).is_none() && !page_path_in(root, id).exists()
+}
+
+fn pages_not_in_tree(root: &Path, notebook: &Notebook) -> HashSet<String> {
+    let live: HashSet<&str> = flatten_pages(notebook)
+        .iter()
+        .map(|(_, page)| page.id.as_str())
+        .collect();
+    let missing = |id: &str| -> bool { is_page_id(id) && !live.contains(id) };
+
+    let mut ids = HashSet::new();
+    if let Ok(entries) = fs::read_dir(root) {
+        for entry in entries.flatten() {
+            let path = entry.path();
+            let Some(stem) = path.file_stem().and_then(|s| s.to_str()) else {
+                continue;
+            };
+            if path.extension().and_then(|e| e.to_str()) == Some("md") && missing(stem) {
+                ids.insert(stem.to_string());
+            }
+        }
+    }
+    for dir_name in [ASSETS_DIR, crate::files::FILES_DIR] {
+        let Ok(entries) = fs::read_dir(root.join(dir_name)) else {
+            continue;
+        };
+        for entry in entries.flatten() {
+            if !entry.path().is_dir() {
+                continue;
+            }
+            let id = entry.file_name().to_string_lossy().into_owned();
+            if missing(&id) {
+                ids.insert(id);
+            }
+        }
+    }
+    ids
 }
 
 pub fn flatten_pages(notebook: &Notebook) -> Vec<(&Section, &PageNode)> {
@@ -1719,7 +1785,7 @@ mod tests {
     }
 
     #[test]
-    fn delete_page_keeps_files_until_purge() {
+    fn delete_page_keeps_files_until_close() {
         let (dir, mut store) = open_store();
         let sid = section_id(&store);
         let parent = store.create_page(&sid, None, None).unwrap();
@@ -1730,13 +1796,30 @@ mod tests {
         assert!(store.find_page(&parent.id).is_none());
         assert!(dir.path().join(format!("{}.md", parent.id)).exists());
         assert!(dir.path().join(format!("{}.md", child.id)).exists());
-        store.purge_deleted_files();
+        store.purge_pages_deleted_this_session();
         assert!(!dir.path().join(format!("{}.md", parent.id)).exists());
         assert!(!dir.path().join(format!("{}.md", child.id)).exists());
     }
 
     #[test]
-    fn purge_spares_pages_restored_by_undo() {
+    fn a_delete_this_session_is_unlinked_at_close_not_left_in_trash() {
+        let dir = tempdir().unwrap();
+        let mut store = Store::open(dir.path()).unwrap();
+        let sid = section_id(&store);
+        let page = store.create_page(&sid, None, None).unwrap();
+        let assets = store.assets_dir(&page.id);
+        fs::create_dir_all(&assets).unwrap();
+        fs::write(assets.join("img.png"), b"x").unwrap();
+        store.delete_page(&page.id).unwrap();
+
+        let info = store.close();
+        assert!(!page_path_in(&info.root, &page.id).exists());
+        assert!(!assets_dir_in(&info.root, &page.id).exists());
+        assert!(!crate::files::trash_dir_in(&info.root, &page.id).exists());
+    }
+
+    #[test]
+    fn close_spares_pages_restored_by_undo() {
         let (dir, mut store) = open_store();
         let sid = section_id(&store);
         let a = store.create_page(&sid, None, None).unwrap();
@@ -1744,7 +1827,7 @@ mod tests {
         store.delete_page(&a.id).unwrap();
         store.delete_page(&b.id).unwrap();
         store.undo().unwrap().unwrap(); // restores b
-        store.purge_deleted_files();
+        store.purge_pages_deleted_this_session();
         assert!(!dir.path().join(format!("{}.md", a.id)).exists());
         assert!(dir.path().join(format!("{}.md", b.id)).exists());
     }
@@ -2117,5 +2200,88 @@ mod tests {
         assert!(crate::files::trash_dir_in(&info.root, &page.id)
             .join("note.pdf")
             .exists());
+    }
+
+    #[test]
+    fn a_crash_before_close_leaves_the_delete_to_the_next_close() {
+        let dir = tempdir().unwrap();
+        let page_id;
+        {
+            let mut store = Store::open(dir.path()).unwrap();
+            let sid = section_id(&store);
+            let page = store.create_page(&sid, None, None).unwrap();
+            page_id = page.id.clone();
+            let assets_dir = store.assets_dir(&page_id);
+            fs::create_dir_all(&assets_dir).unwrap();
+            fs::write(assets_dir.join("img.png"), b"x").unwrap();
+
+            store.delete_page(&page_id).unwrap();
+            // dropped without calling close() — simulates a crash
+        }
+        assert!(page_path_in(dir.path(), &page_id).exists());
+        assert!(assets_dir_in(dir.path(), &page_id).exists());
+
+        let store = Store::open(dir.path()).unwrap();
+        let info = store.close();
+        assert!(!page_path_in(&info.root, &page_id).exists());
+        assert!(!assets_dir_in(&info.root, &page_id).exists());
+        let trash = crate::files::trash_dir_in(&info.root, &page_id);
+        assert!(trash.join(format!("{page_id}.md")).exists());
+        assert!(trash.join("img.png").exists());
+    }
+
+    #[test]
+    fn close_trashes_a_page_the_app_never_deleted_and_frees_its_id() {
+        let dir = tempdir().unwrap();
+        let mut store = Store::open(dir.path()).unwrap();
+        let sid = section_id(&store);
+        let live = store.create_page(&sid, None, None).unwrap();
+
+        let stray_id = new_id();
+        fs::write(store.page_path(&stray_id), "# Stray\n").unwrap();
+        let assets_dir = store.assets_dir(&stray_id);
+        fs::create_dir_all(&assets_dir).unwrap();
+        fs::write(assets_dir.join("img.png"), b"x").unwrap();
+        assert!(!store.id_available(&stray_id));
+
+        let info = store.close();
+        let reopened = Store::open(&info.root).unwrap();
+        assert!(!page_path_in(&info.root, &stray_id).exists());
+        assert!(!assets_dir_in(&info.root, &stray_id).exists());
+        let trash = crate::files::trash_dir_in(&info.root, &stray_id);
+        assert!(trash.join(format!("{stray_id}.md")).exists());
+        assert!(trash.join("img.png").exists());
+        assert!(reopened.id_available(&stray_id));
+        assert!(reopened.find_page(&live.id).is_some());
+        assert!(page_path_in(&info.root, &live.id).exists());
+    }
+
+    #[test]
+    fn close_leaves_files_that_arent_page_ids_alone() {
+        let dir = tempdir().unwrap();
+        let store = Store::open(dir.path()).unwrap();
+        fs::write(dir.path().join("AGENTS.md"), "# agents\n").unwrap();
+        fs::write(dir.path().join("README.md"), "# readme\n").unwrap();
+        let stray_assets = dir.path().join(ASSETS_DIR).join("screenshots");
+        fs::create_dir_all(&stray_assets).unwrap();
+        fs::write(stray_assets.join("shot.png"), b"x").unwrap();
+
+        let info = store.close();
+        assert!(info.root.join("AGENTS.md").exists());
+        assert!(info.root.join("README.md").exists());
+        assert!(stray_assets.join("shot.png").exists());
+    }
+
+    #[test]
+    fn the_user_file_carries_no_delete_bookkeeping() {
+        let dir = tempdir().unwrap();
+        let mut store = Store::open(dir.path()).unwrap();
+        let sid = section_id(&store);
+        let page = store.create_page(&sid, None, None).unwrap();
+        store.set_last_view(None, Some(page.id.clone())).unwrap();
+        store.delete_page(&page.id).unwrap();
+
+        let user_json = fs::read_to_string(dir.path().join(USER_STATE_FILE)).unwrap();
+        assert!(!user_json.contains(&page.id));
     }
 }

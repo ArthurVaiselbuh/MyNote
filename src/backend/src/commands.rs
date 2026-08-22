@@ -441,6 +441,14 @@ pub fn trash_stats(state: State<'_, AppState>) -> Result<TrashStats, String> {
 }
 
 #[tauri::command]
+pub fn empty_trash(state: State<'_, AppState>) -> Result<usize, String> {
+    let root = with_store(&state, |s| Ok(s.root.clone()))?;
+    let removed = files::empty_trash(&root)?;
+    log::info!("emptied trash ({removed} files)");
+    Ok(removed)
+}
+
+#[tauri::command]
 pub fn reveal_trash(state: State<'_, AppState>) -> Result<(), String> {
     let root = with_store(&state, |s| Ok(s.root.clone()))?;
     let trash = root.join(files::TRASH_DIR);

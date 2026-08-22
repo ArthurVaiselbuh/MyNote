@@ -218,6 +218,7 @@ export const api = {
   revealAttachment: (rel: string) => invoke<void>("reveal_attachment", { rel }),
   trashStats: () => invoke<TrashStats>("trash_stats"),
   revealTrash: () => invoke<void>("reveal_trash"),
+  emptyTrash: () => invoke<number>("empty_trash"),
   inspectMht: (paths: string[]) =>
     invoke<ImportPreview>("inspect_mht", { paths }),
   importMht: (paths: string[]) =>

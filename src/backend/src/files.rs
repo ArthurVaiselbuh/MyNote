@@ -221,15 +221,9 @@ pub fn prune_to_trash(store: &Store) -> Result<usize, String> {
             continue;
         }
         let page_id = entry.file_name().to_string_lossy().into_owned();
-        moved += if live_pages.contains(page_id.as_str()) {
-            if readable_pages.contains(page_id.as_str()) {
-                move_unreferenced(&store.root, &page_dir, &page_id, &referenced_anywhere)?
-            } else {
-                0
-            }
-        } else {
-            move_dir_to_trash(&store.root, &page_dir, &page_id)?
-        };
+        if readable_pages.contains(page_id.as_str()) {
+            moved += move_unreferenced(&store.root, &page_dir, &page_id, &referenced_anywhere)?;
+        }
     }
     Ok(moved)
 }
@@ -259,9 +253,7 @@ fn move_unreferenced(
 }
 
 /// Moves every entry directly under `dir` — files and subdirectories alike —
-/// into `trash/<page_id>/`, then drops the now-empty source directory. Used
-/// both for a whole page's worth of attachments pruned at close, and for a
-/// single deleted page purged mid session.
+/// into `trash/<page_id>/`, then drops the now-empty source directory.
 pub(crate) fn move_dir_to_trash(root: &Path, dir: &Path, page_id: &str) -> Result<usize, String> {
     let mut moved = 0;
     for entry in fs::read_dir(dir).map_err(err)? {
@@ -274,11 +266,31 @@ pub(crate) fn move_dir_to_trash(root: &Path, dir: &Path, page_id: &str) -> Resul
     Ok(moved)
 }
 
+pub(crate) fn move_file_to_trash(root: &Path, page_id: &str, path: &Path) -> Result<(), String> {
+    let name = path
+        .file_name()
+        .and_then(|n| n.to_str())
+        .ok_or("invalid file name")?
+        .to_string();
+    move_one(root, page_id, path, &name)
+}
+
 fn move_one(root: &Path, page_id: &str, path: &Path, name: &str) -> Result<(), String> {
     let trash = trash_dir_in(root, page_id);
     fs::create_dir_all(&trash).map_err(err)?;
     let dest_name = dedupe(&trash, name);
     fs::rename(path, trash.join(dest_name)).map_err(err)
+}
+
+/// The app's only unlink of a trashed file: user-initiated alone, never from a
+/// close or a timer.
+pub fn empty_trash(root: &Path) -> Result<usize, String> {
+    let trash = root.join(TRASH_DIR);
+    let (count, _) = trash_stats(root);
+    if trash.is_dir() {
+        fs::remove_dir_all(&trash).map_err(err)?;
+    }
+    Ok(count)
 }
 
 pub fn trash_stats(root: &Path) -> (usize, u64) {
@@ -412,7 +424,7 @@ mod tests {
     }
 
     #[test]
-    fn prune_to_trash_moves_orphans_and_whole_missing_page_dirs() {
+    fn prune_to_trash_moves_unreferenced_files_of_live_pages_only() {
         let dir = tempdir().unwrap();
         let mut store = Store::open(dir.path()).unwrap();
         let sid = store.notebook.sections[0].id.clone();
@@ -433,15 +445,36 @@ mod tests {
         fs::write(ghost_dir.join("stray.bin"), b"g").unwrap();
 
         let moved = prune_to_trash(&store).unwrap();
-        assert_eq!(moved, 2);
+        assert_eq!(moved, 1);
 
         let page_files = files_dir_in(dir.path(), &page.id);
         assert!(page_files.join("kept.txt").exists());
         assert!(!page_files.join("orphan.txt").exists());
         assert!(trash_dir_in(dir.path(), &page.id).join("orphan.txt").exists());
 
-        assert!(!ghost_dir.exists());
-        assert!(trash_dir_in(dir.path(), ghost_id).join("stray.bin").exists());
+        assert!(ghost_dir.exists());
+    }
+
+    #[test]
+    fn a_deleted_pages_attachments_survive_prune_and_go_to_trash_at_close() {
+        let dir = tempdir().unwrap();
+        let mut store = Store::open(dir.path()).unwrap();
+        let sid = store.notebook.sections[0].id.clone();
+        let page = store.create_page(&sid, None, None).unwrap();
+
+        let src_dir = tempdir().unwrap();
+        let src = src_dir.path().join("note.pdf");
+        fs::write(&src, b"pdf").unwrap();
+        attach_path(&store, &page.id, &src).unwrap();
+
+        store.delete_page(&page.id).unwrap();
+
+        assert_eq!(prune_to_trash(&store).unwrap(), 0);
+        assert!(files_dir_in(dir.path(), &page.id).join("note.pdf").exists());
+
+        store.purge_pages_deleted_this_session();
+        assert!(!files_dir_in(dir.path(), &page.id).exists());
+        assert!(trash_dir_in(dir.path(), &page.id).join("note.pdf").exists());
     }
 
     #[test]
@@ -469,38 +502,68 @@ mod tests {
     }
 
     #[test]
-    fn prune_to_trash_moves_a_subdirectory_of_a_ghost_dir_into_trash_instead_of_deleting_it() {
+    fn close_moves_a_subdirectory_of_attachments_into_trash_instead_of_deleting_it() {
         let dir = tempdir().unwrap();
-        let store = Store::open(dir.path()).unwrap();
+        let mut store = Store::open(dir.path()).unwrap();
+        let sid = store.notebook.sections[0].id.clone();
+        let page = store.create_page(&sid, None, None).unwrap();
 
-        let ghost_id = "55555555-5555-5555-5555-555555555555";
-        let ghost_dir = files_dir_in(dir.path(), ghost_id);
-        let nested = ghost_dir.join("subfolder");
+        let nested = files_dir_in(dir.path(), &page.id).join("subfolder");
         fs::create_dir_all(&nested).unwrap();
         fs::write(nested.join("inside.bin"), b"n").unwrap();
+        store.delete_page(&page.id).unwrap();
 
-        let moved = prune_to_trash(&store).unwrap();
-        assert_eq!(moved, 1);
-        assert!(!ghost_dir.exists());
-        assert!(trash_dir_in(dir.path(), ghost_id).join("subfolder").join("inside.bin").exists());
+        store.purge_pages_deleted_this_session();
+        assert!(!files_dir_in(dir.path(), &page.id).exists());
+        assert!(trash_dir_in(dir.path(), &page.id).join("subfolder").join("inside.bin").exists());
     }
 
     #[test]
-    fn prune_to_trash_dedupes_a_collision_inside_trash() {
+    fn trashing_dedupes_a_collision_inside_trash() {
         let dir = tempdir().unwrap();
-        let store = Store::open(dir.path()).unwrap();
-        let ghost_id = "33333333-3333-3333-3333-333333333333";
-        let ghost_dir = files_dir_in(dir.path(), ghost_id);
-        fs::create_dir_all(&ghost_dir).unwrap();
-        fs::write(ghost_dir.join("dup.txt"), b"fresh").unwrap();
-        let existing_trash = trash_dir_in(dir.path(), ghost_id);
+        let mut store = Store::open(dir.path()).unwrap();
+        let sid = store.notebook.sections[0].id.clone();
+        let page = store.create_page(&sid, None, None).unwrap();
+
+        fs::create_dir_all(files_dir_in(dir.path(), &page.id)).unwrap();
+        fs::write(files_dir_in(dir.path(), &page.id).join("dup.txt"), b"fresh").unwrap();
+        let existing_trash = trash_dir_in(dir.path(), &page.id);
         fs::create_dir_all(&existing_trash).unwrap();
         fs::write(existing_trash.join("dup.txt"), b"already-here").unwrap();
+        store.delete_page(&page.id).unwrap();
 
-        let moved = prune_to_trash(&store).unwrap();
-        assert_eq!(moved, 1);
+        store.purge_pages_deleted_this_session();
         assert_eq!(fs::read(existing_trash.join("dup.txt")).unwrap(), b"already-here");
         assert_eq!(fs::read(existing_trash.join("dup-1.txt")).unwrap(), b"fresh");
+    }
+
+    #[test]
+    fn empty_trash_is_the_only_thing_that_unlinks_trashed_files() {
+        let dir = tempdir().unwrap();
+        let mut store = Store::open(dir.path()).unwrap();
+        let sid = store.notebook.sections[0].id.clone();
+        let page = store.create_page(&sid, None, None).unwrap();
+
+        let src_dir = tempdir().unwrap();
+        let src = src_dir.path().join("note.pdf");
+        fs::write(&src, b"pdf").unwrap();
+        attach_path(&store, &page.id, &src).unwrap();
+        store.delete_page(&page.id).unwrap();
+
+        let stray_id = "33333333-3333-3333-3333-333333333333";
+        fs::write(store.page_path(stray_id), "# Stray\n").unwrap();
+
+        let info = store.close();
+        let (count, bytes) = trash_stats(&info.root);
+        assert_eq!(count, 2);
+        assert!(bytes > 0);
+        assert!(trash_dir_in(&info.root, &page.id).join("note.pdf").exists());
+        assert!(trash_dir_in(&info.root, stray_id).join(format!("{stray_id}.md")).exists());
+
+        assert_eq!(empty_trash(&info.root).unwrap(), 2);
+        assert_eq!(trash_stats(&info.root), (0, 0));
+        assert!(!info.root.join(TRASH_DIR).exists());
+        assert_eq!(empty_trash(&info.root).unwrap(), 0);
     }
 
     #[test]

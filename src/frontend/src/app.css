@@ -842,6 +842,10 @@ kbd {
 .settings-row label {
   flex: 1;
 }
+.settings-buttons {
+  display: flex;
+  gap: 8px;
+}
 .settings-row input[type="color"] {
   width: 44px;
   height: 26px;

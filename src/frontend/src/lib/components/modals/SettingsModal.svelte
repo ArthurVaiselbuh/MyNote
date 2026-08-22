@@ -69,6 +69,25 @@
       app.status = String(err);
     }
   }
+
+  function emptyTrash() {
+    if (!trash?.count) return;
+    const { count, bytes } = trash;
+    act.askConfirm(
+      `Permanently delete ${count} file${count === 1 ? "" : "s"} (${formatBytes(bytes)}) from trash? This cannot be undone.`,
+      async () => {
+        try {
+          const removed = await api.emptyTrash();
+          refreshTrash();
+          app.status = `deleted ${removed} file${removed === 1 ? "" : "s"} from trash`;
+        } catch (err) {
+          app.status = String(err);
+        }
+      },
+      "Empty trash",
+      "settings",
+    );
+  }
 </script>
 
 <div class="modal-backdrop">
@@ -182,8 +201,13 @@
         </div>
       {/if}
       <div class="settings-row">
-        <span>File attachments</span>
-        <button onclick={() => void openTrash()}>{trashLabel()}</button>
+        <span>Deleted attachments and recovered files</span>
+        <div class="settings-buttons">
+          <button onclick={() => void openTrash()}>{trashLabel()}</button>
+          {#if trash?.count}
+            <button onclick={emptyTrash}>Empty…</button>
+          {/if}
+        </div>
       </div>
       <div class="settings-row">
         <span>Reset AGENTS.md</span>
