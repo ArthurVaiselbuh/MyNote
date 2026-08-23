@@ -106,6 +106,7 @@ export interface Settings {
   accentColor: string;
   headingColor: string;
   focusAlpha: number;
+  pageTitleSize: number;
   scrollSpeed: number;
   treeWidth: number;
   peekWidth: number;

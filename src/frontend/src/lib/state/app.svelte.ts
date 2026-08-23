@@ -57,6 +57,7 @@ export const defaultSettings: Settings = {
   accentColor: "#5aa0f2",
   headingColor: "#d4d4d4",
   focusAlpha: 0.5,
+  pageTitleSize: 20,
   scrollSpeed: 1.0,
   treeWidth: 300,
   peekWidth: 460,

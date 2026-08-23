@@ -20,6 +20,7 @@ body {
   --panel: #26282b;
   --accent: #5aa0f2;
   --focus-alpha: 0.5;
+  --page-title-size: 20px;
   --focus-color: color-mix(in srgb, var(--accent) calc(var(--focus-alpha) * 100%), transparent);
   --muted: color-mix(in srgb, var(--text) 55%, transparent);
   --guide: color-mix(in srgb, var(--text) 18%, transparent);
@@ -266,7 +267,7 @@ input:focus {
 .title-input {
   flex: 1;
   min-width: 0;
-  font-size: 20px;
+  font-size: var(--page-title-size);
   font-weight: 600;
   background: transparent;
   border: none;

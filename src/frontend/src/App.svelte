@@ -159,6 +159,7 @@
   style:--accent={s.accentColor}
   style:--heading={s.headingColor}
   style:--focus-alpha={s.focusAlpha}
+  style:--page-title-size={`${s.pageTitleSize}px`}
 >
   <aside class="tree-pane" class:focused={app.focus === "tree"} style:width="{s.treeWidth}px">
     <SectionStrip />
