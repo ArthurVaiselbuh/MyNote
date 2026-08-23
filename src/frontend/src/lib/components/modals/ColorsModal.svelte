@@ -17,6 +17,7 @@
   function resetColors() {
     for (const row of COLOR_ROWS) app.settings[row.key] = defaultSettings[row.key];
     app.settings.focusAlpha = defaultSettings.focusAlpha;
+    app.settings.pageTitleSize = defaultSettings.pageTitleSize;
     persist();
   }
 </script>
@@ -40,6 +41,18 @@
         max="1"
         step="0.05"
         bind:value={app.settings.focusAlpha}
+        onchange={persist}
+      />
+    </div>
+    <div class="settings-row">
+      <label for="set-page-title-size">Page title size ({app.settings.pageTitleSize}px)</label>
+      <input
+        id="set-page-title-size"
+        type="range"
+        min="14"
+        max="36"
+        step="1"
+        bind:value={app.settings.pageTitleSize}
         onchange={persist}
       />
     </div>
