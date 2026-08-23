@@ -4,6 +4,7 @@
   import { getCurrentWindow } from "@tauri-apps/api/window";
   import * as act from "./lib/actions";
   import type { SplitPane } from "./lib/actions";
+  import { contextMenu } from "./lib/contextMenu.svelte";
   import { handleGlobal } from "./lib/keys/dispatch";
   import { app, modalParentOf } from "./lib/state/app.svelte";
   import { isTextEntry } from "./lib/textEntry";
@@ -68,6 +69,14 @@
     void act.persistSettings();
   }
 
+  function navigateViewedPages(e: MouseEvent) {
+    const direction = e.button === 3 ? -1 : e.button === 4 ? 1 : null;
+    if (!direction) return;
+    e.preventDefault();
+    if (app.modal !== "none" || contextMenu.open) return;
+    act.navigateViewedPages(direction);
+  }
+
   // registered only while it will act: a non-passive wheel listener costs the
   // compositor its scroll fast path even when the handler returns immediately
   $effect(() => {
@@ -89,6 +98,7 @@
 
   onMount(() => {
     window.addEventListener("keydown", handleGlobal, true);
+    window.addEventListener("mousedown", navigateViewedPages, true);
 
     // the webview's own menu (refresh / print / save as / send tab to your
     // devices) is meaningless here, so panes raise their own via openContextMenu
@@ -122,6 +132,7 @@
 
     return () => {
       window.removeEventListener("keydown", handleGlobal, true);
+      window.removeEventListener("mousedown", navigateViewedPages, true);
       window.removeEventListener("contextmenu", suppressWebviewMenu);
       window.removeEventListener("blur", flushSave);
       for (const unlisten of unlisteners) unlisten();

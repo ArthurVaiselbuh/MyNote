@@ -76,6 +76,7 @@ function applyNotebook(info: NotebookInfo) {
   app.selectedId = pageId;
   app.view = "page";
   app.focus = "tree";
+  resetViewedPages(pageId);
 }
 
 export async function openNotebookModal() {
@@ -330,6 +331,34 @@ function flash(message: string, isError: boolean, durationMs: number) {
 
 // ---------- pages ----------
 
+let viewedPages: string[] = [];
+let viewedPageIndex = -1;
+
+function resetViewedPages(pageId: string | null) {
+  viewedPages = pageId ? [pageId] : [];
+  viewedPageIndex = pageId ? 0 : -1;
+}
+
+function rememberViewedPage(pageId: string) {
+  if (viewedPages[viewedPageIndex] === pageId) return;
+  viewedPages = viewedPages.slice(0, viewedPageIndex + 1);
+  viewedPages.push(pageId);
+  viewedPageIndex = viewedPages.length - 1;
+}
+
+function availableHistoryIndex(direction: -1 | 1): number {
+  const notebook = app.notebook;
+  if (!notebook) return -1;
+  for (
+    let index = viewedPageIndex + direction;
+    index >= 0 && index < viewedPages.length;
+    index += direction
+  ) {
+    if (sectionOfPage(notebook, viewedPages[index])) return index;
+  }
+  return -1;
+}
+
 function selectPage(id: string | null) {
   app.selectedId = id;
   app.currentPageId = id;
@@ -341,9 +370,10 @@ function clearSelection() {
   app.selectedId = null;
 }
 
-export function selectAndOpen(id: string | null) {
+export function selectAndOpen(id: string | null, remember = true) {
   selectPage(id);
   app.view = "page";
+  if (id && remember) rememberViewedPage(id);
 }
 
 export function openPageById(pageId: string) {
@@ -352,6 +382,17 @@ export function openPageById(pageId: string) {
   if (!section) return;
   app.sectionIdx = app.notebook.sections.indexOf(section);
   selectAndOpen(pageId);
+}
+
+export function navigateViewedPages(direction: -1 | 1) {
+  const index = availableHistoryIndex(direction);
+  if (index < 0) return;
+  const pageId = viewedPages[index];
+  const section = sectionOfPage(app.notebook!, pageId);
+  if (!section) return;
+  viewedPageIndex = index;
+  app.sectionIdx = app.notebook!.sections.indexOf(section);
+  selectAndOpen(pageId, false);
 }
 
 export function openExternalLink(href: string) {
