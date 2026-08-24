@@ -55,3 +55,24 @@ test("color picker lists named colors + custom; Esc steps back to insert", async
   await app.page.keyboard.press("Escape");
   await expect(app.modal).toHaveCount(0);
 });
+
+test("Ctrl+J Code block size wraps the selection and shrinks its preview", async ({ app }) => {
+  await app.newTitledPage("Compact", 1);
+  await app.selectWholeBody();
+  await app.page.keyboard.type("const compact = true;");
+  await app.page.keyboard.press("Control+a");
+
+  await app.page.keyboard.press("Control+j");
+  await expect(app.modal.locator("input")).toBeFocused();
+  await app.page.keyboard.type("code block size");
+  await expect(app.page.locator(".insert-item")).toHaveCount(1);
+  await app.page.keyboard.press("Enter");
+
+  await app.page.keyboard.press("Control+s");
+  const [id] = await app.treeIds();
+  await expect.poll(() => app.readMd(id)).toContain("``` {size=12}\nconst compact = true;\n```");
+
+  await app.page.keyboard.press("Control+e");
+  const code = app.page.locator("#preview-scroll pre code");
+  await expect.poll(() => code.evaluate((el) => getComputedStyle(el).fontSize)).toBe("12px");
+});
