@@ -48,7 +48,6 @@ export class App {
 
   async launch() {
     await waitForPortFree();
-    const webviewLogFile = path.join(this.dataDir, "webview2-chrome-debug.log");
     fs.mkdirSync(this.dataDir, { recursive: true });
     let stderr = "";
     const child = spawn(EXE, [], {
@@ -56,13 +55,13 @@ export class App {
         ...process.env,
         // wry always sets WebView2's AdditionalBrowserArguments COM option itself
         // (even just its own defaults), which makes WebView2 ignore
-        // WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS outright — MyNote reads these two
+        // WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS outright — MyNote reads this
         // instead (see lib.rs::run's setup closure) to build that option itself.
         MYNOTE_E2E_CDP_PORT: String(CDP_PORT),
-        MYNOTE_E2E_LOG_FILE: webviewLogFile,
         WEBVIEW2_USER_DATA_FOLDER: this.dataDir,
       },
       stdio: ["ignore", "ignore", "pipe"],
+      windowsHide: true,
     });
     this.child = child;
     child.stderr!.on("data", (chunk: Buffer) => (stderr += chunk.toString()));
@@ -91,7 +90,7 @@ export class App {
         }),
       ]);
     } catch (e) {
-      throw new Error(`${(e as Error).message}\n${cdpDiagnostics(webviewLogFile)}`);
+      throw new Error(`${(e as Error).message}\n${cdpDiagnostics()}`);
     }
     this.page = await firstPage(this.browser);
     this.page.on("pageerror", (e) => console.log(`[pageerror] ${e.message}`));
@@ -113,27 +112,31 @@ export class App {
     }
   }
 
-  /** Graceful close (WM_CLOSE) so the backend runs its on-close purge, falling
-   * back to a hard kill of the whole tree. Both steps target the pid we
-   * spawned rather than the name "mynote": a wedged instance that ignores
-   * WM_CLOSE must still die, and killing the host alone orphans its
-   * msedgewebview2 children, which keep the CDP port bound and poison every
-   * later launch in the run. */
+  /** Graceful close through Tauri so the backend runs its on-close purge,
+   * falling back to a hard kill of the whole process tree. */
   async close() {
     if (!this.child?.pid) return;
     this.closing = true;
     const pid = this.child.pid;
+    await this.page
+      ?.evaluate(() =>
+        (
+          window as typeof window & {
+            __TAURI_INTERNALS__: {
+              invoke(command: string, args: Record<string, unknown>): Promise<unknown>;
+            };
+          }
+        ).__TAURI_INTERNALS__.invoke("plugin:window|close", { label: "main" }),
+      )
+      .catch(() => {});
     await this.browser?.close().catch(() => {});
     this.browser = null;
-    quietly(
-      `powershell -NoProfile -Command "(Get-Process -Id ${pid} -ErrorAction SilentlyContinue).CloseMainWindow()"`,
-    );
     const exitedCleanly = await Promise.race([
       this.exited.then(() => true),
-      sleep(15_000).then(() => false),
+      sleep(5_000).then(() => false),
     ]);
     if (!exitedCleanly) {
-      console.log(`[fixture] pid ${pid} ignored WM_CLOSE — killing its process tree`);
+      console.log(`[fixture] pid ${pid} ignored close — killing its process tree`);
       killTree(pid);
       await Promise.race([this.exited, sleep(10_000)]);
     }
@@ -424,7 +427,7 @@ export class App {
  * history specs can skip cleanly instead of failing on a disabled checkbox. */
 export function hasGit(): boolean {
   try {
-    execSync("git --version", { stdio: "ignore" });
+    execSync("git --version", { stdio: "ignore", windowsHide: true });
     return true;
   } catch {
     return false;
@@ -437,7 +440,11 @@ type Exit = { code: number | null; signal: NodeJS.Signals | null };
 
 function quietly(cmd: string) {
   try {
-    execSync(cmd, { timeout: 30_000, stdio: ["ignore", "ignore", "ignore"] });
+    execSync(cmd, {
+      timeout: 30_000,
+      stdio: ["ignore", "ignore", "ignore"],
+      windowsHide: true,
+    });
   } catch {}
 }
 
@@ -474,6 +481,7 @@ function portHolder(): { pid: number; description: string } | null {
     const out = execFileSync("powershell", ["-NoProfile", "-Command", script], {
       encoding: "utf8",
       timeout: 10_000,
+      windowsHide: true,
     }).trim();
     if (!out) return null;
     const [pid, name, parent] = out.split("|");
@@ -521,26 +529,14 @@ async function connectWithRetry(): Promise<Browser> {
 
 function runDiagnostic(cmd: string): string {
   try {
-    const out = execSync(cmd, { encoding: "utf8", timeout: 10_000 }).trim();
+    const out = execSync(cmd, {
+      encoding: "utf8",
+      timeout: 10_000,
+      windowsHide: true,
+    }).trim();
     return out || "<no output>";
   } catch (e) {
     return `<failed to run: ${(e as Error).message}>`;
-  }
-}
-
-const LOG_TAIL_CHARS = 8_000;
-
-/** Tail of the chromium `--log-file` WebView2 was launched with — that log
- * records DevTools server bind attempts/failures directly, which is a more
- * definitive signal than inferring from process/socket state alone. */
-function readLogTail(file: string): string {
-  try {
-    const content = fs.readFileSync(file, "utf8");
-    return content.length > LOG_TAIL_CHARS
-      ? `…(truncated)…\n${content.slice(-LOG_TAIL_CHARS)}`
-      : content;
-  } catch (e) {
-    return `<could not read: ${(e as Error).message}>`;
   }
 }
 
@@ -548,13 +544,12 @@ function readLogTail(file: string): string {
  * DevTools port silently fails to bind — Chromium doesn't treat that as
  * fatal. Dump enough state to tell "exe never started" apart from "exe is
  * running but the CDP port is unreachable" the next time this fails. */
-function cdpDiagnostics(webviewLogFile: string): string {
+function cdpDiagnostics(): string {
   return [
     "--- CDP failure diagnostics ---",
     `mynote.exe processes:\n${runDiagnostic('tasklist /FI "IMAGENAME eq mynote.exe" /V /FO LIST')}`,
     `msedgewebview2.exe processes:\n${runDiagnostic('tasklist /FI "IMAGENAME eq msedgewebview2.exe" /FO LIST')}`,
     `sockets on port ${CDP_PORT}:\n${runDiagnostic(`netstat -ano | findstr :${CDP_PORT}`)}`,
-    `webview2 chromium log (${webviewLogFile}):\n${readLogTail(webviewLogFile)}`,
   ].join("\n\n");
 }
 
@@ -571,6 +566,7 @@ function mynoteRunning(): boolean {
   const out = execSync('tasklist /FI "IMAGENAME eq mynote.exe" /NH', {
     encoding: "utf8",
     timeout: 10_000,
+    windowsHide: true,
   });
   return out.toLowerCase().includes("mynote.exe");
 }

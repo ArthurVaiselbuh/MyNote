@@ -102,23 +102,23 @@ pub fn run() {
             commands::restore_revision_assets
         ])
         .setup(|app| {
+            let e2e_cdp_port = std::env::var("MYNOTE_E2E_CDP_PORT").ok();
+            let hide_window_for_e2e = e2e_cdp_port.is_some();
             let mut builder =
                 tauri::WebviewWindowBuilder::new(app, "main", tauri::WebviewUrl::default())
                     .title("MyNote")
                     .inner_size(1280.0, 840.0)
                     .min_inner_size(640.0, 400.0)
-                    .visible(false);
+                    .visible(false)
+                    .focused(!hide_window_for_e2e);
             // wry always calls SetAdditionalBrowserArguments on the WebView2 COM
             // options (even just its own defaults), which per WebView2's docs means
             // it ignores WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS entirely — this is the
             // only path left for the e2e harness to open a CDP debug port.
-            if let Ok(port) = std::env::var("MYNOTE_E2E_CDP_PORT") {
-                let mut args = format!(
+            if let Some(port) = e2e_cdp_port {
+                let args = format!(
                     "--disable-features=msWebOOUI,msPdfOOUI,msSmartScreenProtection --remote-debugging-port={port}"
                 );
-                if let Ok(log_file) = std::env::var("MYNOTE_E2E_LOG_FILE") {
-                    args.push_str(&format!(" --enable-logging --v=1 --log-file=\"{log_file}\""));
-                }
                 builder = builder.additional_browser_args(&args);
             }
             let win = builder.build()?;
@@ -138,7 +138,7 @@ pub fn run() {
             tray::sync(app.handle(), tray_enabled);
             startup::sync(app.handle(), start_on_login);
             hotkey::sync(app.handle());
-            if !(tray_enabled && startup::launched_hidden()) {
+            if !hide_window_for_e2e && !(tray_enabled && startup::launched_hidden()) {
                 let _ = win.show();
             }
 
