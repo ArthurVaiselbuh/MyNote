@@ -120,6 +120,33 @@ describe("color span [text]{...}", () => {
   });
 });
 
+describe("preview size {size=N}", () => {
+  it("sets an inline span size and tokenizes its Markdown", () => {
+    const html = renderBody("[small **text**]{size=12}");
+    expect(html).toContain('<span style="font-size:12px">small <strong>text</strong></span>');
+    expect(html).not.toContain("{size=12}");
+  });
+
+  it("sets a fenced code block size without changing its language", () => {
+    const html = renderBody("```ts {size=11}\nconst compact = true;\n```");
+    expect(html).toContain('<code style="font-size:11px"');
+    expect(html).toContain('class="language-ts"');
+    expect(html).not.toContain("{size=11}");
+  });
+
+  it("renders invalid sizes literally", () => {
+    for (const size of ["0", "abc", "1000"]) {
+      expect(renderBody(`[x]{size=${size}}`)).not.toContain('style="font-size:');
+      expect(renderBody("``` {size=" + size + "}\nx\n``` ")).not.toContain('style="font-size:');
+    }
+  });
+
+  it("allows one-pixel sizes", () => {
+    expect(renderBody("[tiny]{size=1}")).toContain('style="font-size:1px"');
+    expect(renderBody("``` {size=1}\nx\n```")).toContain('style="font-size:1px"');
+  });
+});
+
 describe("attachment links", () => {
   const id = "11111111-1111-1111-1111-111111111111";
 

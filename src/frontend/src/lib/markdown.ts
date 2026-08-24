@@ -36,6 +36,7 @@ const renderToken: RenderRule = (tokens, idx, opts, _env, self) =>
 
 const defaultImage = md.renderer.rules.image ?? renderToken;
 const defaultLinkOpen = md.renderer.rules.link_open ?? renderToken;
+const defaultFence = md.renderer.rules.fence ?? renderToken;
 
 // one small built-in icon set keyed by extension, not per-extension or
 // OS-extracted icons (which would be Windows-only)
@@ -75,6 +76,17 @@ md.renderer.rules.image = (tokens, idx, opts, env, self) => {
   return defaultImage(tokens, idx, opts, env, self);
 };
 
+md.renderer.rules.fence = (tokens, idx, opts, env, self) => {
+  const token = tokens[idx];
+  const size = previewFontSizeFromFenceInfo(token.info);
+  if (size === null) return defaultFence(tokens, idx, opts, env, self);
+  const originalInfo = token.info;
+  token.info = originalInfo.replace(FENCE_SIZE_RE, "$1").trim();
+  const renderedFence = defaultFence(tokens, idx, opts, env, self);
+  token.info = originalInfo;
+  return renderedFence.replace(/<code\b/, `<code style="font-size:${size}px"`);
+};
+
 // Pandoc-style attribute blocks, whitelisted: `![alt](src){width=420}` sizes an
 // image, `[text]{.red}` / `[text]{style="color:#hex"}` colors a span. html
 // stays off; anything not matching these exact forms renders as literal text.
@@ -92,6 +104,18 @@ export const COLOR_PALETTE: Record<string, string> = {
 export const COLOR_PALETTE_GRADIENT = `linear-gradient(90deg, ${Object.values(COLOR_PALETTE).join(",")})`;
 
 const WIDTH_RE = /^\{\s*width=(\d{1,4})\s*\}/;
+const FENCE_SIZE_RE = /^(.*?)\s*\{\s*size=(\d{1,3})\s*\}\s*$/;
+const INLINE_SIZE_RE = /^\{\s*size=(\d{1,3})\s*\}/;
+
+function previewFontSize(value: string): number | null {
+  const size = Number(value);
+  return size > 0 ? size : null;
+}
+
+function previewFontSizeFromFenceInfo(info: string): number | null {
+  const match = FENCE_SIZE_RE.exec(info);
+  return match ? previewFontSize(match[2]) : null;
+}
 
 function imageWidth(state: StateInline, silent: boolean): boolean {
   if (state.src.charCodeAt(state.pos) !== 0x7b /* { */) return false;
@@ -136,8 +160,30 @@ function colorSpan(state: StateInline, silent: boolean): boolean {
   return true;
 }
 
+function previewSizeSpan(state: StateInline, silent: boolean): boolean {
+  if (silent) return false;
+  if (state.src.charCodeAt(state.pos) !== 0x5b /* [ */) return false;
+  const labelEnd = state.md.helpers.parseLinkLabel(state, state.pos);
+  if (labelEnd < 0) return false;
+  if (state.src.charCodeAt(labelEnd + 1) !== 0x7b /* { */) return false;
+  const match = INLINE_SIZE_RE.exec(state.src.slice(labelEnd + 1, state.posMax));
+  const size = match ? previewFontSize(match[1]) : null;
+  if (size === null) return false;
+  const open = state.push("preview_size_open", "span", 1);
+  open.attrs = [["style", `font-size:${size}px`]];
+  const oldPosMax = state.posMax;
+  state.pos += 1;
+  state.posMax = labelEnd;
+  state.md.inline.tokenize(state);
+  state.posMax = oldPosMax;
+  state.push("preview_size_close", "span", -1);
+  state.pos = labelEnd + 1 + match![0].length;
+  return true;
+}
+
 md.inline.ruler.push("image_width", imageWidth);
 md.inline.ruler.push("color_span", colorSpan);
+md.inline.ruler.push("preview_size_span", previewSizeSpan);
 
 const HAS_CONTENT = /\S/;
 const FENCE_RE = /^\s*(```|~~~)/;

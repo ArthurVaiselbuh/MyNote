@@ -50,6 +50,20 @@
       search: "size resize img picture",
     },
     {
+      label: "Text size",
+      before: "[",
+      after: "]{size=12}",
+      hint: "[text]{size=12}",
+      search: "font smaller larger preview",
+    },
+    {
+      label: "Code block size",
+      before: "``` {size=12}\n",
+      after: "\n```",
+      hint: "```ts {size=12}",
+      search: "font smaller larger preview fenced",
+    },
+    {
       label: "Color…",
       before: "",
       after: "",

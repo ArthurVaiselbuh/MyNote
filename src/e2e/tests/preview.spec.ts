@@ -80,3 +80,13 @@ test("[text]{.name} renders a colored span, non-palette forms stay literal", asy
   await expect(span.locator("strong")).toHaveText("hard");
   await expect(app.page.locator(PREVIEW)).toContainText("[nope]{.notacolor}");
 });
+
+test("{size=N} allows tiny text and code", async ({ app }) => {
+  await app.newPageWithBody("Tiny", "[tiny]{size=1}\n\n``` {size=1}\nx\n```", 1);
+  await app.page.keyboard.press("Control+e");
+
+  const text = app.page.locator(`${PREVIEW} p span`);
+  const code = app.page.locator(`${PREVIEW} pre code`);
+  await expect.poll(() => text.evaluate((el) => getComputedStyle(el).fontSize)).toBe("1px");
+  await expect.poll(() => code.evaluate((el) => getComputedStyle(el).fontSize)).toBe("1px");
+});
