@@ -84,7 +84,7 @@ class Recorder {
           "-loop", "0",
           out,
         ],
-        { stdio: "pipe" },
+        { stdio: "pipe", windowsHide: true },
       );
       if (result.status !== 0) {
         throw new Error(`ffmpeg failed (${result.status}): ${result.stderr.toString()}`);
@@ -283,6 +283,7 @@ test("history: snapshots, diff, restore", async ({ app }) => {
   await expect(app.selectedTitle).toHaveText("Scratch pad");
   await app.page.keyboard.press("Delete");
   await app.confirmDanger();
+  await expect(app.selectedTitle).toHaveText("Release checklist");
   await app.relaunch(); // second snapshot, and the deletion lands in history
 
   const { page } = app; // relaunch swaps the CDP page — bind it after the last one
