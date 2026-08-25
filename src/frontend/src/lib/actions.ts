@@ -72,11 +72,9 @@ function applyNotebook(info: NotebookInfo) {
   app.sectionIdx = idx >= 0 ? idx : 0;
   const pageId =
     last.pageId && sectionOfPage(info.notebook, last.pageId) ? last.pageId : null;
-  app.currentPageId = pageId;
-  app.selectedId = pageId;
-  app.view = "page";
+  resetViewedPages();
+  setPageForView(pageId);
   app.focus = "tree";
-  resetViewedPages(pageId);
 }
 
 export async function openNotebookModal() {
@@ -162,7 +160,7 @@ export function gotoSection(idx: number) {
   const sections = app.notebook?.sections ?? [];
   if (sections.length === 0) return;
   app.sectionIdx = wrapIndex(idx, sections.length);
-  selectAndOpen(currentSection()?.pages[0]?.id ?? null);
+  setPageForView(currentSection()?.pages[0]?.id ?? null);
 }
 
 export function gotoSectionOffset(offset: number) {
@@ -334,9 +332,9 @@ function flash(message: string, isError: boolean, durationMs: number) {
 let viewedPages: string[] = [];
 let viewedPageIndex = -1;
 
-function resetViewedPages(pageId: string | null) {
-  viewedPages = pageId ? [pageId] : [];
-  viewedPageIndex = pageId ? 0 : -1;
+function resetViewedPages() {
+  viewedPages = [];
+  viewedPageIndex = -1;
 }
 
 function rememberViewedPage(pageId: string) {
@@ -359,10 +357,24 @@ function availableHistoryIndex(direction: -1 | 1): number {
   return -1;
 }
 
-function selectPage(id: string | null) {
-  app.selectedId = id;
-  app.currentPageId = id;
+export function setPageForView(
+  pageId: string | null,
+  { rememberInHistory = true }: { rememberInHistory?: boolean } = {},
+): boolean {
+  if (pageId) {
+    const notebook = app.notebook;
+    if (!notebook) return false;
+    const section = sectionOfPage(notebook, pageId);
+    if (!section) return false;
+    app.sectionIdx = notebook.sections.indexOf(section);
+    expandAncestors(pageId);
+  }
+  app.selectedId = pageId;
+  app.currentPageId = pageId;
+  app.view = "page";
   saveLastView();
+  if (pageId && rememberInHistory) rememberViewedPage(pageId);
+  return true;
 }
 
 function clearSelection() {
@@ -370,29 +382,15 @@ function clearSelection() {
   app.selectedId = null;
 }
 
-export function selectAndOpen(id: string | null, remember = true) {
-  selectPage(id);
-  app.view = "page";
-  if (id && remember) rememberViewedPage(id);
-}
-
 export function openPageById(pageId: string) {
-  if (!app.notebook) return;
-  const section = sectionOfPage(app.notebook, pageId);
-  if (!section) return;
-  app.sectionIdx = app.notebook.sections.indexOf(section);
-  selectAndOpen(pageId);
+  setPageForView(pageId);
 }
 
 export function navigateViewedPages(direction: -1 | 1) {
   const index = availableHistoryIndex(direction);
   if (index < 0) return;
   const pageId = viewedPages[index];
-  const section = sectionOfPage(app.notebook!, pageId);
-  if (!section) return;
-  viewedPageIndex = index;
-  app.sectionIdx = app.notebook!.sections.indexOf(section);
-  selectAndOpen(pageId, false);
+  if (setPageForView(pageId, { rememberInHistory: false })) viewedPageIndex = index;
 }
 
 export function openExternalLink(href: string) {
@@ -418,7 +416,7 @@ async function createPageIn(sectionId: string, parentId: string | null, afterId:
   try {
     const node = await api.createPage(sectionId, parentId, afterId);
     await refreshTree();
-    selectAndOpen(node.id);
+    setPageForView(node.id);
     app.focus = "editor";
     app.titleFocusReq++;
   } catch (e) {
@@ -473,9 +471,12 @@ export function deleteSelected() {
       null;
     await api.deletePage(doomed.id);
     await refreshTree();
-    if (app.currentPageId === doomed.id) app.currentPageId = neighbor;
-    app.selectedId = neighbor;
-    if (neighbor) saveLastView();
+    if (app.currentPageId === doomed.id) {
+      setPageForView(neighbor);
+    } else {
+      app.selectedId = neighbor;
+      if (neighbor) saveLastView();
+    }
   });
 }
 
@@ -522,7 +523,7 @@ async function applyHistory(
         clearSelection();
       }
       if (outcome.pageId && sectionOfPage(notebook, outcome.pageId)) {
-        selectAndOpen(outcome.pageId);
+        setPageForView(outcome.pageId);
       }
     }
     flashStatus(outcome.label);
@@ -555,12 +556,12 @@ export function selectOffset(offset: number) {
   if (rows.length === 0) return;
   const pos = rows.findIndex((r) => r.node.id === app.selectedId);
   const next = pos < 0 ? 0 : Math.min(rows.length - 1, Math.max(0, pos + offset));
-  selectAndOpen(rows[next].node.id);
+  setPageForView(rows[next].node.id);
 }
 
 export function activateSelected() {
   if (!app.selectedId) return;
-  selectAndOpen(app.selectedId);
+  setPageForView(app.selectedId);
   focusPane("editor");
 }
 
@@ -595,7 +596,7 @@ export async function collapseOrParent() {
     node.expanded = false;
     await api.setExpanded(node.id, false).catch(() => {});
   } else if (parentId) {
-    selectPage(parentId);
+    setPageForView(parentId);
   }
 }
 
@@ -608,7 +609,7 @@ export async function expandOrChild() {
     node.expanded = true;
     await api.setExpanded(node.id, true).catch(() => {});
   } else {
-    selectPage(node.children[0].id);
+    setPageForView(node.children[0].id);
   }
 }
 
@@ -649,12 +650,7 @@ export async function moveSelectedToSection(target: Section) {
   if (!source || source.id === target.id) return;
   await movePage(id, target.id, null, target.pages.length);
   // movePage refetched the tree, so the page's new home comes from the new one
-  const moved = app.notebook;
-  if (!moved) return;
-  const landed = sectionOfPage(moved, id);
-  if (!landed) return;
-  app.sectionIdx = moved.sections.indexOf(landed);
-  selectAndOpen(id);
+  setPageForView(id);
 }
 
 export async function moveSelectedToAdjacentSection(offset: number) {
@@ -704,15 +700,10 @@ export function resultFindPrefill(): FindPrefill {
 
 export function openResult(idx: number) {
   const hit = app.results[idx];
-  if (!hit || !app.notebook) return;
-  const sectionIdx = app.notebook.sections.findIndex((s) => s.id === hit.sectionId);
-  if (sectionIdx < 0) return;
-  app.sectionIdx = sectionIdx;
-  expandAncestors(hit.pageId);
+  if (!hit || !setPageForView(hit.pageId)) return;
   // the editor remounts when leaving the results view and consumes the prefill on load
   app.findPrefill = resultFindPrefill();
   app.mode = "preview";
-  selectAndOpen(hit.pageId);
   app.focus = "editor";
 }
 
@@ -1094,8 +1085,7 @@ export function recoverDeletedPage(id: string, sha: string, label: string, count
       try {
         const outcome = await api.restoreDeletedPage(id, sha, currentSection()?.id ?? null);
         await refreshTree();
-        showSection(outcome.sectionId);
-        selectAndOpen(outcome.pageId);
+        setPageForView(outcome.pageId);
         flashStatus(
           outcome.renamed
             ? `recovered ${outcome.pageCount} page(s) as a new copy`
