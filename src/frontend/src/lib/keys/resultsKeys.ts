@@ -5,7 +5,12 @@ import { app } from "../state/app.svelte";
 import { commandFor } from "./bindings";
 
 export function resultsKeys(e: KeyboardEvent) {
-  switch (commandFor("results", e)) {
+  if (!runResultsCommand(commandFor("results", e))) return;
+  e.preventDefault();
+}
+
+export function runResultsCommand(command: string | null): boolean {
+  switch (command) {
     case "results.selectUp":
       app.resultsSel = clampIndex(app.resultsSel - 1, app.results.length);
       app.focus = "results";
@@ -28,7 +33,7 @@ export function resultsKeys(e: KeyboardEvent) {
       peekCtl.current?.findPrev();
       break;
     default:
-      return;
+      return false;
   }
-  e.preventDefault();
+  return true;
 }

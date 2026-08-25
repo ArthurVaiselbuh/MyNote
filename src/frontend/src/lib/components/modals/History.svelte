@@ -9,7 +9,7 @@
     type RevisionText,
   } from "../../api";
   import { diffText, type Span } from "../../diff";
-  import { commandFor } from "../../keys/bindings";
+  import { commandFor, commandForChord, mouseChordOf } from "../../keys/bindings";
   import { clampIndex, wrapIndex } from "../../listIndex";
   import { renderBody } from "../../markdown";
   import { app, type HistoryMode } from "../../state/app.svelte";
@@ -312,10 +312,9 @@
     }
   }
 
-  function keys(e: KeyboardEvent) {
-    // still mounted behind its own confirm dialog — that dialog owns the keyboard then
-    if (app.modal !== "history") return;
-    switch (commandFor("history", e)) {
+  function runCommand(command: string | null): boolean {
+    if (app.modal !== "history") return false;
+    switch (command) {
       case "history.help":
         act.openHistoryHelp();
         break;
@@ -328,23 +327,23 @@
         else moveDeletedSel(1);
         break;
       case "history.baseUp":
-        if (!onPageTab) return;
+        if (!onPageTab) return false;
         moveRailBase(-1);
         break;
       case "history.baseDown":
-        if (!onPageTab) return;
+        if (!onPageTab) return false;
         moveRailBase(1);
         break;
       case "history.setBase":
-        if (!onPageTab) return;
+        if (!onPageTab) return false;
         app.historyRevBase = app.historyRevSel;
         break;
       case "history.modeSplit":
-        if (!onPageTab) return;
+        if (!onPageTab) return false;
         app.historyMode = "split";
         break;
       case "history.modeInline":
-        if (!onPageTab) return;
+        if (!onPageTab) return false;
         app.historyMode = "inline";
         break;
       case "history.modeRendered":
@@ -364,11 +363,11 @@
         }
         break;
       case "history.nextChange":
-        if (!onPageTab || !diffing) return;
+        if (!onPageTab || !diffing) return false;
         jumpChange(1);
         break;
       case "history.prevChange":
-        if (!onPageTab || !diffing) return;
+        if (!onPageTab || !diffing) return false;
         jumpChange(-1);
         break;
       case "history.switchTab":
@@ -377,19 +376,30 @@
       case "history.restore":
         doRestore();
         break;
-      default: {
-        // the pane owns the keyboard outright, so PgUp/PgDn can't reach the
-        // global dispatcher — page the diff here instead
-        const scroll = commandFor("pane", e);
-        if (!scroll) return;
-        scrollContent(scroll === "pane.scrollUp" ? -1 : 1);
-      }
+      case "pane.scrollUp": scrollContent(-1); break;
+      case "pane.scrollDown": scrollContent(1); break;
+      default: return false;
     }
+    return true;
+  }
+
+  function keys(e: KeyboardEvent) {
+    const command = commandFor("history", e) ?? commandFor("pane", e);
+    if (!runCommand(command)) return;
     e.preventDefault();
+  }
+
+  function mouseButtons(e: MouseEvent) {
+    const chord = mouseChordOf(e);
+    if (!chord) return;
+    const command = commandForChord("history", chord) ?? commandForChord("pane", chord);
+    if (!runCommand(command)) return;
+    e.preventDefault();
+    e.stopPropagation();
   }
 </script>
 
-<svelte:window onkeydown={keys} />
+<svelte:window onkeydown={keys} onmousedown={mouseButtons} />
 
 <!-- one line: .diff-cell is `white-space: pre-wrap`, so any indentation here would render -->
 {#snippet spanRun(spans: Span[])}{#each spans as s, si (si)}{#if s.hl}<mark class="word">{s.text}</mark>{:else}{s.text}{/if}{/each}{/snippet}

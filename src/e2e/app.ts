@@ -378,13 +378,10 @@ export class App {
     await expect(this.page.locator(".help-group").first()).toBeVisible();
   }
 
-  /** Ctrl+, → Keyboard shortcuts → Customize…; ends on the binding list. */
+  /** Ctrl+, → Keybindings → Customize…; ends on the binding list. */
   async openKeybindings() {
     await this.page.keyboard.press("Control+,");
-    await this.page
-      .locator(".settings-row", { hasText: "Keyboard shortcuts" })
-      .getByRole("button")
-      .click();
+    await this.page.locator("#set-keybindings").click();
     await expect(this.page.locator(".keybind-list")).toBeVisible();
   }
 

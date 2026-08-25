@@ -12,6 +12,7 @@
     conflictOf,
     formatChord,
     isDefault,
+    mouseChordOf,
     rejectionOf,
     resetAllToDefaults,
     resetToDefault,
@@ -69,16 +70,8 @@
     app.capturingChord = false;
   }
 
-  function capture(e: KeyboardEvent) {
+  function assignCaptured(chord: string) {
     if (!capturing) return;
-    e.preventDefault();
-    e.stopPropagation();
-    if (e.key === "Escape") {
-      stopCapture();
-      return;
-    }
-    const chord = chordOf(e);
-    if (!chord) return; // a modifier on its own — wait for the real key
     const rejection = rejectionOf(capturing, chord);
     if (rejection) {
       captureNote = rejection;
@@ -89,6 +82,31 @@
     stopCapture();
     if (stolen) app.status = `${formatChord(chord)} taken from “${stolen.desc}”`;
     void act.persistSettings();
+  }
+
+  function capture(e: KeyboardEvent) {
+    if (!capturing) return;
+    e.preventDefault();
+    e.stopPropagation();
+    if (e.key === "Escape") {
+      stopCapture();
+      return;
+    }
+    const chord = chordOf(e);
+    if (chord) assignCaptured(chord);
+  }
+
+  function captureMouse(e: MouseEvent) {
+    if (!capturing) return;
+    e.preventDefault();
+    e.stopPropagation();
+    const chord = mouseChordOf(e);
+    if (chord) assignCaptured(chord);
+    else captureNote = "Primary and secondary clicks can't be assigned.";
+  }
+
+  function rejectWheelDuringCapture() {
+    if (capturing) captureNote = "Wheel scrolling can't be assigned.";
   }
 
   function clear(id: string) {
@@ -111,11 +129,15 @@
   }
 </script>
 
-<svelte:window onkeydowncapture={capture} />
+<svelte:window
+  onkeydowncapture={capture}
+  onmousedowncapture={captureMouse}
+  onwheelcapture={rejectWheelDuringCapture}
+/>
 
 <div class="modal-backdrop">
   <div class="modal" style:width="640px" role="dialog">
-    <div class="modal-title">Keyboard shortcuts</div>
+    <div class="modal-title">Keyboard &amp; mouse shortcuts</div>
     <input placeholder="filter shortcuts…" style="width:100%" bind:value={filter} use:autofocusSelect />
 
     <div class="keybind-list">
@@ -126,7 +148,7 @@
             <span class="keybind-desc">{command.desc}</span>
             <span class="keybind-chords">
               {#if capturing === command.id}
-                <span class="keybind-capture">press a key… (Esc cancels)</span>
+                <span class="keybind-capture">press a key or mouse button… (Esc cancels)</span>
               {:else if chords.length}
                 {#each chords as chord (chord)}<kbd>{formatChord(chord)}</kbd>{/each}
               {:else}

@@ -2,7 +2,12 @@ import * as act from "../actions";
 import { commandFor } from "./bindings";
 
 export function treeKeys(e: KeyboardEvent) {
-  switch (commandFor("tree", e)) {
+  if (!runTreeCommand(commandFor("tree", e))) return;
+  e.preventDefault();
+}
+
+export function runTreeCommand(command: string | null): boolean {
+  switch (command) {
     case "tree.filter": act.openTreeFilter(); break;
     case "tree.selectUp": act.selectOffset(-1); break;
     case "tree.selectDown": act.selectOffset(1); break;
@@ -18,7 +23,7 @@ export function treeKeys(e: KeyboardEvent) {
     case "tree.delete": act.deleteSelected(); break;
     case "tree.toPrevSection": void act.moveSelectedToAdjacentSection(-1); break;
     case "tree.toNextSection": void act.moveSelectedToAdjacentSection(1); break;
-    default: return;
+    default: return false;
   }
-  e.preventDefault();
+  return true;
 }

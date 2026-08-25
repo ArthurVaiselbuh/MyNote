@@ -1,7 +1,29 @@
-import { expect, test } from "../app";
+import { App, expect, test } from "../app";
 
 const NEW_PAGE = "New page";
 const BRING_TO_FRONT = "Bring MyNote to the front";
+const PREVIOUS_PAGE = "Previous viewed page";
+const NEXT_PAGE = "Next viewed page";
+
+async function pressMouseButton(
+  app: App,
+  button: number,
+  modifiers: Pick<MouseEventInit, "ctrlKey" | "altKey" | "shiftKey"> = {},
+) {
+  return app.page.evaluate(
+    ({ mouseButton, init }) => {
+      const event = new MouseEvent("mousedown", {
+        button: mouseButton,
+        bubbles: true,
+        cancelable: true,
+        ...init,
+      });
+      document.body.dispatchEvent(event);
+      return event.defaultPrevented;
+    },
+    { mouseButton: button, init: modifiers },
+  );
+}
 
 test("rebinding a shortcut retires the old chord and reaches every label", async ({ app }) => {
   await app.newTitledPage("Alpha", 1);
@@ -81,4 +103,59 @@ test("claiming a taken chord moves it off the command that held it", async ({ ap
 
   await app.rebind("Save", "Control+E", "Ctrl+E"); // Edit / Preview owns this chord
   await expect(app.keybindRow("Edit / Preview").locator(".keybind-unassigned")).toBeVisible();
+});
+
+test("mouse buttons can be captured, dispatched, and persisted", async ({ app }) => {
+  await app.newTitledPage("Alpha", 1);
+  await app.newTitledPage("Beta", 2);
+  await app.newTitledPage("Gamma", 3);
+  await app.openKeybindings();
+
+  const row = app.keybindRow(PREVIOUS_PAGE);
+  await expect(row.locator("kbd")).toHaveText("Mouse Back");
+  await row.getByRole("button", { name: "Change…" }).click();
+  expect(await pressMouseButton(app, 1)).toBe(true);
+  await expect(row.locator("kbd")).toHaveText("Mouse Middle");
+  await expect(app.titleInput).toHaveValue("Gamma");
+
+  await app.closeSettings();
+  expect(await pressMouseButton(app, 3)).toBe(true);
+  await expect(app.titleInput).toHaveValue("Gamma");
+  expect(await pressMouseButton(app, 1)).toBe(true);
+  await expect(app.titleInput).toHaveValue("Beta");
+
+  await app.relaunch();
+  await app.openKeybindings();
+  await expect(app.keybindRow(PREVIOUS_PAGE).locator("kbd")).toHaveText("Mouse Middle");
+});
+
+test("mouse capture rejects normal clicks and wheel scrolling", async ({ app }) => {
+  await app.openKeybindings();
+
+  const row = app.keybindRow(PREVIOUS_PAGE);
+  await row.getByRole("button", { name: "Change…" }).click();
+  expect(await pressMouseButton(app, 0)).toBe(true);
+  await expect(app.page.locator(".keybind-note")).toContainText("Primary and secondary");
+  await expect(row).toHaveClass(/capturing/);
+
+  expect(await pressMouseButton(app, 2)).toBe(true);
+  await expect(row).toHaveClass(/capturing/);
+  await app.page.evaluate(() =>
+    document.body.dispatchEvent(new WheelEvent("wheel", { deltaY: 100, bubbles: true })),
+  );
+  await expect(app.page.locator(".keybind-note")).toContainText("Wheel scrolling");
+  await expect(row).toHaveClass(/capturing/);
+
+  expect(await pressMouseButton(app, 3)).toBe(true);
+  await expect(row.locator("kbd")).toHaveText("Mouse Back");
+});
+
+test("claiming a mouse button moves it off its previous command", async ({ app }) => {
+  await app.openKeybindings();
+
+  const back = app.keybindRow(PREVIOUS_PAGE);
+  await back.getByRole("button", { name: "Change…" }).click();
+  expect(await pressMouseButton(app, 4)).toBe(true);
+  await expect(back.locator("kbd")).toHaveText("Mouse Forward");
+  await expect(app.keybindRow(NEXT_PAGE).locator(".keybind-unassigned")).toBeVisible();
 });

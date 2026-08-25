@@ -2,9 +2,9 @@ import * as act from "../actions";
 import { contextMenu, contextMenuKeys } from "../contextMenu.svelte";
 import { app } from "../state/app.svelte";
 import { isCodeMirror, isTextEntry } from "../textEntry";
-import { chordOf, commandForChord, isTextChord } from "./bindings";
-import { resultsKeys } from "./resultsKeys";
-import { treeKeys } from "./treeKeys";
+import { chordOf, commandForChord, isTextChord, mouseChordOf } from "./bindings";
+import { resultsKeys, runResultsCommand } from "./resultsKeys";
+import { runTreeCommand, treeKeys } from "./treeKeys";
 
 export function handleGlobal(e: KeyboardEvent) {
   const target = e.target as HTMLElement | null;
@@ -81,6 +81,39 @@ export function handleGlobal(e: KeyboardEvent) {
   else if (app.focus === "results" || app.focus === "search") resultsKeys(e);
 }
 
+export function handleMouseButton(e: MouseEvent) {
+  if (e.button === 3 || e.button === 4) e.preventDefault();
+  if (contextMenu.open || app.capturingChord || app.modal !== "none") return;
+  const chord = mouseChordOf(e);
+  if (!chord) return;
+
+  const global = commandForChord("global", chord);
+  if (global && runGlobal(global, false)) {
+    e.preventDefault();
+    e.stopPropagation();
+    return;
+  }
+
+  const pane = commandForChord("pane", chord);
+  if (pane) {
+    e.preventDefault();
+    e.stopPropagation();
+    act.scrollMain(pane === "pane.scrollUp" ? -1 : 1);
+    return;
+  }
+
+  const handled =
+    app.focus === "tree"
+      ? runTreeCommand(commandForChord("tree", chord))
+      : app.focus === "results" || app.focus === "search"
+        ? runResultsCommand(commandForChord("results", chord))
+        : false;
+  if (handled) {
+    e.preventDefault();
+    e.stopPropagation();
+  }
+}
+
 /** Runs a global command; false means it declined and the key should fall through. */
 function runGlobal(id: string, typing: boolean): boolean {
   switch (id) {
@@ -91,6 +124,8 @@ function runGlobal(id: string, typing: boolean): boolean {
     case "app.find": act.openFind(); return true;
     case "app.findNext": act.activePaneCtl()?.findNext(); return true;
     case "app.findPrev": act.activePaneCtl()?.findPrev(); return true;
+    case "page.back": act.navigateViewedPages(-1); return true;
+    case "page.forward": act.navigateViewedPages(1); return true;
     case "app.toggleMode": act.toggleMode(); return true;
     case "app.save": void act.saveNow(); return true;
     case "page.new": void act.newPage(); return true;
