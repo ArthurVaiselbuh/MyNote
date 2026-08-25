@@ -16,7 +16,7 @@ export function openTreeMenu(e: MouseEvent) {
 }
 
 function openTreeRowMenu(e: MouseEvent, id: string) {
-  // select only — selectAndOpen would also navigate the editor to this page,
+  // select only — setPageForView would also navigate the editor to this page,
   // which a menu the user might just dismiss shouldn't do as a side effect
   app.selectedId = id;
   app.focus = "tree";

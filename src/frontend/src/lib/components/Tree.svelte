@@ -42,7 +42,7 @@
       e.preventDefault();
       leaveFilter();
       if (e.key === "ArrowDown") act.selectOffset(1);
-      else if (!app.selectedId && rows.length) act.selectAndOpen(rows[0].node.id);
+      else if (!app.selectedId && rows.length) act.setPageForView(rows[0].node.id);
     }
   }
 
@@ -59,7 +59,7 @@
 
   function rowClick(e: MouseEvent, id: string) {
     if ((e.target as HTMLElement).closest("input, button")) return;
-    act.selectAndOpen(id);
+    act.setPageForView(id);
     app.focus = "tree";
   }
 </script>
