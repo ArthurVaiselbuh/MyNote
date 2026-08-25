@@ -101,8 +101,8 @@
       <button onclick={() => act.openModal("colors")}>Customize…</button>
     </div>
     <div class="settings-row">
-      <span>Keyboard shortcuts</span>
-      <button onclick={() => act.openModal("keybindings")}>Customize…</button>
+      <span>Keybindings</span>
+      <button id="set-keybindings" onclick={() => act.openModal("keybindings")}>Customize…</button>
     </div>
     <div class="settings-row">
       <label for="set-scroll">Scroll speed</label>

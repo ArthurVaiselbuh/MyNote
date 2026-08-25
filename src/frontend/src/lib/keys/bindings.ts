@@ -3,8 +3,8 @@ import { ALT_LABEL, MOD_LABEL, SHIFT_LABEL, chordKey, isMac } from "./platform";
 
 // Single source of truth for every binding in the app: the dispatcher matches
 // against it, the help overlay and every tooltip render from it, and the
-// keybindings pane edits it. A chord is stored layout-stably — the key half is
-// whatever chordKey() yields (see platform.ts), never the printed character.
+// keybindings pane edits it. A keyboard chord is stored layout-stably — its key
+// half is whatever chordKey() yields (see platform.ts), never the printed character.
 //
 // Serialized form is "Mod+Alt+Shift+key" with the modifiers in that fixed
 // order; "Mod" is Ctrl on Windows/Linux and Cmd on macOS. User overrides live
@@ -31,6 +31,8 @@ export const COMMANDS: Command[] = [
   { id: "app.find", ctx: "global", desc: "Find in page", defaults: ["Mod+f"] },
   { id: "app.findNext", ctx: "global", desc: "Next match", defaults: ["F3"] },
   { id: "app.findPrev", ctx: "global", desc: "Previous match", defaults: ["Shift+F3"] },
+  { id: "page.back", ctx: "global", desc: "Previous viewed page", defaults: ["MouseBack"] },
+  { id: "page.forward", ctx: "global", desc: "Next viewed page", defaults: ["MouseForward"] },
   { id: "app.toggleMode", ctx: "global", desc: "Edit / Preview", defaults: ["Mod+e"] },
   { id: "app.save", ctx: "global", desc: "Save", defaults: ["Mod+s"] },
   { id: "app.undo", ctx: "global", desc: "Undo delete & move", defaults: ["Mod+z"] },
@@ -188,7 +190,9 @@ export function formatChord(chord: string): string {
   const parts: string[] = [];
   if (mod) parts.push(MOD_LABEL);
   if (alt) parts.push(ALT_LABEL);
-  let keyLabel = KEY_LABELS[key] ?? (key.length === 1 ? key.toUpperCase() : key);
+  let keyLabel =
+    KEY_LABELS[key] ??
+    (/^Mouse\d+$/.test(key) ? `Mouse ${key.slice(5)}` : key.length === 1 ? key.toUpperCase() : key);
   if (shift) {
     // a bare shifted punctuation key reads as what it prints — "?" not "Shift+/"
     const printed = !mod && !alt ? SHIFTED_PRINTED[key] : undefined;
@@ -210,6 +214,9 @@ const KEY_LABELS: Record<string, string> = {
   Escape: "Esc",
   " ": "Space",
   Insert: "Ins",
+  MouseMiddle: "Mouse Middle",
+  MouseBack: "Mouse Back",
+  MouseForward: "Mouse Forward",
 };
 
 const SHIFTED_PRINTED: Record<string, string> = {
@@ -237,13 +244,38 @@ const MODIFIER_KEYS = new Set(["Control", "Shift", "Alt", "Meta", "CapsLock", "D
 export function chordOf(e: KeyboardEvent): string | null {
   const key = chordKey(e);
   if (MODIFIER_KEYS.has(key)) return null;
+  return chordWithModifiers(key, e);
+}
+
+function chordWithModifiers(
+  key: string,
+  modifiers: Pick<MouseEvent, "ctrlKey" | "metaKey" | "altKey" | "shiftKey">,
+): string {
   const parts: string[] = [];
-  if (isMac ? e.ctrlKey : e.metaKey) parts.push("Other");
-  if (isMac ? e.metaKey : e.ctrlKey) parts.push("Mod");
-  if (e.altKey) parts.push("Alt");
-  if (e.shiftKey) parts.push("Shift");
+  if (isMac ? modifiers.ctrlKey : modifiers.metaKey) parts.push("Other");
+  if (isMac ? modifiers.metaKey : modifiers.ctrlKey) parts.push("Mod");
+  if (modifiers.altKey) parts.push("Alt");
+  if (modifiers.shiftKey) parts.push("Shift");
   parts.push(key);
   return parts.join("+");
+}
+
+export function mouseChordOf(e: MouseEvent): string | null {
+  const key =
+    e.button === 1
+      ? "MouseMiddle"
+      : e.button === 3
+        ? "MouseBack"
+        : e.button === 4
+          ? "MouseForward"
+          : e.button >= 5
+            ? `Mouse${e.button + 1}`
+            : null;
+  return key ? chordWithModifiers(key, e) : null;
+}
+
+export function isMouseChord(chord: string): boolean {
+  return parseChord(chord).key.startsWith("Mouse");
 }
 
 // Keys a text field needs for itself — the printable ones plus the caret and
@@ -356,6 +388,7 @@ export function rejectionOf(id: string, chord: string): string | null {
   const { mod, alt, key } = parseChord(chord);
   if (key === "Tab") return "Tab can't be reassigned — it drives focus everywhere.";
   if (commandOf(id)?.ctx !== "system") return null;
+  if (isMouseChord(chord)) return "Mouse buttons can't be used as a system-wide shortcut.";
   if (mod || alt) return null;
   return `A system-wide shortcut needs ${MOD_LABEL} or ${ALT_LABEL} — otherwise it swallows that key in every app.`;
 }

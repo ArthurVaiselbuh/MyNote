@@ -5,10 +5,12 @@ import {
   chordOf,
   chordsOf,
   commandFor,
+  commandForChord,
   conflictOf,
   formatChord,
   isTextChord,
   labelOf,
+  mouseChordOf,
   parseChord,
   rejectionOf,
   resetAllToDefaults,
@@ -36,6 +38,27 @@ describe("chordOf", () => {
   });
 });
 
+describe("mouseChordOf", () => {
+  function mouse(button: number, modifiers: MouseEventInit = {}) {
+    return new MouseEvent("mousedown", { button, ...modifiers });
+  }
+
+  it("accepts middle and extended buttons but not primary or secondary click", () => {
+    expect(mouseChordOf(mouse(0))).toBe(null);
+    expect(mouseChordOf(mouse(2))).toBe(null);
+    expect(mouseChordOf(mouse(1))).toBe("MouseMiddle");
+    expect(mouseChordOf(mouse(3))).toBe("MouseBack");
+    expect(mouseChordOf(mouse(4))).toBe("MouseForward");
+    expect(mouseChordOf(mouse(5))).toBe("Mouse6");
+  });
+
+  it("uses the same modifiers as keyboard chords", () => {
+    expect(mouseChordOf(mouse(3, { ctrlKey: true, shiftKey: true }))).toBe(
+      "Mod+Shift+MouseBack",
+    );
+  });
+});
+
 describe("chord formatting", () => {
   it("round-trips through parse", () => {
     for (const chord of ["Mod+Shift+n", "Alt+ArrowLeft", "F3", "/", "Mod+,"]) {
@@ -58,6 +81,9 @@ describe("chord formatting", () => {
     expect(formatChord("Alt+ArrowUp")).toBe("Alt+↑");
     expect(formatChord("Mod+PageDown")).toBe("Ctrl+PgDn");
     expect(formatChord("Delete")).toBe("Del");
+    expect(formatChord("MouseMiddle")).toBe("Mouse Middle");
+    expect(formatChord("Mod+MouseBack")).toBe("Ctrl+Mouse Back");
+    expect(formatChord("Mouse6")).toBe("Mouse 6");
   });
 });
 
@@ -67,6 +93,8 @@ describe("defaults", () => {
     expect(commandFor("tree", press("F2", "F2"))).toBe("tree.rename");
     expect(commandFor("tree", press("k", "KeyK", { ctrlKey: true }))).toBe(null);
     expect(commandFor("results", press("n", "KeyN"))).toBe("results.nextMatch");
+    expect(commandForChord("global", "MouseBack")).toBe("page.back");
+    expect(commandForChord("global", "MouseForward")).toBe("page.forward");
   });
 
   it("keeps ? off the settings binding on a layout that moves the comma", () => {
@@ -95,6 +123,16 @@ describe("overrides", () => {
     assignChord("app.search", "Mod+f");
     expect(chordsOf("app.find")).toEqual([]);
     expect(commandFor("global", press("f", "KeyF", { ctrlKey: true }))).toBe("app.search");
+  });
+
+  it("persists mouse chords and applies the same conflict rules", () => {
+    assignChord("page.back", "MouseMiddle");
+    expect(chordsOf("page.back")).toEqual(["MouseMiddle"]);
+    expect(commandForChord("global", "MouseMiddle")).toBe("page.back");
+
+    assignChord("page.back", "MouseForward");
+    expect(chordsOf("page.forward")).toEqual([]);
+    expect(commandForChord("global", "MouseForward")).toBe("page.back");
   });
 
   it("unassigns without falling back to the default", () => {
@@ -126,6 +164,7 @@ describe("the system-wide shortcut", () => {
     expect(rejectionOf("app.showWindow", "Shift+F5")).not.toBe(null);
     expect(rejectionOf("app.showWindow", "Mod+Alt+n")).toBe(null);
     expect(rejectionOf("app.search", "n")).toBe(null);
+    expect(rejectionOf("app.showWindow", "Mod+MouseBack")).toContain("Mouse buttons");
   });
 
   it("collides with in-app chords, which the OS would never deliver", () => {
