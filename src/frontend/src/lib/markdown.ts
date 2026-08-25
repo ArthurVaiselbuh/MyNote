@@ -84,7 +84,9 @@ md.renderer.rules.fence = (tokens, idx, opts, env, self) => {
   token.info = originalInfo.replace(FENCE_SIZE_RE, "$1").trim();
   const renderedFence = defaultFence(tokens, idx, opts, env, self);
   token.info = originalInfo;
-  return renderedFence.replace(/<code\b/, `<code style="font-size:${size}px"`);
+  return renderedFence
+    .replace(/<pre\b/, `<pre style="font-size:${size}px"`)
+    .replace(/<code\b/, `<code style="font-size:${size}px"`);
 };
 
 // Pandoc-style attribute blocks, whitelisted: `![alt](src){width=420}` sizes an

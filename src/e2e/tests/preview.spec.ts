@@ -81,12 +81,25 @@ test("[text]{.name} renders a colored span, non-palette forms stay literal", asy
   await expect(app.page.locator(PREVIEW)).toContainText("[nope]{.notacolor}");
 });
 
-test("{size=N} allows tiny text and code", async ({ app }) => {
-  await app.newPageWithBody("Tiny", "[tiny]{size=1}\n\n``` {size=1}\nx\n```", 1);
+test("{size=N} scales text and the whole code block", async ({ app }) => {
+  await app.newPageWithBody(
+    "Tiny",
+    "[tiny]{size=4}\n\n``` {size=4}\nx\ny\n```\n\n```\nx\ny\n```",
+    1,
+  );
   await app.page.keyboard.press("Control+e");
 
   const text = app.page.locator(`${PREVIEW} p span`);
-  const code = app.page.locator(`${PREVIEW} pre code`);
-  await expect.poll(() => text.evaluate((el) => getComputedStyle(el).fontSize)).toBe("1px");
-  await expect.poll(() => code.evaluate((el) => getComputedStyle(el).fontSize)).toBe("1px");
+  const compactBlock = app.page.locator(`${PREVIEW} pre`).first();
+  const regularBlock = app.page.locator(`${PREVIEW} pre`).last();
+  const code = compactBlock.locator("code");
+  await expect.poll(() => text.evaluate((el) => getComputedStyle(el).fontSize)).toBe("4px");
+  await expect.poll(() => compactBlock.evaluate((el) => getComputedStyle(el).fontSize)).toBe("4px");
+  await expect.poll(() => code.evaluate((el) => getComputedStyle(el).fontSize)).toBe("4px");
+  await expect
+    .poll(() => compactBlock.evaluate((el) => parseFloat(getComputedStyle(el).paddingTop)))
+    .toBeLessThan(4);
+  await expect
+    .poll(async () => (await compactBlock.boundingBox())!.height / (await regularBlock.boundingBox())!.height)
+    .toBeLessThan(0.4);
 });

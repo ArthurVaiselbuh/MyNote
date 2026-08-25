@@ -129,6 +129,7 @@ describe("preview size {size=N}", () => {
 
   it("sets a fenced code block size without changing its language", () => {
     const html = renderBody("```ts {size=11}\nconst compact = true;\n```");
+    expect(html).toContain('<pre style="font-size:11px"');
     expect(html).toContain('<code style="font-size:11px"');
     expect(html).toContain('class="language-ts"');
     expect(html).not.toContain("{size=11}");
