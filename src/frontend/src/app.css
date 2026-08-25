@@ -366,7 +366,7 @@ input:focus {
 }
 .preview pre {
   background: var(--panel);
-  padding: 10px 12px;
+  padding: 0.7143em 0.8571em;
   border-radius: 6px;
   overflow-x: auto;
 }
