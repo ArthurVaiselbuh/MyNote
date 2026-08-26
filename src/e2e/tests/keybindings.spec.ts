@@ -1,9 +1,11 @@
 import { App, expect, test } from "../app";
 
-const NEW_PAGE = "New page";
-const BRING_TO_FRONT = "Bring MyNote to the front";
-const PREVIOUS_PAGE = "Previous viewed page";
-const NEXT_PAGE = "Next viewed page";
+// keybindRow/rebind/help-row locators key off these command ids (see keys/bindings.ts),
+// not the desc text, so a copy tweak there can't silently break these tests
+const NEW_PAGE = "page.new";
+const BRING_TO_FRONT = "app.showWindow";
+const PREVIOUS_PAGE = "page.back";
+const NEXT_PAGE = "page.forward";
 
 async function pressMouseButton(
   app: App,
@@ -31,7 +33,7 @@ test("rebinding a shortcut retires the old chord and reaches every label", async
 
   const row = app.keybindRow(NEW_PAGE);
   await expect(row.locator("kbd")).toHaveText("Ctrl+N");
-  await row.getByRole("button", { name: "Change…" }).click();
+  await row.locator(".keybind-change").click();
   await expect(row).toHaveClass(/capturing/);
   await app.page.keyboard.press("Control+Shift+P");
   await expect(row.locator("kbd")).toHaveText("Ctrl+Shift+P");
@@ -50,7 +52,7 @@ test("rebinding a shortcut retires the old chord and reaches every label", async
   await app.page.keyboard.press("Escape");
   await expect(app.titleInput).not.toBeFocused();
   await app.openHelp();
-  await expect(app.page.locator(".help-row", { hasText: NEW_PAGE }).locator("kbd")).toHaveText(
+  await expect(app.page.locator(`.help-row[data-command="${NEW_PAGE}"]`).locator("kbd")).toHaveText(
     "Ctrl+Shift+P",
   );
   await app.page.keyboard.press("Escape");
@@ -61,7 +63,7 @@ test("a shortcut can be unassigned, and reset all restores the defaults", async 
   await app.openKeybindings();
 
   const row = app.keybindRow(NEW_PAGE);
-  await row.getByRole("button", { name: "Clear" }).click();
+  await row.locator(".keybind-clear").click();
   await expect(row.locator(".keybind-unassigned")).toBeVisible();
   await expect(row.locator("kbd")).toHaveCount(0);
 
@@ -70,7 +72,7 @@ test("a shortcut can be unassigned, and reset all restores the defaults", async 
   await expect(app.rows).toHaveCount(1); // nothing happened
 
   await app.openKeybindings();
-  await app.page.getByRole("button", { name: "Reset all to defaults" }).click();
+  await app.page.locator(".keybind-reset-all").click();
   await expect(app.keybindRow(NEW_PAGE).locator("kbd")).toHaveText("Ctrl+N");
 
   await app.closeSettings();
@@ -84,7 +86,7 @@ test("the system-wide shortcut starts unassigned and refuses a bare chord", asyn
   const row = app.keybindRow(BRING_TO_FRONT);
   await expect(row.locator(".keybind-unassigned")).toBeVisible();
 
-  await row.getByRole("button", { name: "Change…" }).click();
+  await row.locator(".keybind-change").click();
   await app.page.keyboard.press("b");
   await expect(app.page.locator(".keybind-note")).toContainText("Ctrl or Alt");
   await expect(row).toHaveClass(/capturing/); // still waiting for a usable chord
@@ -101,8 +103,8 @@ test("claiming a taken chord moves it off the command that held it", async ({ ap
   await app.newTitledPage("Alpha", 1);
   await app.openKeybindings();
 
-  await app.rebind("Save", "Control+E", "Ctrl+E"); // Edit / Preview owns this chord
-  await expect(app.keybindRow("Edit / Preview").locator(".keybind-unassigned")).toBeVisible();
+  await app.rebind("app.save", "Control+E", "Ctrl+E"); // app.toggleMode owns this chord
+  await expect(app.keybindRow("app.toggleMode").locator(".keybind-unassigned")).toBeVisible();
 });
 
 test("mouse buttons can be captured, dispatched, and persisted", async ({ app }) => {
@@ -113,7 +115,7 @@ test("mouse buttons can be captured, dispatched, and persisted", async ({ app })
 
   const row = app.keybindRow(PREVIOUS_PAGE);
   await expect(row.locator("kbd")).toHaveText("Mouse Back");
-  await row.getByRole("button", { name: "Change…" }).click();
+  await row.locator(".keybind-change").click();
   expect(await pressMouseButton(app, 1)).toBe(true);
   await expect(row.locator("kbd")).toHaveText("Mouse Middle");
   await expect(app.titleInput).toHaveValue("Gamma");
@@ -133,7 +135,7 @@ test("mouse capture rejects normal clicks and wheel scrolling", async ({ app }) 
   await app.openKeybindings();
 
   const row = app.keybindRow(PREVIOUS_PAGE);
-  await row.getByRole("button", { name: "Change…" }).click();
+  await row.locator(".keybind-change").click();
   expect(await pressMouseButton(app, 0)).toBe(true);
   await expect(app.page.locator(".keybind-note")).toContainText("Primary and secondary");
   await expect(row).toHaveClass(/capturing/);
@@ -154,7 +156,7 @@ test("claiming a mouse button moves it off its previous command", async ({ app }
   await app.openKeybindings();
 
   const back = app.keybindRow(PREVIOUS_PAGE);
-  await back.getByRole("button", { name: "Change…" }).click();
+  await back.locator(".keybind-change").click();
   expect(await pressMouseButton(app, 4)).toBe(true);
   await expect(back.locator("kbd")).toHaveText("Mouse Forward");
   await expect(app.keybindRow(NEXT_PAGE).locator(".keybind-unassigned")).toBeVisible();

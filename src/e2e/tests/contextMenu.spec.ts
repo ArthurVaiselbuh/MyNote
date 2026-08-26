@@ -150,7 +150,7 @@ test("menu hints follow a rebound chord", async ({ app }) => {
   await app.page.keyboard.press("Escape");
 
   await app.openKeybindings();
-  await app.rebind("New page", "Control+Shift+P", "Ctrl+Shift+P");
+  await app.rebind("page.new", "Control+Shift+P", "Ctrl+Shift+P");
   await app.closeSettings();
 
   await app.row("Alpha").click({ button: "right" });

@@ -11,10 +11,11 @@ import {
 // bindings.ts, so a rebound or unassigned chord shows up in the cheat sheet the
 // moment it changes — bindings.ts is the source of truth, this file only groups
 // them for reading.
-export type HelpRow = { keys: string; desc: string; search?: string; gate?: "git" };
+export type HelpRow = { id?: string; keys: string; desc: string; search?: string; gate?: "git" };
 
 function row(command: Command): HelpRow {
   return {
+    id: command.id,
     keys: labelsOf(command.id) || "—",
     desc: command.desc,
     search: command.search,

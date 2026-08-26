@@ -385,14 +385,14 @@ export class App {
     await expect(this.page.locator(".keybind-list")).toBeVisible();
   }
 
-  keybindRow(commandLabel: string) {
-    return this.page.locator(".keybind-row", { hasText: commandLabel }).first();
+  keybindRow(commandId: string) {
+    return this.page.locator(`.keybind-row[data-command="${commandId}"]`);
   }
 
   /** Captures `chord` onto a command from the open keybindings pane. */
-  async rebind(commandLabel: string, chord: string, shownAs: string) {
-    const row = this.keybindRow(commandLabel);
-    await row.getByRole("button", { name: "Change…" }).click();
+  async rebind(commandId: string, chord: string, shownAs: string) {
+    const row = this.keybindRow(commandId);
+    await row.locator(".keybind-change").click();
     await this.page.keyboard.press(chord);
     await expect(row.locator("kbd")).toHaveText(shownAs);
   }

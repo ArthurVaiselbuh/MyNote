@@ -53,8 +53,8 @@
       {#each groups as group (group.name)}
         <div class="help-group">
           <h3>{group.name}</h3>
-          {#each group.rows as { keys, desc }}
-            <div class="help-row"><span>{desc}</span><kbd>{keys}</kbd></div>
+          {#each group.rows as { id, keys, desc }}
+            <div class="help-row" data-command={id}><span>{desc}</span><kbd>{keys}</kbd></div>
           {/each}
         </div>
       {/each}
