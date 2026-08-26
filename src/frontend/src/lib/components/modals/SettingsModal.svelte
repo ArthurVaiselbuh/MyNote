@@ -205,13 +205,13 @@
         <div class="settings-buttons">
           <button onclick={() => void openTrash()}>{trashLabel()}</button>
           {#if trash?.count}
-            <button onclick={emptyTrash}>Empty…</button>
+            <button id="set-trash-empty" onclick={emptyTrash}>Empty…</button>
           {/if}
         </div>
       </div>
       <div class="settings-row">
         <span>Reset AGENTS.md</span>
-        <button onclick={() => act.overwriteAgentsMd()}>Overwrite…</button>
+        <button id="set-agents-overwrite" onclick={() => act.overwriteAgentsMd()}>Overwrite…</button>
       </div>
     </div>
 

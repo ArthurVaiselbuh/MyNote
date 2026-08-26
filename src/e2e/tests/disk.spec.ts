@@ -35,7 +35,7 @@ test("AGENTS.md is seeded once, user edits survive, settings can overwrite", asy
   expect(fs.readFileSync(app.agentsPath, "utf8")).toBe("# my own agent notes\n");
 
   await app.page.keyboard.press("Control+,");
-  await app.page.getByRole("button", { name: "Overwrite…" }).click();
+  await app.page.locator("#set-agents-overwrite").click();
   await app.confirmDanger();
   await expect(app.page.locator(".status-toast")).toContainText("AGENTS.md overwritten");
   expect(fs.readFileSync(app.agentsPath, "utf8")).toBe(template);
@@ -59,7 +59,7 @@ test("close trashes page files it can't vouch for, and Empty is what deletes the
   expect(fs.existsSync(strayPlain)).toBe(true);
 
   await app.page.keyboard.press("Control+,");
-  await app.page.getByRole("button", { name: "Empty…" }).click();
+  await app.page.locator("#set-trash-empty").click();
   await app.confirmDanger();
   await expect(app.page.locator(".status-toast")).toContainText("deleted 1 file");
   expect(fs.existsSync(trashed)).toBe(false);

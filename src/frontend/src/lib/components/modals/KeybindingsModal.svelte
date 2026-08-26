@@ -144,7 +144,7 @@
       {#each groups as group (group.ctx)}
         <div class="settings-section-label">{group.label}</div>
         {#each group.rows as { command, chords } (command.id)}
-          <div class="keybind-row" class:capturing={capturing === command.id}>
+          <div class="keybind-row" data-command={command.id} class:capturing={capturing === command.id}>
             <span class="keybind-desc">{command.desc}</span>
             <span class="keybind-chords">
               {#if capturing === command.id}
@@ -156,8 +156,8 @@
               {/if}
             </span>
             <span class="keybind-actions">
-              <button onclick={() => startCapture(command.id)}>Change…</button>
-              <button disabled={!chords.length} onclick={() => clear(command.id)}>Clear</button>
+              <button class="keybind-change" onclick={() => startCapture(command.id)}>Change…</button>
+              <button class="keybind-clear" disabled={!chords.length} onclick={() => clear(command.id)}>Clear</button>
               <button disabled={isDefault(command.id)} onclick={() => restore(command.id)}>Reset</button>
             </span>
           </div>
