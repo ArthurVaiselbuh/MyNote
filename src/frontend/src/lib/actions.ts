@@ -73,6 +73,7 @@ function applyNotebook(info: NotebookInfo) {
   const pageId =
     last.pageId && sectionOfPage(info.notebook, last.pageId) ? last.pageId : null;
   resetViewedPages();
+  resetLastPageBySection();
   setPageForView(pageId);
   app.focus = "tree";
 }
@@ -156,11 +157,21 @@ function showSection(id: string | null | undefined) {
   if (idx >= 0) app.sectionIdx = idx;
 }
 
+const lastPageBySection = new Map<string, string>();
+
+function resetLastPageBySection() {
+  lastPageBySection.clear();
+}
+
 export function gotoSection(idx: number) {
   const sections = app.notebook?.sections ?? [];
   if (sections.length === 0) return;
   app.sectionIdx = wrapIndex(idx, sections.length);
-  setPageForView(currentSection()?.pages[0]?.id ?? null);
+  const to = currentSection();
+  const remembered = to && lastPageBySection.get(to.id);
+  const pageId =
+    remembered && to && locate(to.pages, remembered) ? remembered : (to?.pages[0]?.id ?? null);
+  setPageForView(pageId);
 }
 
 export function gotoSectionOffset(offset: number) {
@@ -367,6 +378,7 @@ export function setPageForView(
     const section = sectionOfPage(notebook, pageId);
     if (!section) return false;
     app.sectionIdx = notebook.sections.indexOf(section);
+    lastPageBySection.set(section.id, pageId);
     expandAncestors(pageId);
   }
   app.selectedId = pageId;

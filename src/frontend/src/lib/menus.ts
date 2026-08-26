@@ -76,6 +76,8 @@ export function openSectionMenu(e: MouseEvent) {
 
 export function openPreviewMenu(e: MouseEvent) {
   const entries: MenuEntry[] = [];
+  const img = (e.target as HTMLElement).closest("img");
+  if (img) entries.push({ label: "Copy image", run: () => void act.copyImage(img) });
   const link = (e.target as HTMLElement).closest("a");
   const href = link?.getAttribute("href") ?? "";
   const pageId = pageIdFromHref(href);
