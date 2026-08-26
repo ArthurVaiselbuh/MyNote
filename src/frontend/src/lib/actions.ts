@@ -824,6 +824,23 @@ export async function copyText(text: string) {
   }
 }
 
+export async function copyImage(img: HTMLImageElement) {
+  try {
+    const canvas = document.createElement("canvas");
+    canvas.width = img.naturalWidth;
+    canvas.height = img.naturalHeight;
+    const ctx = canvas.getContext("2d");
+    if (!ctx) throw new Error("no 2d canvas context");
+    ctx.drawImage(img, 0, 0);
+    const blob = await new Promise<Blob | null>((resolve) => canvas.toBlob(resolve, "image/png"));
+    if (!blob) throw new Error("could not encode image");
+    await navigator.clipboard.write([new ClipboardItem({ "image/png": blob })]);
+    flashStatus("copied", 1500);
+  } catch (e) {
+    app.status = String(e);
+  }
+}
+
 export function openTreeFilter() {
   app.filterActive = true;
   app.filterFocusReq++;

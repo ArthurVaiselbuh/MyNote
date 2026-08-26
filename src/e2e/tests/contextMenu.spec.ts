@@ -122,6 +122,30 @@ test("the preview menu offers link actions only over a link", async ({ app }) =>
   await expect(item(app, "Find in page")).toBeVisible();
 });
 
+test("right-clicking an image offers Copy image, which puts a PNG on the clipboard", async ({
+  app,
+}) => {
+  await app.newTitledPage("Pics", 1);
+  const [pageId] = await app.treeIds();
+  app.writeAsset(pageId, "tiny.png");
+  await app.setBody(`![shot](assets/${pageId}/tiny.png)`);
+  await app.page.keyboard.press("Control+e");
+  const preview = app.page.locator(".preview");
+  const img = preview.locator("img");
+  await expect
+    .poll(() => img.evaluate((el) => (el as HTMLImageElement).naturalWidth))
+    .toBeGreaterThan(0);
+
+  await img.click({ button: "right" });
+  await expect(item(app, "Copy image")).toBeVisible();
+  await item(app, "Copy image").click();
+
+  // "copied" (rather than an error toast) proves the canvas round trip
+  // survived — a tainted canvas from the note-asset image would instead
+  // reject with a SecurityError here
+  await expect(app.page.locator(".status-toast")).toContainText("copied");
+});
+
 test("the results menu retargets the selection and opens in the editor", async ({ app }) => {
   await app.newPageWithBody("Groceries", "buy milk milk milk and eggs", 1);
   await app.newPageWithBody("Dairy", "milk comes from cows", 2);
