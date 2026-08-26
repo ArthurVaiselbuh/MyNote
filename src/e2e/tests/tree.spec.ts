@@ -42,6 +42,26 @@ test("deleting a page selects its next neighbor", async ({ app }) => {
   await expect(app.selectedTitle).toHaveText("C");
 });
 
+test("Ctrl+PgUp/PgDn preselects the section's last-selected page, not its first", async ({
+  app,
+}) => {
+  await app.newTitledPage("A", 1);
+  await app.newTitledPage("B", 2);
+  await app.newTitledPage("C", 3);
+  await app.row("B").click();
+  await expect(app.selectedTitle).toHaveText("B");
+
+  await app.newSection(); // leaves Notes for the fresh, empty section
+  await app.page.keyboard.press("Control+PageUp");
+  await expect(app.sectionName).toContainText("Notes");
+  await expect(app.selectedTitle).toHaveText("B");
+
+  await app.page.keyboard.press("Control+PageDown");
+  await expect(app.sectionName).toContainText("New Section");
+  await app.page.keyboard.press("Control+PageUp");
+  await expect(app.selectedTitle).toHaveText("B");
+});
+
 test("Alt+Right moves the page to the next section and follows it", async ({ app }) => {
   await app.newTitledPage("Wanderer", 1);
   await addSectionAndReturn(app);

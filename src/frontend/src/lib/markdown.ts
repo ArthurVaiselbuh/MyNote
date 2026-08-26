@@ -72,6 +72,7 @@ md.renderer.rules.image = (tokens, idx, opts, env, self) => {
   const src = token.attrGet("src") ?? "";
   if (src.startsWith("assets/")) {
     token.attrSet("src", noteAssetBase + src.slice("assets/".length));
+    token.attrSet("crossorigin", "anonymous");
   }
   return defaultImage(tokens, idx, opts, env, self);
 };
