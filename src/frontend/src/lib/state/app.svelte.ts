@@ -55,6 +55,8 @@ export interface PendingPage {
 // only what the app shows before the backend answers, and what Reset restores —
 // settings.rs::Default is what actually lands in settings.json
 export const defaultSettings: Settings = {
+  themeMode: "dark",
+  themeColors: {},
   notebookPath: null,
   recentNotebooks: [],
   zoom: 1.0,
