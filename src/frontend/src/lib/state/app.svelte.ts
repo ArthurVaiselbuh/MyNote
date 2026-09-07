@@ -69,7 +69,7 @@ export const defaultSettings: Settings = {
   treeWidth: 300,
   peekWidth: 460,
   logLevel: "info",
-  minimizeToTray: false,
+  singleInstance: false,
   startOnLogin: false,
   keybindings: {},
   window: null,
