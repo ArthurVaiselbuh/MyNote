@@ -153,6 +153,8 @@
 
 <div
   class="app"
+  data-theme={s.themeMode}
+  style:color-scheme={s.themeMode}
   inert={app.interactionBlocked}
   style:--text={s.textColor}
   style:--bg={s.backgroundColor}

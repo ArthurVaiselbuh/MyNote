@@ -96,7 +96,19 @@ export interface RecentNotebook {
   exists: boolean;
 }
 
+export type ThemeMode = "dark" | "light";
+
+export interface ThemeColors {
+  textColor: string;
+  backgroundColor: string;
+  panelColor: string;
+  accentColor: string;
+  headingColor: string;
+}
+
 export interface Settings {
+  themeMode: ThemeMode;
+  themeColors: Partial<Record<ThemeMode, ThemeColors>>;
   notebookPath: string | null;
   recentNotebooks: string[];
   zoom: number;

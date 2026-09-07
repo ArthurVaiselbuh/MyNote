@@ -103,8 +103,9 @@ are supported cross-platform builds off the same code.
   list, behind its own splitter. It is inert — no `app.focus` target, no find
   panel, dead links — so the focus model and the Esc ladder are unchanged. It
   scrolls to the first highlighted term rather than the hit's line number.
-- **Theme:** dark only, but colors, focus alpha, and scroll speed are
-  configurable in Settings and applied as CSS variables on the app root.
+- **Theme:** dark by default, with a silver-white light mode. Settings remembers
+  each mode’s customized palette independently (`lib/theme.ts`); colors, focus
+  alpha, and scroll speed remain configurable.
 - **Blank lines are WYSIWYG in the preview:** files keep the exact newlines
   typed, and `renderBody` turns runs of 2+ blank lines into nbsp spacer
   paragraphs. Deliberately nonstandard — chosen so the file stays clean plain
@@ -189,7 +190,7 @@ are supported cross-platform builds off the same code.
     subtree from `notebook.json`'s own history (deferred deletion means the
     deleting commit often doesn't touch `notebook.json`) and counts as a
     *create*, so it is not on the tree undo stack.
-- **Deferred / out of scope:** light theme, installer.
+- **Deferred / out of scope:** installer.
 
 ## Keyboard & focus model (the hard part — keep the precedence exact)
 

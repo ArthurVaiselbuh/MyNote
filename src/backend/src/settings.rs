@@ -14,9 +14,28 @@ pub struct WindowGeom {
     pub maximized: bool,
 }
 
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Eq, PartialOrd, Ord)]
+#[serde(rename_all = "lowercase")]
+pub enum ThemeMode {
+    Dark,
+    Light,
+}
+
+#[derive(Serialize, Deserialize, Clone, Debug)]
+#[serde(rename_all = "camelCase")]
+pub struct ThemeColors {
+    pub text_color: String,
+    pub background_color: String,
+    pub panel_color: String,
+    pub accent_color: String,
+    pub heading_color: String,
+}
+
 #[derive(Serialize, Deserialize, Clone, Debug)]
 #[serde(rename_all = "camelCase", default)]
 pub struct Settings {
+    pub theme_mode: ThemeMode,
+    pub theme_colors: BTreeMap<ThemeMode, ThemeColors>,
     pub notebook_path: Option<String>,
     pub recent_notebooks: Vec<String>,
     pub zoom: f64,
@@ -44,6 +63,8 @@ pub struct Settings {
 impl Default for Settings {
     fn default() -> Settings {
         Settings {
+            theme_mode: ThemeMode::Dark,
+            theme_colors: BTreeMap::new(),
             notebook_path: None,
             recent_notebooks: vec![],
             zoom: 1.0,
@@ -146,6 +167,29 @@ impl Settings {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn legacy_colors_remain_dark_and_theme_palettes_round_trip() {
+        let mut settings: Settings = serde_json::from_str(r##"{"textColor":"#123456"}"##).unwrap();
+        assert_eq!(settings.theme_mode, ThemeMode::Dark);
+        assert_eq!(settings.text_color, "#123456");
+        assert!(settings.theme_colors.is_empty());
+        settings.theme_colors.insert(
+            ThemeMode::Dark,
+            ThemeColors {
+                text_color: settings.text_color.clone(),
+                background_color: settings.background_color.clone(),
+                panel_color: settings.panel_color.clone(),
+                accent_color: settings.accent_color.clone(),
+                heading_color: settings.heading_color.clone(),
+            },
+        );
+        settings.theme_mode = ThemeMode::Light;
+        let saved = serde_json::to_string(&settings).unwrap();
+        let loaded: Settings = serde_json::from_str(&saved).unwrap();
+        assert_eq!(loaded.theme_mode, ThemeMode::Light);
+        assert_eq!(loaded.theme_colors[&ThemeMode::Dark].text_color, "#123456");
+    }
 
     #[test]
     fn tray_preference_migrates_to_single_instance() {

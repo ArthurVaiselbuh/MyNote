@@ -1,7 +1,7 @@
 <script lang="ts" module>
   import { defaultKeymap, history, historyKeymap, indentWithTab } from "@codemirror/commands";
   import { markdown, markdownLanguage } from "@codemirror/lang-markdown";
-  import { syntaxHighlighting } from "@codemirror/language";
+  import { defaultHighlightStyle, syntaxHighlighting } from "@codemirror/language";
   import { languages } from "@codemirror/language-data";
   import { search, searchKeymap } from "@codemirror/search";
   import { oneDarkHighlightStyle } from "@codemirror/theme-one-dark";
@@ -35,7 +35,6 @@
         backgroundColor: "color-mix(in srgb, var(--accent) 55%, transparent)",
       },
     },
-    { dark: true },
   );
 
   // Everything that doesn't close over an instance is built once: this component
@@ -46,10 +45,14 @@
     drawSelection(),
     EditorView.lineWrapping,
     markdown({ base: markdownLanguage, codeLanguages: languages }),
-    syntaxHighlighting(oneDarkHighlightStyle, { fallback: true }),
     search({ top: true }),
     keymap.of([...defaultKeymap, ...historyKeymap, ...searchKeymap, indentWithTab]),
   ];
+
+  const editorThemes = {
+    dark: [EditorView.theme({}, { dark: true }), syntaxHighlighting(oneDarkHighlightStyle)],
+    light: [EditorView.theme({}, { dark: false }), syntaxHighlighting(defaultHighlightStyle)],
+  };
 
   const AUTOSAVE_MS = 3000;
 </script>
@@ -91,6 +94,12 @@
   let loadSeq = 0;
   let saveTimer: ReturnType<typeof setTimeout> | undefined;
   const editing = new Compartment();
+  const theme = new Compartment();
+
+  $effect(() => {
+    const extensions = editorThemes[app.settings.themeMode];
+    view?.dispatch({ effects: theme.reconfigure(extensions) });
+  });
 
   const extensions = [
     ...BASE_EXTENSIONS,
@@ -108,6 +117,7 @@
     }),
     editing.of([EditorState.readOnly.of(false), EditorView.editable.of(true)]),
     cmTheme,
+    theme.of(editorThemes[app.settings.themeMode]),
   ];
 
   function scheduleSave() {

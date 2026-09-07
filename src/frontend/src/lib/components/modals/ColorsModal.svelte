@@ -2,6 +2,8 @@
   import * as act from "../../actions";
   import { app, defaultSettings } from "../../state/app.svelte";
 
+  import { switchTheme, themeDefaults } from "../../theme";
+
   function persist() {
     void act.persistSettings();
   }
@@ -15,7 +17,7 @@
   ] as const;
 
   function resetColors() {
-    for (const row of COLOR_ROWS) app.settings[row.key] = defaultSettings[row.key];
+    for (const row of COLOR_ROWS) app.settings[row.key] = themeDefaults[app.settings.themeMode][row.key];
     app.settings.focusAlpha = defaultSettings.focusAlpha;
     app.settings.pageTitleSize = defaultSettings.pageTitleSize;
     persist();
@@ -25,6 +27,21 @@
 <div class="modal-backdrop">
   <div class="modal" style:width="480px" role="dialog">
     <div class="modal-title">Colors &amp; theme</div>
+
+    <div class="settings-row">
+      <label for="set-theme">Theme</label>
+      <select
+        id="set-theme"
+        value={app.settings.themeMode}
+        onchange={(event) => {
+          switchTheme(app.settings, event.currentTarget.value as "dark" | "light");
+          persist();
+        }}
+      >
+        <option value="dark">Dark</option>
+        <option value="light">Light</option>
+      </select>
+    </div>
 
     {#each COLOR_ROWS as row (row.key)}
       <div class="settings-row">
