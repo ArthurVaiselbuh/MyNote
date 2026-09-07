@@ -47,7 +47,7 @@ export async function boot() {
   try {
     const info = await api.openNotebook();
     await loadViewPositions();
-    applyNotebook(info);
+    await applyNotebook(info);
   } catch (e) {
     app.status = String(e);
     await openNotebookModal();
@@ -63,7 +63,7 @@ async function refreshGitStatus() {
   }
 }
 
-function applyNotebook(info: NotebookInfo) {
+async function applyNotebook(info: NotebookInfo) {
   app.notebook = info.notebook;
   app.root = info.root;
   app.settings.notebookPath = info.root;
@@ -74,7 +74,11 @@ function applyNotebook(info: NotebookInfo) {
     last.pageId && sectionOfPage(info.notebook, last.pageId) ? last.pageId : null;
   resetViewedPages();
   resetLastPageBySection();
-  setPageForView(pageId);
+  app.pendingPage = null;
+  if (!(await setPageForView(pageId, { allowWhileBlocked: true, forceLoad: true }))) {
+    await editorCtl.current?.load(null);
+    clearSelection();
+  }
   app.focus = "tree";
 }
 
@@ -89,15 +93,24 @@ export async function openNotebookModal() {
 }
 
 async function switchNotebook(open: () => Promise<NotebookInfo>) {
-  await editorCtl.current?.save();
-  // while the store still belongs to the notebook being left
-  await persistViewPositions();
-  const info = await open();
-  closeModal();
-  app.currentPageId = null;
-  await loadViewPositions();
-  applyNotebook(info);
-  await refreshGitStatus();
+  const editor = editorCtl.current;
+  pageLoadSeq++;
+  app.interactionBlocked = true;
+  editor?.setEditingBlocked(true);
+  try {
+    if (!(await saveEditor())) return;
+    // while the store still belongs to the notebook being left
+    await persistViewPositions();
+    const info = await open();
+    if (editor && !(await editor.load(null))) return;
+    closeModal();
+    await loadViewPositions();
+    await applyNotebook(info);
+    await refreshGitStatus();
+  } finally {
+    editor?.setEditingBlocked(false);
+    app.interactionBlocked = false;
+  }
 }
 
 export async function openNotebookAt(path: string) {
@@ -163,19 +176,19 @@ function resetLastPageBySection() {
   lastPageBySection.clear();
 }
 
-export function gotoSection(idx: number) {
+export async function gotoSection(idx: number) {
   const sections = app.notebook?.sections ?? [];
   if (sections.length === 0) return;
-  app.sectionIdx = wrapIndex(idx, sections.length);
-  const to = currentSection();
+  const nextIndex = wrapIndex(idx, sections.length);
+  const to = sections[nextIndex];
   const remembered = to && lastPageBySection.get(to.id);
   const pageId =
     remembered && to && locate(to.pages, remembered) ? remembered : (to?.pages[0]?.id ?? null);
-  setPageForView(pageId);
+  if (await setPageForView(pageId)) app.sectionIdx = nextIndex;
 }
 
-export function gotoSectionOffset(offset: number) {
-  gotoSection(app.sectionIdx + offset);
+export async function gotoSectionOffset(offset: number) {
+  await gotoSection(app.sectionIdx + offset);
 }
 
 export function newSection() {
@@ -234,11 +247,18 @@ export function deleteSectionWithConfirm(id: string) {
   askConfirm(
     `Delete section "${section.name}" and its ${countPages(section)} page(s)?`,
     async () => {
-      if (app.currentPageId && sectionOfPage(app.notebook!, app.currentPageId)?.id === id) {
-        clearSelection();
+      if (!(await saveEditor())) return;
+      const editor = editorCtl.current;
+      editor?.setEditingBlocked(true);
+      try {
+        if (app.currentPageId && sectionOfPage(app.notebook!, app.currentPageId)?.id === id) {
+          clearSelection();
+        }
+        await api.deleteSection(id);
+        await refreshTree();
+      } finally {
+        editor?.setEditingBlocked(false);
       }
-      await api.deleteSection(id);
-      await refreshTree();
     },
   );
 }
@@ -342,6 +362,7 @@ function flash(message: string, isError: boolean, durationMs: number) {
 
 let viewedPages: string[] = [];
 let viewedPageIndex = -1;
+let pageLoadSeq = 0;
 
 function resetViewedPages() {
   viewedPages = [];
@@ -368,17 +389,46 @@ function availableHistoryIndex(direction: -1 | 1): number {
   return -1;
 }
 
-export function setPageForView(
+async function saveEditor(): Promise<boolean> {
+  return (await editorCtl.current?.save()) ?? true;
+}
+
+export async function setPageForView(
   pageId: string | null,
-  { rememberInHistory = true }: { rememberInHistory?: boolean } = {},
-): boolean {
+  {
+    rememberInHistory = true,
+    allowWhileBlocked = false,
+    forceLoad = false,
+  }: {
+    rememberInHistory?: boolean;
+    allowWhileBlocked?: boolean;
+    forceLoad?: boolean;
+  } = {},
+): Promise<boolean> {
+  if (app.interactionBlocked && !allowWhileBlocked) return false;
+  const request = ++pageLoadSeq;
+  const notebook = app.notebook;
+  const section = pageId && notebook ? sectionOfPage(notebook, pageId) : null;
+  if (pageId && !section) return false;
+
+  const editor = editorCtl.current;
+  if (editor) {
+    if (!(await editor.load(pageId, forceLoad))) return false;
+    if (request !== pageLoadSeq) return false;
+  } else if (pageId) {
+    try {
+      const content = await api.readPage(pageId);
+      if (request !== pageLoadSeq) return false;
+      app.pendingPage = { id: pageId, content };
+    } catch (e) {
+      app.status = String(e);
+      return false;
+    }
+  }
+  if (request !== pageLoadSeq) return false;
   if (pageId) {
-    const notebook = app.notebook;
-    if (!notebook) return false;
-    const section = sectionOfPage(notebook, pageId);
-    if (!section) return false;
-    app.sectionIdx = notebook.sections.indexOf(section);
-    lastPageBySection.set(section.id, pageId);
+    app.sectionIdx = notebook!.sections.indexOf(section!);
+    lastPageBySection.set(section!.id, pageId);
     expandAncestors(pageId);
   }
   app.selectedId = pageId;
@@ -394,15 +444,15 @@ function clearSelection() {
   app.selectedId = null;
 }
 
-export function openPageById(pageId: string) {
-  setPageForView(pageId);
+export async function openPageById(pageId: string) {
+  await setPageForView(pageId);
 }
 
-export function navigateViewedPages(direction: -1 | 1) {
+export async function navigateViewedPages(direction: -1 | 1) {
   const index = availableHistoryIndex(direction);
   if (index < 0) return;
   const pageId = viewedPages[index];
-  if (setPageForView(pageId, { rememberInHistory: false })) viewedPageIndex = index;
+  if (await setPageForView(pageId, { rememberInHistory: false })) viewedPageIndex = index;
 }
 
 export function openExternalLink(href: string) {
@@ -428,7 +478,7 @@ async function createPageIn(sectionId: string, parentId: string | null, afterId:
   try {
     const node = await api.createPage(sectionId, parentId, afterId);
     await refreshTree();
-    setPageForView(node.id);
+    await setPageForView(node.id);
     app.focus = "editor";
     app.titleFocusReq++;
   } catch (e) {
@@ -474,20 +524,30 @@ export function deleteSelected() {
   const count = countSubtree(doomed);
   const suffix = count > 1 ? ` and ${count - 1} subpage(s)` : "";
   askConfirm(`Delete "${doomed.title}"${suffix}?`, async () => {
-    const rows = visibleRows();
-    const pos = rows.findIndex((r) => r.node.id === doomed.id);
-    const survives = (id: string) => !hasDescendant(doomed, id);
-    const neighbor =
-      rows.slice(pos + 1).find((r) => survives(r.node.id))?.node.id ??
-      rows[pos - 1]?.node.id ??
-      null;
-    await api.deletePage(doomed.id);
-    await refreshTree();
-    if (app.currentPageId === doomed.id) {
-      setPageForView(neighbor);
-    } else {
-      app.selectedId = neighbor;
-      if (neighbor) saveLastView();
+    if (!(await saveEditor())) return;
+    const editor = editorCtl.current;
+    editor?.setEditingBlocked(true);
+    try {
+      const rows = visibleRows();
+      const pos = rows.findIndex((r) => r.node.id === doomed.id);
+      const survives = (id: string) => !hasDescendant(doomed, id);
+      const neighbor =
+        rows.slice(pos + 1).find((r) => survives(r.node.id))?.node.id ??
+        rows[pos - 1]?.node.id ??
+        null;
+      await api.deletePage(doomed.id);
+      await refreshTree();
+      const currentPageWasDeleted =
+        app.currentPageId === doomed.id ||
+        (!!app.currentPageId && hasDescendant(doomed, app.currentPageId));
+      if (currentPageWasDeleted) {
+        await setPageForView(neighbor);
+      } else {
+        app.selectedId = neighbor;
+        if (neighbor) saveLastView();
+      }
+    } finally {
+      editor?.setEditingBlocked(false);
     }
   });
 }
@@ -521,7 +581,7 @@ async function applyHistory(
   emptyMessage: string,
 ) {
   try {
-    await editorCtl.current?.save();
+    if (!(await saveEditor())) return;
     const outcome = await call();
     if (!outcome) {
       flashStatus(emptyMessage);
@@ -535,7 +595,7 @@ async function applyHistory(
         clearSelection();
       }
       if (outcome.pageId && sectionOfPage(notebook, outcome.pageId)) {
-        setPageForView(outcome.pageId);
+        await setPageForView(outcome.pageId);
       }
     }
     flashStatus(outcome.label);
@@ -563,17 +623,17 @@ function selectedInSection(
   return found ? { section, found } : null;
 }
 
-export function selectOffset(offset: number) {
+export async function selectOffset(offset: number) {
   const rows = visibleRows();
   if (rows.length === 0) return;
   const pos = rows.findIndex((r) => r.node.id === app.selectedId);
   const next = pos < 0 ? 0 : Math.min(rows.length - 1, Math.max(0, pos + offset));
-  setPageForView(rows[next].node.id);
+  await setPageForView(rows[next].node.id);
 }
 
-export function activateSelected() {
+export async function activateSelected() {
   if (!app.selectedId) return;
-  setPageForView(app.selectedId);
+  if (!(await setPageForView(app.selectedId))) return;
   focusPane("editor");
 }
 
@@ -608,7 +668,7 @@ export async function collapseOrParent() {
     node.expanded = false;
     await api.setExpanded(node.id, false).catch(() => {});
   } else if (parentId) {
-    setPageForView(parentId);
+    await setPageForView(parentId);
   }
 }
 
@@ -621,7 +681,7 @@ export async function expandOrChild() {
     node.expanded = true;
     await api.setExpanded(node.id, true).catch(() => {});
   } else {
-    setPageForView(node.children[0].id);
+    await setPageForView(node.children[0].id);
   }
 }
 
@@ -662,7 +722,7 @@ export async function moveSelectedToSection(target: Section) {
   if (!source || source.id === target.id) return;
   await movePage(id, target.id, null, target.pages.length);
   // movePage refetched the tree, so the page's new home comes from the new one
-  setPageForView(id);
+  await setPageForView(id);
 }
 
 export async function moveSelectedToAdjacentSection(offset: number) {
@@ -673,8 +733,9 @@ export async function moveSelectedToAdjacentSection(offset: number) {
 
 // ---------- search ----------
 
-export function openSearch() {
+export async function openSearch() {
   log.verbose("open search");
+  if (!(await saveEditor())) return;
   app.view = "results";
   app.focus = "search";
   app.searchFocusReq++;
@@ -710,19 +771,28 @@ export function resultFindPrefill(): FindPrefill {
   return alternation ? { text: alternation, regex: true } : { text: query, regex: false };
 }
 
-export function openResult(idx: number) {
+async function openResultWithMode(idx: number, mode: "edit" | "preview") {
   const hit = app.results[idx];
-  if (!hit || !setPageForView(hit.pageId)) return;
-  // the editor remounts when leaving the results view and consumes the prefill on load
+  if (!hit) return false;
+  const previousMode = app.mode;
+  const previousPrefill = app.findPrefill;
   app.findPrefill = resultFindPrefill();
-  app.mode = "preview";
+  app.mode = mode;
+  if (!(await setPageForView(hit.pageId))) {
+    app.mode = previousMode;
+    app.findPrefill = previousPrefill;
+    return false;
+  }
   app.focus = "editor";
+  return true;
 }
 
-export function openResultInEditor(idx: number) {
-  openResult(idx);
-  app.mode = "edit";
-  app.editorFocusReq++;
+export async function openResult(idx: number) {
+  await openResultWithMode(idx, "preview");
+}
+
+export async function openResultInEditor(idx: number) {
+  if (await openResultWithMode(idx, "edit")) app.editorFocusReq++;
 }
 
 // ---------- focus / view ----------
@@ -774,9 +844,60 @@ export function openFind() {
 }
 
 export async function saveNow() {
-  await editorCtl.current?.save();
-  await persistViewPositions();
+  if (!(await flushEditor())) return false;
   flashStatus("saved", 1500);
+  return true;
+}
+
+export async function flushEditor(): Promise<boolean> {
+  if (!(await saveEditor())) return false;
+  try {
+    await persistViewPositions();
+    return true;
+  } catch (e) {
+    app.status = String(e);
+    return false;
+  }
+}
+
+export function setEditorEditingBlocked(blocked: boolean) {
+  editorCtl.current?.setEditingBlocked(blocked);
+}
+
+export async function confirmClose(): Promise<boolean> {
+  try {
+    await api.confirmClose();
+    return true;
+  } catch (e) {
+    app.status = String(e);
+    return false;
+  }
+}
+
+export function showCloseSaveFailure() {
+  const pageTitle = editorCtl.current?.failedSavePageTitle();
+  const subject = pageTitle ? `page "${pageTitle}"` : "current changes";
+  askConfirm(
+    `MyNote could not save the ${subject}. Closing now will discard those unsaved changes.`,
+    () => void closeWithoutSaving(),
+    "Close without saving",
+    undefined,
+    true,
+    "Keep editing",
+    "Couldn't save",
+  );
+}
+
+async function closeWithoutSaving() {
+  app.interactionBlocked = true;
+  setEditorEditingBlocked(true);
+  try {
+    await api.closeWithoutSaving();
+  } catch (e) {
+    app.status = String(e);
+    setEditorEditingBlocked(false);
+    app.interactionBlocked = false;
+  }
 }
 
 export function closeCurrent() {
@@ -902,8 +1023,10 @@ export function askConfirm(
   label?: string,
   returnTo?: ModalName,
   danger = true,
+  cancelLabel?: string,
+  title?: string,
 ) {
-  app.confirm = { message, action: () => void action(), label, returnTo, danger };
+  app.confirm = { message, action: () => void action(), label, returnTo, danger, cancelLabel, title };
   app.modal = "confirm";
 }
 
@@ -1075,7 +1198,7 @@ export async function openHistory(tab: "page" | "deleted") {
   // unmount already flushed the buffer, so the on-disk state is current
   if (app.view === "results") focusPane("editor");
   // flush the buffer first, so "now (on disk)" really is what's on screen
-  await editorCtl.current?.save();
+  if (!(await saveEditor())) return;
   app.historyTab = tab;
   app.historyRevBase = 0;
   app.historyRevSel = 1;
@@ -1114,7 +1237,7 @@ export function recoverDeletedPage(id: string, sha: string, label: string, count
       try {
         const outcome = await api.restoreDeletedPage(id, sha, currentSection()?.id ?? null);
         await refreshTree();
-        setPageForView(outcome.pageId);
+        await setPageForView(outcome.pageId);
         flashStatus(
           outcome.renamed
             ? `recovered ${outcome.pageCount} page(s) as a new copy`

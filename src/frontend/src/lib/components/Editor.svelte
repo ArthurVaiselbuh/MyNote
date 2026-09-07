@@ -65,7 +65,7 @@
     SearchQuery,
     setSearchQuery,
   } from "@codemirror/search";
-  import { EditorState } from "@codemirror/state";
+  import { Compartment, EditorState } from "@codemirror/state";
   import * as act from "../actions";
   import { api } from "../api";
   import { focusSelect } from "../autofocus";
@@ -83,11 +83,14 @@
   let title = $state("");
   let previewText = $state("");
   let dirty = $state(false);
+  let editingBlocked = $state(false);
+  let lastFailedSavePageTitle: string | null = null;
 
   let view: EditorView | undefined;
-  let loadedId: string | null = null;
+  let loadedId = $state<string | null>(null);
   let loadSeq = 0;
   let saveTimer: ReturnType<typeof setTimeout> | undefined;
+  const editing = new Compartment();
 
   const extensions = [
     ...BASE_EXTENSIONS,
@@ -103,6 +106,7 @@
         app.focus = "editor";
       },
     }),
+    editing.of([EditorState.readOnly.of(false), EditorView.editable.of(true)]),
     cmTheme,
   ];
 
@@ -135,25 +139,58 @@
     return { title: "", body: content };
   }
 
-  async function save() {
+  let saveInFlight: Promise<boolean> | null = null;
+
+  async function save(): Promise<boolean> {
     clearTimeout(saveTimer);
     rememberEditorPos();
-    if (!view || !loadedId || !dirty) return;
-    dirty = false;
-    const id = loadedId;
-    const content = `# ${title.trim() || "Untitled"}\n\n${view.state.doc.toString()}`;
-    try {
-      const newTitle = await api.writePage(id, content);
-      act.updateTreeTitle(id, newTitle);
-      if (title.trim() !== "" && newTitle !== title) title = newTitle;
-    } catch (e) {
-      dirty = true;
-      app.status = String(e);
+    if (saveInFlight) {
+      const saved = await saveInFlight;
+      return saved && save();
     }
+    if (!view || !loadedId || !dirty) return true;
+    const savedView = view;
+    const id = loadedId;
+    const savedTitle = title;
+    const savedBody = view.state.doc.toString();
+    const content = `# ${savedTitle.trim() || "Untitled"}\n\n${savedBody}`;
+    dirty = false;
+    const write = (async () => {
+      try {
+        const newTitle = await api.writePage(id, content);
+        lastFailedSavePageTitle = null;
+        act.updateTreeTitle(id, newTitle);
+        if (view === savedView && loadedId === id && title === savedTitle && savedTitle.trim() !== "") {
+          title = newTitle;
+        }
+        return true;
+      } catch (e) {
+        lastFailedSavePageTitle = savedTitle.trim() || "Untitled";
+        if (view === savedView && loadedId === id) dirty = true;
+        app.status = String(e);
+        return false;
+      }
+    })();
+    saveInFlight = write;
+    let saved = false;
+    try {
+      saved = await write;
+    } finally {
+      if (saveInFlight === write) saveInFlight = null;
+    }
+    return saved && (dirty ? save() : true);
   }
 
   function setDoc(body: string) {
     view?.setState(EditorState.create({ doc: body, extensions }));
+    if (editingBlocked) setEditingBlocked(true);
+  }
+
+  function setEditingBlocked(blocked: boolean) {
+    editingBlocked = blocked;
+    view?.dispatch({
+      effects: editing.reconfigure([EditorState.readOnly.of(blocked), EditorView.editable.of(!blocked)]),
+    });
   }
 
   function heightAtViewportTop(v: EditorView): number {
@@ -247,24 +284,29 @@
     });
   }
 
-  async function switchTo(id: string | null) {
-    if (id === loadedId) return;
+  async function switchTo(id: string | null, force = false): Promise<boolean> {
     const seq = ++loadSeq;
-    await save();
-    if (seq !== loadSeq) return;
-    loadedId = id;
+    if (!force && id === loadedId) return true;
+    if (!(await save())) return false;
+    if (seq !== loadSeq) return false;
     if (!id) {
+      loadedId = null;
       title = "";
       setDoc("");
       previewText = "";
       dirty = false;
-      return;
+      return true;
     }
     try {
-      const content = await api.readPage(id);
-      if (seq !== loadSeq) return;
+      const pending = app.pendingPage;
+      const content = pending?.id === id ? pending.content : await api.readPage(id);
+      if (seq !== loadSeq) return false;
+      if (!(await save())) return false;
+      if (seq !== loadSeq) return false;
+      if (pending?.id === id) app.pendingPage = null;
       const parsed = splitDoc(content);
       const section = act.currentSection();
+      loadedId = id;
       title = parsed.title || (section && findNode(section.pages, id)?.title) || "Untitled";
       setDoc(parsed.body);
       previewText = parsed.body;
@@ -279,8 +321,10 @@
         // the preview's find rather than force the page back into the editor
         requestAnimationFrame(() => act.activePaneCtl()?.openFind(prefill));
       }
+      return true;
     } catch (e) {
       app.status = String(e);
+      return false;
     }
   }
 
@@ -472,6 +516,9 @@
     });
     editorCtl.current = {
       save,
+      failedSavePageTitle: () => lastFailedSavePageTitle,
+      load: switchTo,
+      setEditingBlocked,
       anchor: editorAnchor,
       openFind: ctlOpenFind,
       closeFind: ctlCloseFind,
@@ -500,6 +547,7 @@
         placeholder="Untitled"
         bind:this={titleInput}
         bind:value={title}
+        disabled={editingBlocked}
         oninput={() => {
           dirty = true;
           scheduleSave();
@@ -519,7 +567,7 @@
     style:display={app.currentPageId && app.mode === "edit" ? "" : "none"}
   ></div>
   {#if app.currentPageId && app.mode === "preview"}
-    <Preview body={previewText} />
+    <Preview pageId={loadedId} body={previewText} />
   {/if}
   {#if !app.currentPageId}
     <div class="editor-empty">No page selected — {labelOf('page.new')} creates one</div>

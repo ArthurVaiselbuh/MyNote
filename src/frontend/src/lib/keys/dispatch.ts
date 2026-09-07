@@ -9,6 +9,12 @@ import { runTreeCommand, treeKeys } from "./treeKeys";
 export function handleGlobal(e: KeyboardEvent) {
   const target = e.target as HTMLElement | null;
 
+  if (app.interactionBlocked) {
+    e.preventDefault();
+    e.stopPropagation();
+    return;
+  }
+
   // 0. an open context menu owns the keyboard, one layer above a modal — it can
   // be raised over any pane, and every other key would act behind it
   if (contextMenu.open) {
@@ -82,6 +88,11 @@ export function handleGlobal(e: KeyboardEvent) {
 }
 
 export function handleMouseButton(e: MouseEvent) {
+  if (app.interactionBlocked) {
+    e.preventDefault();
+    e.stopPropagation();
+    return;
+  }
   if (e.button === 3 || e.button === 4) e.preventDefault();
   if (contextMenu.open || app.capturingChord || app.modal !== "none") return;
   const chord = mouseChordOf(e);

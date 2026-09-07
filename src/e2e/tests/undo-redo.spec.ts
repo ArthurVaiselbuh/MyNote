@@ -1,4 +1,6 @@
 import { expect, test, type App } from "../app";
+import fs from "node:fs";
+import path from "node:path";
 
 // Two root pages; B ends selected with tree focus.
 async function twoPages(app: App): Promise<[string, string]> {
@@ -81,7 +83,7 @@ test("delete section undo restores its pages and jumps back", async ({ app }) =>
   await expect.poll(() => app.treeIds()).toEqual([A, B]);
 });
 
-test("clean close purges deleted files, keeps the rest", async ({ app }) => {
+test("clean close permanently removes deleted Markdown and keeps the rest", async ({ app }) => {
   const [A, B] = await twoPages(app);
   await app.page.keyboard.press("Delete"); // B is selected
   await app.confirmDanger();
@@ -91,6 +93,7 @@ test("clean close purges deleted files, keeps the rest", async ({ app }) => {
   await app.close();
   expect(app.mdExists(B)).toBe(false);
   expect(app.mdExists(A)).toBe(true);
+  expect(fs.existsSync(path.join(app.notebookDir, "trash", B))).toBe(false);
   const flat = JSON.stringify(app.readNotebookJson());
   expect(flat).toContain(A);
   expect(flat).not.toContain(B);

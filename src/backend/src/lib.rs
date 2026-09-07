@@ -48,6 +48,7 @@ pub fn run() {
             store: Mutex::new(None),
             settings: Mutex::new(settings),
             closing: AtomicBool::new(false),
+            close_confirmed: AtomicBool::new(false),
             quitting: AtomicBool::new(false),
             git_gate: Mutex::new(()),
             git_stop: Mutex::new(None),
@@ -99,7 +100,9 @@ pub fn run() {
             commands::deleted_pages,
             commands::deleted_page_text,
             commands::restore_deleted_page,
-            commands::restore_revision_assets
+            commands::restore_revision_assets,
+            commands::confirm_close,
+            commands::close_without_saving
         ])
         .setup(|app| {
             let e2e_cdp_port = std::env::var("MYNOTE_E2E_CDP_PORT").ok();
@@ -155,17 +158,17 @@ pub fn run() {
                     api.prevent_close();
                     return;
                 }
+                if state.close_confirmed.swap(false, Ordering::SeqCst) {
+                    persist_on_close(window);
+                    return;
+                }
                 if !state.closing.swap(true, Ordering::SeqCst) {
                     api.prevent_close();
                     let _ = window.emit("mynote:flush-and-close", ());
-                    let watchdog = window.clone();
-                    std::thread::spawn(move || {
-                        std::thread::sleep(Duration::from_millis(1500));
-                        let _ = watchdog.close();
-                    });
                     return;
                 }
-                persist_on_close(window);
+                api.prevent_close();
+                let _ = window.emit("mynote:flush-and-close", ());
             }
         })
         .run(tauri::generate_context!())

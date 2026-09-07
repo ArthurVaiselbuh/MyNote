@@ -28,6 +28,8 @@ export interface ConfirmRequest {
   message: string;
   action: () => void;
   label?: string;
+  cancelLabel?: string;
+  title?: string;
   /** Modal to step back to on Cancel/Esc instead of closing everything. */
   returnTo?: ModalName;
   /** The confirm button is red unless this is explicitly false — most
@@ -43,6 +45,11 @@ export type HistoryMode = "split" | "inline" | "rendered" | "text";
 export interface FindPrefill {
   text: string;
   regex: boolean;
+}
+
+export interface PendingPage {
+  id: string;
+  content: string;
 }
 
 // only what the app shows before the backend answers, and what Reset restores —
@@ -115,6 +122,8 @@ export const app = $state({
   resultsSel: 0,
 
   findPrefill: null as FindPrefill | null,
+  pendingPage: null as PendingPage | null,
+  interactionBlocked: false,
   settings: { ...defaultSettings },
   status: "",
   statusIsError: false,

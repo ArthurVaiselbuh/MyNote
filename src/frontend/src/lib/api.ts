@@ -240,4 +240,6 @@ export const api = {
     invoke<RestoreOutcome>("restore_deleted_page", { sha, id, fallbackSectionId }),
   restoreRevisionAssets: (id: string, sha: string) =>
     invoke<number>("restore_revision_assets", { id, sha }),
+  confirmClose: () => invoke<void>("confirm_close"),
+  closeWithoutSaving: () => invoke<void>("close_without_saving"),
 };

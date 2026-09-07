@@ -12,10 +12,10 @@
 
 <div class="modal-backdrop">
   <div class="modal" style:width="420px" role="dialog">
-    <div class="modal-title">Confirm</div>
+    <div class="modal-title">{app.confirm?.title ?? "Confirm"}</div>
     <div>{app.confirm?.message}</div>
     <div class="modal-buttons">
-      <button onclick={() => act.escapeModal()}>Cancel</button>
+      <button onclick={() => act.escapeModal()}>{app.confirm?.cancelLabel ?? "Cancel"}</button>
       <button class:danger={app.confirm?.danger ?? true} use:autofocus onclick={confirm}
         >{app.confirm?.label ?? "Delete"}</button
       >

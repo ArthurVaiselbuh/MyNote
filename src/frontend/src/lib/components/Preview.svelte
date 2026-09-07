@@ -13,7 +13,7 @@
   import { app, type FindPrefill } from "../state/app.svelte";
   import { takeModeAnchor, viewPosChanged, viewPosOf } from "../viewPos";
 
-  let { body }: { body: string } = $props();
+  let { pageId, body }: { pageId: string | null; body: string } = $props();
 
   const html = $derived(renderBody(body));
 
@@ -58,18 +58,12 @@
     showMatches(findRe);
   });
 
-  // switching pages while staying in preview keeps this component mounted, so a
-  // page change shows up as a new body: close find rather than re-searching into
-  // content the query never applied to, and resume that page's own scroll
   let shownPageId: string | null = null;
   let shownBody: string | null = null;
   $effect(() => {
-    if (body === shownBody) return;
+    if (pageId === shownPageId && body === shownBody) return;
     if (shownBody !== null) open = false;
-    // adopt the new page as soon as it is current, so scroll events from the
-    // re-render are recorded against the page they belong to; the position is
-    // only restored once its body has actually arrived
-    shownPageId = app.currentPageId;
+    shownPageId = pageId;
     shownBody = body;
     restoreScroll(shownPageId);
   });
@@ -84,8 +78,7 @@
     if (!pageId) return;
     const anchor = takeModeAnchor(pageId);
     requestAnimationFrame(() => {
-      // a find match owns the scroll — opening a search result lands here
-      if (!containerEl || currentMatch()) return;
+      if (!containerEl || currentMatch() || shownPageId !== pageId) return;
       const pos = viewPosOf(pageId);
       if (anchor) scrollPreviewToBodyLine(containerEl, anchor.bodyLine, anchor.offsetRatio);
       else containerEl.scrollTop = pos.previewScrollTop;
@@ -121,7 +114,7 @@
   }
 
   function anchor() {
-    const pageId = app.currentPageId;
+    const pageId = shownPageId;
     if (!containerEl || !pageId) return null;
     const match = currentMatch();
     const position = previewPositionAt(containerEl, match);

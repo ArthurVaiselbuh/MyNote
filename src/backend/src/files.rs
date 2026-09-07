@@ -202,15 +202,18 @@ pub fn prune_to_trash(store: &Store) -> Result<usize, String> {
     // under `files/<page-id>/` can be linked from a *different* page than the
     // one whose folder it lives in — checking only the owning page's own body
     // would trash a still-linked attachment.
-    let mut readable_pages: HashSet<&str> = HashSet::new();
     let mut referenced_anywhere: HashSet<(String, String)> = HashSet::new();
+    let mut live_content = Vec::new();
     for &page_id in &live_pages {
         match store.read_page(page_id) {
             Ok(content) => {
-                readable_pages.insert(page_id);
                 referenced_anywhere.extend(referenced(&content));
+                live_content.push(content);
             }
-            Err(e) => log::warn!("skipping file prune for page {page_id}: {e}"),
+            Err(e) => {
+                log::warn!("skipping file prune because page {page_id} could not be read: {e}");
+                return Ok(0);
+            }
         }
     }
 
@@ -221,25 +224,37 @@ pub fn prune_to_trash(store: &Store) -> Result<usize, String> {
             continue;
         }
         let page_id = entry.file_name().to_string_lossy().into_owned();
-        if readable_pages.contains(page_id.as_str()) {
-            moved += move_unreferenced(&store.root, &page_dir, &page_id, &referenced_anywhere)?;
+        if live_pages.contains(page_id.as_str()) {
+            moved += move_unreferenced_entries_to_trash(
+                &store.root,
+                &page_dir,
+                &page_id,
+                &referenced_anywhere,
+                &live_content,
+                FILES_DIR,
+            )?;
         }
     }
     Ok(moved)
 }
 
-fn move_unreferenced(
+pub(crate) fn move_unreferenced_entries_to_trash(
     root: &Path,
     dir: &Path,
     page_id: &str,
     referenced_anywhere: &HashSet<(String, String)>,
+    live_content: &[String],
+    dir_name: &str,
 ) -> Result<usize, String> {
+    if fs::symlink_metadata(dir).map_err(err)?.file_type().is_symlink() {
+        return Ok(0);
+    }
     let mut moved = 0;
     let mut kept = 0;
     for file in fs::read_dir(dir).map_err(err)? {
         let file = file.map_err(err)?;
         let name = file.file_name().to_string_lossy().into_owned();
-        if referenced_anywhere.contains(&(page_id.to_string(), name.clone())) {
+        if retains_entry_or_content(referenced_anywhere, live_content, dir_name, page_id, &name) {
             kept += 1;
             continue;
         }
@@ -252,18 +267,33 @@ fn move_unreferenced(
     Ok(moved)
 }
 
-/// Moves every entry directly under `dir` — files and subdirectories alike —
-/// into `trash/<page_id>/`, then drops the now-empty source directory.
-pub(crate) fn move_dir_to_trash(root: &Path, dir: &Path, page_id: &str) -> Result<usize, String> {
-    let mut moved = 0;
-    for entry in fs::read_dir(dir).map_err(err)? {
-        let entry = entry.map_err(err)?;
-        let name = entry.file_name().to_string_lossy().into_owned();
-        move_one(root, page_id, &entry.path(), &name)?;
-        moved += 1;
-    }
-    let _ = fs::remove_dir(dir);
-    Ok(moved)
+pub(crate) fn retains_entry(
+    referenced_anywhere: &HashSet<(String, String)>,
+    page_id: &str,
+    name: &str,
+) -> bool {
+    referenced_anywhere
+        .iter()
+        .any(|(referenced_page, referenced_name)| {
+            referenced_page == page_id
+                && (referenced_name == name
+                    || referenced_name
+                        .strip_prefix(name)
+                        .is_some_and(|tail| tail.starts_with('/')))
+        })
+}
+
+pub(crate) fn retains_entry_or_content(
+    referenced_anywhere: &HashSet<(String, String)>,
+    live_content: &[String],
+    dir: &str,
+    page_id: &str,
+    name: &str,
+) -> bool {
+    retains_entry(referenced_anywhere, page_id, name)
+        || live_content
+            .iter()
+            .any(|content| content.contains(&format!("{dir}/{page_id}/{name}")))
 }
 
 pub(crate) fn move_file_to_trash(root: &Path, page_id: &str, path: &Path) -> Result<(), String> {
