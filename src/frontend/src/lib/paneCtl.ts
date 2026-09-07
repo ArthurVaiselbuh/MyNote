@@ -15,7 +15,10 @@ export interface PaneCtl {
 }
 
 export interface EditorCtl extends PaneCtl {
-  save(): Promise<void>;
+  save(): Promise<boolean>;
+  failedSavePageTitle(): string | null;
+  load(pageId: string | null, force?: boolean): Promise<boolean>;
+  setEditingBlocked(blocked: boolean): void;
   /** The line the editor is showing at its top edge, for the preview to land on. */
   anchor(): ModeAnchor | null;
   insert(before: string, after?: string): void;

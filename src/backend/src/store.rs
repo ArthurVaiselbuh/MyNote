@@ -321,13 +321,18 @@ pub struct CloseInfo {
     pub git_enabled: bool,
 }
 
+#[derive(Default)]
+struct LiveResourceReferences {
+    assets: HashSet<(String, String)>,
+    files: HashSet<(String, String)>,
+    content: Vec<String>,
+}
+
 pub struct Store {
     pub root: PathBuf,
     pub notebook: Notebook,
     undo_stack: Vec<UndoOp>,
     redo_stack: Vec<UndoOp>,
-    /// Never persisted: the authority to unlink dies with the process, so a
-    /// later session can only trash what it doesn't recognize.
     session_deleted: HashSet<String>,
     view_positions: BTreeMap<String, ViewPos>,
     #[allow(dead_code)]
@@ -415,7 +420,11 @@ impl Store {
         }
         let path = self.root.join(NOTEBOOK_FILE);
         if path.exists() {
-            let _ = fs::copy(&path, self.root.join(format!("{NOTEBOOK_FILE}.bak")));
+            let current = fs::read(&path).map_err(err)?;
+            atomic_write(
+                &self.root.join(format!("{NOTEBOOK_FILE}.bak")),
+                &current,
+            )?;
         }
         atomic_write(&path, json.as_bytes())?;
         *self.last_saved_json.borrow_mut() = json;
@@ -522,8 +531,12 @@ impl Store {
 
     pub fn delete_section(&mut self, id: &str) -> Result<(), String> {
         let op = self.apply_delete_section(id)?;
+        if let Err(e) = self.save() {
+            self.restore_failed_delete(&op);
+            return Err(e);
+        }
         self.record_undo(op);
-        self.save()
+        Ok(())
     }
 
     fn apply_delete_section(&mut self, id: &str) -> Result<UndoOp, String> {
@@ -609,7 +622,7 @@ impl Store {
 
     pub fn rename_page(&mut self, id: &str, title: &str) -> Result<(), String> {
         let title = non_empty(title, "Untitled");
-        let content = self.read_page(id).unwrap_or_default();
+        let content = self.read_page(id)?;
         atomic_write(&self.page_path(id), set_title(&content, &title).as_bytes())?;
         let node = self.find_page_mut(id).ok_or("page not found")?;
         node.title = title;
@@ -618,8 +631,12 @@ impl Store {
 
     pub fn delete_page(&mut self, id: &str) -> Result<(), String> {
         let op = self.apply_delete_page(id)?;
+        if let Err(e) = self.save() {
+            self.restore_failed_delete(&op);
+            return Err(e);
+        }
         self.record_undo(op);
-        self.save()
+        Ok(())
     }
 
     fn apply_delete_page(&mut self, id: &str) -> Result<UndoOp, String> {
@@ -638,6 +655,50 @@ impl Store {
             parent_id,
             index,
         })
+    }
+
+    fn restore_failed_delete(&mut self, op: &UndoOp) {
+        match op {
+            UndoOp::DeletePage {
+                node,
+                section_id,
+                parent_id,
+                index,
+            } => {
+                self.insert_page_at(node.clone(), section_id, parent_id.as_deref(), *index);
+                let mut ids = Vec::new();
+                collect_ids(node, &mut ids);
+                for id in ids {
+                    self.session_deleted.remove(&id);
+                }
+            }
+            UndoOp::DeleteSection {
+                section,
+                index,
+                default_added,
+            } => {
+                if let Some(default_id) = default_added {
+                    if let Some(position) = self
+                        .notebook
+                        .sections
+                        .iter()
+                        .position(|candidate| candidate.id == *default_id && candidate.pages.is_empty())
+                    {
+                        self.notebook.sections.remove(position);
+                    }
+                }
+                let position = (*index).min(self.notebook.sections.len());
+                self.notebook.sections.insert(position, section.clone());
+                for page in &section.pages {
+                    let mut ids = Vec::new();
+                    collect_ids(page, &mut ids);
+                    for id in ids {
+                        self.session_deleted.remove(&id);
+                    }
+                }
+            }
+            UndoOp::MovePage { .. } => {}
+        }
     }
 
     /// `index` is the position in the destination list counted after the page
@@ -898,19 +959,12 @@ impl Store {
         Ok(Some(outcome))
     }
 
-    /// Git holds the `.md` and its images; attachments are unversioned, which
-    /// is why they alone go to trash rather than being unlinked with the rest.
     pub fn purge_pages_deleted_this_session(&self) {
+        let references = self.live_resource_references();
         for id in &self.session_deleted {
             if self.find_page(id).is_none() {
-                let _ = fs::remove_file(self.page_path(id));
-                let assets = self.assets_dir(id);
-                if assets.is_dir() {
-                    let _ = fs::remove_dir_all(assets);
-                }
-                let files = crate::files::files_dir_in(&self.root, id);
-                if files.is_dir() {
-                    let _ = crate::files::move_dir_to_trash(&self.root, &files, id);
+                if let Err(e) = self.purge_page_files(id, references.as_ref().ok()) {
+                    log::warn!("could not purge page {id}: {e}");
                 }
             }
         }
@@ -918,9 +972,9 @@ impl Store {
 
     pub fn trash_pages_not_in_tree(&self) -> usize {
         let mut trashed = 0;
+        let references = self.live_resource_references();
         for id in pages_not_in_tree(&self.root, &self.notebook) {
-            // one locked file must not strand every other page's convergence
-            match self.trash_page_files(&id) {
+            match self.trash_page_files(&id, references.as_ref().ok()) {
                 Ok(()) => trashed += 1,
                 Err(e) => log::warn!("could not trash page {id}: {e}"),
             }
@@ -931,18 +985,116 @@ impl Store {
         trashed
     }
 
-    fn trash_page_files(&self, id: &str) -> Result<(), String> {
+    fn live_resource_references(&self) -> Result<LiveResourceReferences, String> {
+        let mut references = LiveResourceReferences::default();
+        for (_, page) in flatten_pages(&self.notebook) {
+            let content = self.read_page(&page.id)?;
+            references.assets.extend(crate::assets::referenced_assets(&content));
+            references.files.extend(crate::files::referenced(&content));
+            references.content.push(content);
+        }
+        Ok(references)
+    }
+
+    fn trash_page_files(
+        &self,
+        id: &str,
+        references: Option<&LiveResourceReferences>,
+    ) -> Result<(), String> {
         let md = self.page_path(id);
         if md.is_file() {
             crate::files::move_file_to_trash(&self.root, id, &md)?;
         }
+        let Some(references) = references else {
+            log::warn!("keeping resources for page {id} because a live page could not be read");
+            return Ok(());
+        };
         let assets = self.assets_dir(id);
-        if assets.is_dir() {
-            crate::files::move_dir_to_trash(&self.root, &assets, id)?;
+        if is_directory_without_following_symlinks(&assets) {
+            crate::files::move_unreferenced_entries_to_trash(
+                &self.root,
+                &assets,
+                id,
+                &references.assets,
+                &references.content,
+                ASSETS_DIR,
+            )?;
         }
         let files = crate::files::files_dir_in(&self.root, id);
         if files.is_dir() {
-            crate::files::move_dir_to_trash(&self.root, &files, id)?;
+            crate::files::move_unreferenced_entries_to_trash(
+                &self.root,
+                &files,
+                id,
+                &references.files,
+                &references.content,
+                crate::files::FILES_DIR,
+            )?;
+        }
+        Ok(())
+    }
+
+    fn purge_page_files(
+        &self,
+        id: &str,
+        references: Option<&LiveResourceReferences>,
+    ) -> Result<(), String> {
+        let md = self.page_path(id);
+        if md.is_file() {
+            fs::remove_file(&md).map_err(err)?;
+        }
+        let Some(references) = references else {
+            log::warn!("keeping resources for page {id} because a live page could not be read");
+            return Ok(());
+        };
+        let assets = self.assets_dir(id);
+        if is_directory_without_following_symlinks(&assets) {
+            self.permanently_remove_unreferenced_assets(
+                &assets,
+                id,
+                &references.assets,
+                &references.content,
+            )?;
+        }
+        let files = crate::files::files_dir_in(&self.root, id);
+        if files.is_dir() {
+            crate::files::move_unreferenced_entries_to_trash(
+                &self.root,
+                &files,
+                id,
+                &references.files,
+                &references.content,
+                crate::files::FILES_DIR,
+            )?;
+        }
+        Ok(())
+    }
+
+    fn permanently_remove_unreferenced_assets(
+        &self,
+        assets: &Path,
+        page_id: &str,
+        referenced_anywhere: &HashSet<(String, String)>,
+        live_content: &[String],
+    ) -> Result<(), String> {
+        let mut kept = false;
+        for entry in fs::read_dir(assets).map_err(err)? {
+            let entry = entry.map_err(err)?;
+            let name = entry.file_name().to_string_lossy().into_owned();
+            if crate::files::retains_entry_or_content(
+                referenced_anywhere,
+                live_content,
+                ASSETS_DIR,
+                page_id,
+                &name,
+            ) {
+                kept = true;
+            } else {
+                remove_asset_entry_without_following_symlinks(&entry.path())?;
+            }
+        }
+        if !kept {
+            let _ = fs::remove_dir(assets);
         }
         Ok(())
     }
@@ -1125,6 +1277,27 @@ impl Store {
     }
 }
 
+fn remove_asset_entry_without_following_symlinks(path: &Path) -> Result<(), String> {
+    let file_type = fs::symlink_metadata(path).map_err(err)?.file_type();
+    if file_type.is_symlink() {
+        return fs::remove_file(path)
+            .or_else(|file_error| fs::remove_dir(path).map_err(|_| file_error))
+            .map_err(err);
+    }
+    if file_type.is_dir() {
+        for entry in fs::read_dir(path).map_err(err)? {
+            remove_asset_entry_without_following_symlinks(&entry.map_err(err)?.path())?;
+        }
+        return fs::remove_dir(path).map_err(err);
+    }
+    fs::remove_file(path).map_err(err)
+}
+
+fn is_directory_without_following_symlinks(path: &Path) -> bool {
+    fs::symlink_metadata(path)
+        .is_ok_and(|metadata| metadata.file_type().is_dir())
+}
+
 fn write_asset_file(dir: &Path, name: &str, bytes: &[u8]) -> Result<bool, String> {
     let Some(safe_name) = Path::new(name).file_name().and_then(|f| f.to_str()) else {
         return Ok(false);
@@ -1158,9 +1331,65 @@ pub struct IncomingPage {
 
 fn atomic_write(path: &Path, contents: &[u8]) -> Result<(), String> {
     let tmp = path.with_extension("tmp");
-    fs::write(&tmp, contents).map_err(err)?;
-    fs::rename(&tmp, path).map_err(err)
+    let mut file = fs::File::create(&tmp).map_err(err)?;
+    use std::io::Write;
+    file.write_all(contents).map_err(err)?;
+    file.sync_all().map_err(err)?;
+    drop(file);
+    replace_file(&tmp, path)?;
+    sync_parent(path)?;
+    Ok(())
 }
+
+#[cfg(not(windows))]
+fn replace_file(tmp: &Path, path: &Path) -> Result<(), String> {
+    fs::rename(tmp, path).map_err(err)
+}
+
+#[cfg(windows)]
+fn replace_file(tmp: &Path, path: &Path) -> Result<(), String> {
+    use std::os::windows::ffi::OsStrExt;
+
+    let to_wide = |value: &Path| value
+        .as_os_str()
+        .encode_wide()
+        .chain(std::iter::once(0))
+        .collect::<Vec<u16>>();
+    let path_wide = to_wide(path);
+    let tmp_wide = to_wide(tmp);
+    #[link(name = "Kernel32")]
+    extern "system" {
+        fn MoveFileExW(
+            existing: *const u16,
+            new: *const u16,
+            flags: u32,
+        ) -> i32;
+    }
+    const MOVEFILE_REPLACE_EXISTING: u32 = 0x0000_0001;
+    const MOVEFILE_WRITE_THROUGH: u32 = 0x0000_0008;
+    let moved = unsafe {
+        MoveFileExW(
+            tmp_wide.as_ptr(),
+            path_wide.as_ptr(),
+            MOVEFILE_REPLACE_EXISTING | MOVEFILE_WRITE_THROUGH,
+        )
+    };
+    if moved == 0 {
+        return Err(err(std::io::Error::last_os_error()));
+    }
+    Ok(())
+}
+
+#[cfg(not(windows))]
+fn sync_parent(path: &Path) -> Result<(), String> {
+    fs::File::open(path.parent().ok_or("missing parent directory")?)
+        .map_err(err)?
+        .sync_all()
+        .map_err(err)
+}
+
+#[cfg(windows)]
+fn sync_parent(_: &Path) -> Result<(), String> { Ok(()) }
 
 fn parse_notebook(path: &Path) -> Result<Notebook, String> {
     let text = fs::read_to_string(path).map_err(err)?;
@@ -1174,15 +1403,16 @@ fn load_notebook(root: &Path) -> Result<Notebook, String> {
         match parse_notebook(&main) {
             Ok(notebook) => return Ok(notebook),
             Err(parse_error) => {
-                if let Ok(notebook) = parse_notebook(&backup) {
-                    log::warn!("notebook.json unreadable; recovered from backup");
-                    return Ok(notebook);
-                }
-                return Err(parse_error);
+                let notebook = restore_main_from_backup(&main, &backup).map_err(|backup_error| {
+                    format!("{parse_error}; backup recovery failed: {backup_error}")
+                })?;
+                log::warn!("notebook.json unreadable; recovered from backup");
+                return Ok(notebook);
             }
         }
     }
-    if let Ok(notebook) = parse_notebook(&backup) {
+    if backup.exists() {
+        let notebook = restore_main_from_backup(&main, &backup)?;
         log::warn!("notebook.json missing; recovered from backup");
         return Ok(notebook);
     }
@@ -1191,6 +1421,13 @@ fn load_notebook(root: &Path) -> Result<Notebook, String> {
         last_view: LastView::default(),
         git: GitConfig::default(),
     })
+}
+
+fn restore_main_from_backup(main: &Path, backup: &Path) -> Result<Notebook, String> {
+    let text = fs::read_to_string(backup).map_err(err)?;
+    let notebook = serde_json::from_str(&text).map_err(err)?;
+    atomic_write(main, text.as_bytes())?;
+    Ok(notebook)
 }
 
 fn load_user_state(root: &Path) -> Option<UserState> {
@@ -1713,6 +1950,50 @@ mod tests {
     }
 
     #[test]
+    fn rename_does_not_replace_an_unreadable_page() {
+        let (dir, mut store) = open_store();
+        let sid = section_id(&store);
+        let page = store.create_page(&sid, None, None).unwrap();
+        let path = store.page_path(&page.id);
+        let invalid = vec![b'#', b' ', 0xff, b'\n'];
+        fs::write(&path, &invalid).unwrap();
+
+        assert!(store.rename_page(&page.id, "Renamed").is_err());
+        assert_eq!(fs::read(dir.path().join(format!("{}.md", page.id))).unwrap(), invalid);
+        assert_eq!(store.find_page(&page.id).unwrap().title, "Untitled");
+    }
+
+    #[test]
+    fn failed_delete_save_restores_the_page_before_close_can_trash_it() {
+        let (dir, mut store) = open_store();
+        let sid = section_id(&store);
+        let page = store.create_page(&sid, None, None).unwrap();
+        let notebook = dir.path().join(NOTEBOOK_FILE);
+        fs::remove_file(&notebook).unwrap();
+        fs::create_dir(&notebook).unwrap();
+
+        assert!(store.delete_page(&page.id).is_err());
+        assert!(store.find_page(&page.id).is_some());
+        assert!(store.page_path(&page.id).exists());
+        assert!(!store.session_deleted.contains(&page.id));
+    }
+
+    #[test]
+    fn failed_delete_save_restores_the_section_before_close_can_trash_it() {
+        let (dir, mut store) = open_store();
+        let sid = section_id(&store);
+        let page = store.create_page(&sid, None, None).unwrap();
+        let notebook = dir.path().join(NOTEBOOK_FILE);
+        fs::remove_file(&notebook).unwrap();
+        fs::create_dir(&notebook).unwrap();
+
+        assert!(store.delete_section(&sid).is_err());
+        assert!(store.notebook.sections.iter().any(|section| section.id == sid));
+        assert!(store.find_page(&page.id).is_some());
+        assert!(!store.session_deleted.contains(&page.id));
+    }
+
+    #[test]
     fn move_page_reorders_siblings() {
         let (_dir, mut store) = open_store();
         let sid = section_id(&store);
@@ -1802,20 +2083,132 @@ mod tests {
     }
 
     #[test]
-    fn a_delete_this_session_is_unlinked_at_close_not_left_in_trash() {
+    fn a_delete_this_session_permanently_removes_a_nested_unshared_image_at_close() {
         let dir = tempdir().unwrap();
         let mut store = Store::open(dir.path()).unwrap();
         let sid = section_id(&store);
         let page = store.create_page(&sid, None, None).unwrap();
         let assets = store.assets_dir(&page.id);
-        fs::create_dir_all(&assets).unwrap();
-        fs::write(assets.join("img.png"), b"x").unwrap();
+        fs::create_dir_all(assets.join("orphan")).unwrap();
+        fs::write(assets.join("orphan").join("img.png"), b"x").unwrap();
         store.delete_page(&page.id).unwrap();
 
         let info = store.close();
         assert!(!page_path_in(&info.root, &page.id).exists());
         assert!(!assets_dir_in(&info.root, &page.id).exists());
         assert!(!crate::files::trash_dir_in(&info.root, &page.id).exists());
+    }
+
+    #[test]
+    fn a_delete_this_session_does_not_follow_an_asset_directory_symlink() {
+        let dir = tempdir().unwrap();
+        let outside = tempdir().unwrap();
+        fs::write(outside.path().join("outside.png"), b"outside").unwrap();
+        let mut store = Store::open(dir.path()).unwrap();
+        let sid = section_id(&store);
+        let page = store.create_page(&sid, None, None).unwrap();
+        let assets = store.assets_dir(&page.id);
+        fs::create_dir_all(&assets).unwrap();
+        let link = assets.join("linked");
+        #[cfg(windows)]
+        let linked = std::os::windows::fs::symlink_dir(outside.path(), &link).is_ok();
+        #[cfg(not(windows))]
+        let linked = std::os::unix::fs::symlink(outside.path(), &link).is_ok();
+        if !linked {
+            return;
+        }
+
+        store.delete_page(&page.id).unwrap();
+        store.close();
+
+        assert!(outside.path().join("outside.png").exists());
+        assert!(!link.exists());
+    }
+
+    #[test]
+    fn a_delete_this_session_does_not_follow_its_asset_directory_symlink() {
+        let dir = tempdir().unwrap();
+        let outside = tempdir().unwrap();
+        fs::write(outside.path().join("outside.png"), b"outside").unwrap();
+        let mut store = Store::open(dir.path()).unwrap();
+        let sid = section_id(&store);
+        let page = store.create_page(&sid, None, None).unwrap();
+        let assets = store.assets_dir(&page.id);
+        fs::create_dir_all(assets.parent().unwrap()).unwrap();
+        #[cfg(windows)]
+        let linked = std::os::windows::fs::symlink_dir(outside.path(), &assets).is_ok();
+        #[cfg(not(windows))]
+        let linked = std::os::unix::fs::symlink(outside.path(), &assets).is_ok();
+        if !linked {
+            return;
+        }
+
+        store.delete_page(&page.id).unwrap();
+        store.close();
+
+        assert!(outside.path().join("outside.png").exists());
+        assert!(fs::symlink_metadata(&assets).unwrap().file_type().is_symlink());
+    }
+
+    #[test]
+    fn close_keeps_resources_referenced_by_a_surviving_page() {
+        let dir = tempdir().unwrap();
+        let mut store = Store::open(dir.path()).unwrap();
+        let sid = section_id(&store);
+        let owner = store.create_page(&sid, None, None).unwrap();
+        let borrower = store.create_page(&sid, None, None).unwrap();
+        let owner_assets = store.assets_dir(&owner.id);
+        let owner_files = crate::files::files_dir_in(&store.root, &owner.id);
+        fs::create_dir_all(&owner_assets).unwrap();
+        fs::create_dir_all(&owner_files).unwrap();
+        fs::create_dir_all(owner_assets.join("shared")).unwrap();
+        fs::write(owner_assets.join("shared").join("image.png"), b"shared-image").unwrap();
+        fs::write(owner_assets.join("orphan.png"), b"orphan-image").unwrap();
+        fs::write(owner_files.join("shared.pdf"), b"shared-file").unwrap();
+        fs::write(owner_files.join("orphan.pdf"), b"orphan-file").unwrap();
+        store
+            .write_page(
+                &borrower.id,
+                &format!(
+                    "# Borrower\n\n![image](assets/{}/shared/image.png)\n[file](files/{}/shared.pdf)\n",
+                    owner.id, owner.id
+                ),
+            )
+            .unwrap();
+        store.delete_page(&owner.id).unwrap();
+
+        let info = store.close();
+        assert!(assets_dir_in(&info.root, &owner.id)
+            .join("shared")
+            .join("image.png")
+            .exists());
+        assert!(crate::files::files_dir_in(&info.root, &owner.id)
+            .join("shared.pdf")
+            .exists());
+        assert!(!page_path_in(&info.root, &owner.id).exists());
+        assert!(!assets_dir_in(&info.root, &owner.id).join("orphan.png").exists());
+        let trash = crate::files::trash_dir_in(&info.root, &owner.id);
+        assert!(trash.join("orphan.pdf").exists());
+    }
+
+    #[test]
+    fn close_keeps_deleted_resources_when_a_surviving_page_is_unreadable() {
+        let dir = tempdir().unwrap();
+        let mut store = Store::open(dir.path()).unwrap();
+        let sid = section_id(&store);
+        let owner = store.create_page(&sid, None, None).unwrap();
+        let borrower = store.create_page(&sid, None, None).unwrap();
+        let owner_assets = store.assets_dir(&owner.id);
+        fs::create_dir_all(&owner_assets).unwrap();
+        fs::write(owner_assets.join("possibly-shared.png"), b"image").unwrap();
+        fs::write(store.page_path(&borrower.id), [0xff]).unwrap();
+        store.delete_page(&owner.id).unwrap();
+
+        let info = store.close();
+        assert!(assets_dir_in(&info.root, &owner.id)
+            .join("possibly-shared.png")
+            .exists());
+        assert!(!page_path_in(&info.root, &owner.id).exists());
     }
 
     #[test]
@@ -1949,9 +2342,29 @@ mod tests {
             store.create_section("Two").unwrap();
         }
         assert!(dir.path().join("notebook.json.bak").exists());
+        let backup = fs::read(dir.path().join("notebook.json.bak")).unwrap();
         fs::write(dir.path().join("notebook.json"), b"{ this is not json").unwrap();
         let store = Store::open(dir.path()).unwrap();
         assert!(store.find_page(&pid).is_some());
+        assert_eq!(fs::read(dir.path().join("notebook.json.bak")).unwrap(), backup);
+        assert!(parse_notebook(&dir.path().join("notebook.json")).is_ok());
+    }
+
+    #[test]
+    fn failed_backup_recovery_keeps_the_good_backup() {
+        let dir = tempdir().unwrap();
+        {
+            let mut store = Store::open(dir.path()).unwrap();
+            store.create_section("Two").unwrap();
+        }
+        let main = dir.path().join(NOTEBOOK_FILE);
+        let backup_path = dir.path().join(format!("{NOTEBOOK_FILE}.bak"));
+        let backup = fs::read(&backup_path).unwrap();
+        fs::remove_file(&main).unwrap();
+        fs::create_dir(&main).unwrap();
+
+        assert!(Store::open(dir.path()).is_err());
+        assert_eq!(fs::read(backup_path).unwrap(), backup);
     }
 
     #[test]

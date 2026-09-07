@@ -1,5 +1,6 @@
 use base64::engine::general_purpose::STANDARD;
 use base64::Engine;
+use percent_encoding::percent_decode_str;
 use std::collections::HashSet;
 use std::fs;
 use std::path::Path;
@@ -71,6 +72,12 @@ pub fn save_image(store: &Store, page_id: &str, data_b64: &str, ext: &str) -> Re
 
 pub fn referenced_assets(content: &str) -> Vec<(String, String)> {
     crate::files::scan_refs(content, store::ASSETS_DIR)
+        .into_iter()
+        .map(|(page_id, raw)| {
+            let name = percent_decode_str(&raw).decode_utf8_lossy().into_owned();
+            (page_id, name)
+        })
+        .collect()
 }
 
 pub fn prune(store: &Store) -> Result<usize, String> {
@@ -82,39 +89,60 @@ pub fn prune(store: &Store) -> Result<usize, String> {
         .iter()
         .map(|(_, page)| page.id.as_str())
         .collect();
+    let mut referenced_anywhere: HashSet<(String, String)> = HashSet::new();
+    let mut live_content = Vec::new();
+    for &page_id in &live_pages {
+        let content = match store.read_page(page_id) {
+            Ok(content) => content,
+            Err(e) => {
+                log::warn!("skipping asset prune because page {page_id} could not be read: {e}");
+                return Ok(0);
+            }
+        };
+        referenced_anywhere.extend(referenced_assets(&content));
+        live_content.push(content);
+    }
     let mut removed = 0;
 
     for entry in fs::read_dir(&assets_dir).map_err(err)? {
         let entry = entry.map_err(err)?;
         let dir = entry.path();
-        if !dir.is_dir() {
+        if !fs::symlink_metadata(&dir)
+            .map_err(err)?
+            .file_type()
+            .is_dir()
+        {
             continue;
         }
         let page_id = entry.file_name().to_string_lossy().into_owned();
         if live_pages.contains(page_id.as_str()) {
-            removed += drop_unreferenced(store, &dir, &page_id)?;
+            removed += drop_unreferenced(&dir, &page_id, &referenced_anywhere, &live_content)?;
         }
     }
     Ok(removed)
 }
 
-fn drop_unreferenced(store: &Store, dir: &Path, page_id: &str) -> Result<usize, String> {
-    let content = match store.read_page(page_id) {
-        Ok(content) => content,
-        Err(e) => {
-            log::warn!("skipping asset prune for page {page_id}: {e}");
-            return Ok(0);
-        }
-    };
+pub(crate) fn drop_unreferenced(
+    dir: &Path,
+    page_id: &str,
+    referenced_anywhere: &HashSet<(String, String)>,
+    live_content: &[String],
+) -> Result<usize, String> {
     let mut removed = 0;
     let mut kept = 0;
     for file in fs::read_dir(dir).map_err(err)? {
         let file = file.map_err(err)?;
         let name = file.file_name().to_string_lossy().into_owned();
-        if content.contains(&assets_rel(page_id, &name)) {
+        if crate::files::retains_entry_or_content(
+            referenced_anywhere,
+            live_content,
+            store::ASSETS_DIR,
+            page_id,
+            &name,
+        ) {
             kept += 1;
         } else {
-            let _ = fs::remove_file(file.path());
+            fs::remove_file(file.path()).map_err(err)?;
             removed += 1;
         }
     }
@@ -227,6 +255,71 @@ mod tests {
 
         assert_eq!(prune(&store).unwrap(), 0);
         assert!(store.assets_dir(&page.id).is_dir());
+    }
+
+    #[test]
+    fn prune_does_not_follow_an_asset_directory_symlink() {
+        let dir = tempdir().unwrap();
+        let outside = tempdir().unwrap();
+        fs::write(outside.path().join("outside.png"), b"outside").unwrap();
+        let mut store = Store::open(dir.path()).unwrap();
+        let section_id = store.notebook.sections[0].id.clone();
+        let page = store.create_page(&section_id, None, None).unwrap();
+        let assets = store.assets_dir(&page.id);
+        fs::create_dir_all(assets.parent().unwrap()).unwrap();
+        #[cfg(windows)]
+        let linked = std::os::windows::fs::symlink_dir(outside.path(), &assets).is_ok();
+        #[cfg(not(windows))]
+        let linked = std::os::unix::fs::symlink(outside.path(), &assets).is_ok();
+        if !linked {
+            return;
+        }
+
+        prune(&store).unwrap();
+
+        assert!(outside.path().join("outside.png").exists());
+        assert!(fs::symlink_metadata(&assets)
+            .unwrap()
+            .file_type()
+            .is_symlink());
+    }
+
+    #[test]
+    fn prune_keeps_an_image_referenced_only_from_another_page() {
+        let dir = tempdir().unwrap();
+        let mut store = Store::open(dir.path()).unwrap();
+        let sid = store.notebook.sections[0].id.clone();
+        let owner = store.create_page(&sid, None, None).unwrap();
+        let borrower = store.create_page(&sid, None, None).unwrap();
+        let shared = save_image(&store, &owner.id, TINY_PNG_B64, "png").unwrap();
+
+        store.write_page(&owner.id, "# Owner\n").unwrap();
+        store
+            .write_page(&borrower.id, &format!("# Borrower\n\n![shared]({shared})\n"))
+            .unwrap();
+
+        assert_eq!(prune(&store).unwrap(), 0);
+        assert!(dir.path().join(shared).exists());
+    }
+
+    #[test]
+    fn prune_keeps_an_angle_wrapped_destination_with_spaces() {
+        let dir = tempdir().unwrap();
+        let mut store = Store::open(dir.path()).unwrap();
+        let sid = store.notebook.sections[0].id.clone();
+        let page = store.create_page(&sid, None, None).unwrap();
+        let assets = store.assets_dir(&page.id);
+        fs::create_dir_all(&assets).unwrap();
+        fs::write(assets.join("hand drawn.png"), b"image").unwrap();
+        store
+            .write_page(
+                &page.id,
+                &format!("# Page\n\n![drawing](<assets/{}/hand drawn.png>)\n", page.id),
+            )
+            .unwrap();
+
+        assert_eq!(prune(&store).unwrap(), 0);
+        assert!(assets.join("hand drawn.png").exists());
     }
 
     #[test]

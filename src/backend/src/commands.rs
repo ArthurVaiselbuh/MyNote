@@ -1,7 +1,7 @@
 use serde::Serialize;
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
-use std::sync::atomic::AtomicBool;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{mpsc, Mutex};
 use tauri::{Emitter, State};
 
@@ -22,6 +22,7 @@ pub struct AppState {
     pub store: Mutex<Option<Store>>,
     pub settings: Mutex<Settings>,
     pub closing: AtomicBool,
+    pub close_confirmed: AtomicBool,
     /// Set by the tray's Quit item so the close-to-tray guard lets that one
     /// close through.
     pub quitting: AtomicBool,
@@ -80,6 +81,9 @@ pub(crate) fn close_and_commit(
     app: &tauri::AppHandle,
     store: Store,
 ) {
+    if store.notebook.git.enabled {
+        gated_snapshot(state, app, &store.root, SnapshotKind::Close, RepoSetup::Existing);
+    }
     let info = store.close();
     if info.git_enabled {
         gated_snapshot(state, app, &info.root, SnapshotKind::Close, RepoSetup::Existing);
@@ -166,6 +170,11 @@ fn notebook_root_from(path: &str) -> Result<PathBuf, String> {
     Ok(p.parent().map(Path::to_path_buf).unwrap_or(p))
 }
 
+fn same_notebook_root(left: &Path, right: &Path) -> bool {
+    std::fs::canonicalize(left).unwrap_or_else(|_| left.to_path_buf())
+        == std::fs::canonicalize(right).unwrap_or_else(|_| right.to_path_buf())
+}
+
 // Git-touching commands are `async fn` on purpose: sync commands run inline in
 // the WebView2 resource-request callback on the main thread, so a git
 // subprocess (deadlines up to 20s) would freeze the whole UI. `async fn` moves
@@ -189,8 +198,18 @@ pub async fn open_notebook(
                 .unwrap_or_else(settings::default_notebook_dir)
         }
     };
-    let mut guard = state.store.lock().map_err(lock_err)?;
-    close_current(&state, &app, &mut guard);
+    {
+        let guard = state.store.lock().map_err(lock_err)?;
+        if let Some(store) = guard
+            .as_ref()
+            .filter(|store| same_notebook_root(&store.root, &root))
+        {
+            return Ok(NotebookInfo {
+                root: store.root.to_string_lossy().to_string(),
+                notebook: store.notebook.clone(),
+            });
+        }
+    }
     let store = match Store::open(&root) {
         Ok(store) => store,
         // A lock conflict means the notebook itself is fine — just in use
@@ -205,11 +224,35 @@ pub async fn open_notebook(
             Store::open(&fallback)?
         }
     };
+    let mut guard = state.store.lock().map_err(lock_err)?;
+    close_current(&state, &app, &mut guard);
     log::info!("opened notebook");
     let info = adopt_store(&state, &mut guard, store)?;
     drop(guard);
     commit_on_open(&state, &app, &info);
     Ok(info)
+}
+
+#[tauri::command]
+pub fn confirm_close(state: State<'_, AppState>, window: tauri::Window) -> Result<(), String> {
+    allow_close(&state, &window)
+}
+
+#[tauri::command]
+pub fn close_without_saving(state: State<'_, AppState>, window: tauri::Window) -> Result<(), String> {
+    allow_close(&state, &window)
+}
+
+fn allow_close(state: &State<'_, AppState>, window: &tauri::Window) -> Result<(), String> {
+    if !state.closing.load(Ordering::SeqCst) {
+        return Err("close was not requested".to_string());
+    }
+    state.close_confirmed.store(true, Ordering::SeqCst);
+    if let Err(e) = window.close() {
+        state.close_confirmed.store(false, Ordering::SeqCst);
+        return Err(e.to_string());
+    }
+    Ok(())
 }
 
 #[tauri::command]
@@ -222,9 +265,9 @@ pub async fn create_notebook(
     if root.join(store::NOTEBOOK_FILE).exists() {
         return Err("that folder already contains a notebook — use Open instead".to_string());
     }
+    let store = Store::open(&root)?;
     let mut guard = state.store.lock().map_err(lock_err)?;
     close_current(&state, &app, &mut guard);
-    let store = Store::open(&root)?;
     log::info!("created notebook");
     let info = adopt_store(&state, &mut guard, store)?;
     drop(guard);

@@ -1,7 +1,6 @@
 <script lang="ts">
   import { onMount } from "svelte";
   import { listen } from "@tauri-apps/api/event";
-  import { getCurrentWindow } from "@tauri-apps/api/window";
   import * as act from "./lib/actions";
   import type { SplitPane } from "./lib/actions";
   import { handleGlobal, handleMouseButton } from "./lib/keys/dispatch";
@@ -111,8 +110,18 @@
 
     subscribe(
       listen("mynote:flush-and-close", async () => {
-        await act.saveNow();
-        await getCurrentWindow().close();
+        app.interactionBlocked = true;
+        act.setEditorEditingBlocked(true);
+        if (await act.flushEditor()) {
+          if (!(await act.confirmClose())) {
+            act.setEditorEditingBlocked(false);
+            app.interactionBlocked = false;
+          }
+        } else {
+          act.setEditorEditingBlocked(false);
+          app.interactionBlocked = false;
+          act.showCloseSaveFailure();
+        }
       }),
     );
     subscribe(listen("mynote:flush", flushSave));
@@ -144,6 +153,7 @@
 
 <div
   class="app"
+  inert={app.interactionBlocked}
   style:--text={s.textColor}
   style:--bg={s.backgroundColor}
   style:--panel={s.panelColor}
