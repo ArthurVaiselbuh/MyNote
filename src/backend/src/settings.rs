@@ -31,7 +31,8 @@ pub struct Settings {
     pub tree_width: u32,
     pub peek_width: u32,
     pub log_level: String,
-    pub minimize_to_tray: bool,
+    #[serde(alias = "minimizeToTray")]
+    pub single_instance: bool,
     pub start_on_login: bool,
     /// Command id -> chord list, holding only what the user changed; an empty
     /// list means deliberately unassigned. The frontend owns the vocabulary
@@ -57,7 +58,7 @@ impl Default for Settings {
             tree_width: 300,
             peek_width: 460,
             log_level: "info".into(),
-            minimize_to_tray: false,
+            single_instance: false,
             start_on_login: false,
             keybindings: BTreeMap::new(),
             window: None,
@@ -145,6 +146,29 @@ impl Settings {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn tray_preference_migrates_to_single_instance() {
+        for enabled in [false, true] {
+            let settings: Settings =
+                serde_json::from_value(serde_json::json!({ "minimizeToTray": enabled })).unwrap();
+            assert_eq!(settings.single_instance, enabled);
+            let saved = serde_json::to_value(&settings).unwrap();
+            assert_eq!(saved["singleInstance"], enabled);
+            assert!(saved.get("minimizeToTray").is_none());
+            assert_eq!(
+                serde_json::from_value::<Settings>(saved)
+                    .unwrap()
+                    .single_instance,
+                enabled
+            );
+        }
+        assert!(
+            !serde_json::from_str::<Settings>("{}")
+                .unwrap()
+                .single_instance
+        );
+    }
 
     #[test]
     fn remember_notebook_keeps_most_recent_first_without_duplicates() {

@@ -60,8 +60,6 @@ pub fn reveal_window(app: &AppHandle) {
     let _ = window.set_focus();
 }
 
-/// The only path that closes the window for real while `minimizeToTray` is on —
-/// close-to-tray checks this flag before hiding instead of closing.
 fn quit_app(app: &AppHandle) {
     app.state::<AppState>().quitting.store(true, Ordering::SeqCst);
     if let Some(window) = app.get_webview_window("main") {

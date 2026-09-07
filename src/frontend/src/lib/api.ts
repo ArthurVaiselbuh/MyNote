@@ -111,7 +111,7 @@ export interface Settings {
   treeWidth: number;
   peekWidth: number;
   logLevel: string;
-  minimizeToTray: boolean;
+  singleInstance: boolean;
   startOnLogin: boolean;
   // command id -> chord list; only commands the user changed. An empty list is
   // an explicit "unassigned" — see keys/bindings.ts

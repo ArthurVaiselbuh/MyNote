@@ -129,13 +129,17 @@
     </div>
 
     <div class="settings-row">
-      <label for="set-tray">Minimize to tray instead of quitting(EXPERIMENTAL)</label>
+      <label for="set-single-instance">Single instance</label>
       <input
-        id="set-tray"
+        id="set-single-instance"
         type="checkbox"
-        bind:checked={app.settings.minimizeToTray}
+        bind:checked={app.settings.singleInstance}
         onchange={persist}
       />
+    </div>
+
+    <div class="settings-path">
+      Closing keeps MyNote in the tray. Prevents running multiple MyNote instances.
     </div>
 
     <div class="settings-row">
@@ -147,9 +151,9 @@
         onchange={persist}
       />
     </div>
-    {#if app.settings.startOnLogin && !app.settings.minimizeToTray}
+    {#if app.settings.startOnLogin && !app.settings.singleInstance}
       <div class="settings-path">
-        Turn on minimize to tray as well to have MyNote start out of the way.
+        Turn on single instance as well to have MyNote start out of the way.
       </div>
     {/if}
 

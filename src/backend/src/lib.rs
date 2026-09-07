@@ -10,6 +10,7 @@ mod import_mht;
 mod lock;
 mod search;
 mod settings;
+mod single_instance;
 mod startup;
 mod store;
 mod tray;
@@ -34,7 +35,16 @@ const ASSET_SCHEME: &str = "note-asset";
 
 pub fn run() {
     let settings = Settings::load();
+    let instance = match single_instance::claim_or_reveal() {
+        Ok(Some(owner)) => settings.single_instance.then_some(owner),
+        Ok(None) => return,
+        Err(error) => {
+            eprintln!("Could not enable single instance: {error}");
+            return;
+        }
+    };
     tauri::Builder::default()
+        .manage(Mutex::new(instance))
         .plugin(build_log_plugin(&settings))
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_opener::init())
@@ -129,7 +139,7 @@ pub fn run() {
             let (geom, tray_enabled, start_on_login) = {
                 let state = app.state::<AppState>();
                 let s = state.settings.lock().map_err(commands::lock_err)?;
-                (s.window.clone(), s.minimize_to_tray, s.start_on_login)
+                (s.window.clone(), s.single_instance, s.start_on_login)
             };
             if let Some(g) = geom.filter(|g| g.width > 0 && g.height > 0) {
                 let _ = win.set_position(tauri::PhysicalPosition::new(g.x, g.y));
@@ -141,9 +151,12 @@ pub fn run() {
             tray::sync(app.handle(), tray_enabled);
             startup::sync(app.handle(), start_on_login);
             hotkey::sync(app.handle());
-            if !hide_window_for_e2e && !(tray_enabled && startup::launched_hidden()) {
+            if !hide_window_for_e2e
+                && !(tray_enabled && app.tray_by_id(tray::ID).is_some() && startup::launched_hidden())
+            {
                 let _ = win.show();
             }
+            single_instance::sync(app.handle(), tray_enabled)?;
 
             let tx = spawn_git_ticker(app.handle().clone());
             if let Ok(mut stop) = app.state::<AppState>().git_stop.lock() {
@@ -231,8 +244,6 @@ fn persist_on_close(window: &tauri::Window) {
     settings.save();
 }
 
-/// Closing with `minimizeToTray` on parks the app in the tray instead of
-/// quitting; only the tray's Quit item, which sets `quitting`, gets past this.
 fn hide_to_tray(window: &tauri::Window, state: &tauri::State<'_, AppState>) -> bool {
     if state.quitting.load(Ordering::SeqCst) || state.closing.load(Ordering::SeqCst) {
         return false;
@@ -240,7 +251,7 @@ fn hide_to_tray(window: &tauri::Window, state: &tauri::State<'_, AppState>) -> b
     let Ok(mut settings) = state.settings.lock() else {
         return false;
     };
-    if !settings.minimize_to_tray || window.app_handle().tray_by_id(tray::ID).is_none() {
+    if !settings.single_instance || window.app_handle().tray_by_id(tray::ID).is_none() {
         return false;
     }
     log::trace!("close requested — hiding to tray");

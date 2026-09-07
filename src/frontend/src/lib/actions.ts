@@ -1128,6 +1128,7 @@ export async function persistSettings() {
     await api.setSettings(JSON.parse(JSON.stringify(app.settings)));
   } catch (e) {
     app.status = String(e);
+    app.settings = await api.getSettings();
   }
 }
 

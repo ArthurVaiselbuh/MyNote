@@ -683,6 +683,7 @@ pub fn set_settings(
     settings: Settings,
 ) -> Result<(), String> {
     let mut guard = state.settings.lock().map_err(lock_err)?;
+    crate::single_instance::sync(&app, settings.single_instance)?;
     let window = guard.window.clone();
     // window geometry and the recents MRU are backend-owned; ignore stale copies
     let recents = std::mem::take(&mut guard.recent_notebooks);
@@ -693,7 +694,7 @@ pub fn set_settings(
     }
     log::info!("settings updated (log level: {})", guard.log_level);
     guard.save();
-    let (tray_enabled, start_on_login) = (guard.minimize_to_tray, guard.start_on_login);
+    let (tray_enabled, start_on_login) = (guard.single_instance, guard.start_on_login);
     drop(guard);
     tray::sync(&app, tray_enabled);
     startup::sync(&app, start_on_login);
