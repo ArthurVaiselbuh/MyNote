@@ -425,10 +425,17 @@ pub fn search_pages(
     state: State<'_, AppState>,
     query: String,
     mode: String,
+    link_targets: Option<bool>,
 ) -> Result<SearchResults, String> {
     let mode = SearchMode::from(mode.as_str());
     log::trace!("search ({mode:?}), {} chars", query.chars().count());
-    with_store(&state, |s| search::search(s, &query, mode))
+    with_store(&state, |s| {
+        if link_targets.unwrap_or(false) {
+            Ok(search::search_link_targets(s, &query))
+        } else {
+            search::search(s, &query, mode)
+        }
+    })
 }
 
 #[tauri::command]

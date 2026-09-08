@@ -1,4 +1,4 @@
-const PAGE_LINK = /([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})\.md$/i;
+const PAGE_LINK_PREFIX = "mynote://";
 const ATTACHMENT_LINK = /^files\/([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})\/(.+)$/i;
 
 export function escapeRegExp(text: string): string {
@@ -18,7 +18,8 @@ export function searchRegex(text: string, isRegex: boolean, caseSensitive = fals
 }
 
 export function pageIdFromHref(href: string): string | null {
-  return href.match(PAGE_LINK)?.[1] ?? null;
+  if (!href.toLowerCase().startsWith(PAGE_LINK_PREFIX)) return null;
+  return href.slice(PAGE_LINK_PREFIX.length) || null;
 }
 
 export function attachmentFromHref(href: string): { pageId: string; name: string } | null {

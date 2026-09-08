@@ -18,6 +18,7 @@ export type ModalName =
   | "confirm"
   | "insert"
   | "colorPicker"
+  | "pageLinkPicker"
   | "import"
   | "openNotebook"
   | "welcome"
@@ -81,6 +82,7 @@ export const defaultSettings: Settings = {
 // the stack; anything absent here closes.
 const MODAL_PARENT: Partial<Record<ModalName, ModalName>> = {
   colorPicker: "insert",
+  pageLinkPicker: "insert",
   colors: "settings",
   keybindings: "settings",
 };
