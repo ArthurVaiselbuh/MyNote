@@ -123,6 +123,7 @@ pub fn run() {
                     .inner_size(1280.0, 840.0)
                     .min_inner_size(640.0, 400.0)
                     .visible(false)
+                    .devtools(cfg!(debug_assertions))
                     .focused(!hide_window_for_e2e);
             // wry always calls SetAdditionalBrowserArguments on the WebView2 COM
             // options (even just its own defaults), which per WebView2's docs means

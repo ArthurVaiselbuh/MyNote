@@ -6,6 +6,7 @@
   import { handleGlobal, handleMouseButton } from "./lib/keys/dispatch";
   import { app, modalParentOf } from "./lib/state/app.svelte";
   import { isTextEntry } from "./lib/textEntry";
+  import { clearRenderedSelection } from "./lib/textSelection";
   import ContextMenu from "./lib/components/ContextMenu.svelte";
   import Editor from "./lib/components/Editor.svelte";
   import ResultPeek from "./lib/components/ResultPeek.svelte";
@@ -28,6 +29,15 @@
   import Welcome from "./lib/components/Welcome.svelte";
 
   const s = $derived(app.settings);
+
+  $effect(() => {
+    app.focus;
+    app.view;
+    app.mode;
+    app.currentPageId;
+    app.modal;
+    clearRenderedSelection();
+  });
 
   // the history pane stays mounted behind the modals it opens itself, so backing
   // out of them lands on an intact pane instead of a flash of the editor
@@ -88,6 +98,10 @@
   });
 
   onMount(() => {
+    const suppressBrowserZoom = (event: WheelEvent) => {
+      if (event.ctrlKey) event.preventDefault();
+    };
+    window.addEventListener("wheel", suppressBrowserZoom, { passive: false });
     window.addEventListener("keydown", handleGlobal, true);
     window.addEventListener("mousedown", handleMouseButton, true);
 
@@ -132,6 +146,7 @@
     void act.boot();
 
     return () => {
+      window.removeEventListener("wheel", suppressBrowserZoom);
       window.removeEventListener("keydown", handleGlobal, true);
       window.removeEventListener("mousedown", handleMouseButton, true);
       window.removeEventListener("contextmenu", suppressWebviewMenu);
