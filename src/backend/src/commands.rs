@@ -7,6 +7,7 @@ use tauri::{Emitter, State};
 
 use crate::assets;
 use crate::files;
+use crate::file_watcher::{commands::watch_notebook, FileWatcher};
 use crate::git::{self, SnapshotKind};
 use crate::history;
 use crate::hotkey;
@@ -38,6 +39,7 @@ pub struct AppState {
     /// instead of surfacing spurious "busy" errors. Never held together with
     /// the store lock (see the history section below), so it cannot deadlock.
     pub history_gate: Mutex<()>,
+    pub file_watcher: Mutex<Option<FileWatcher>>,
 }
 
 #[derive(Serialize, Clone)]
@@ -68,6 +70,16 @@ fn with_store<T>(
 ) -> Result<T, String> {
     let mut guard = state.store.lock().map_err(lock_err)?;
     let store = guard.as_mut().ok_or_else(|| "no notebook open".to_string())?;
+    f(store)
+}
+
+fn with_store_mutation<T>(
+    state: &State<'_, AppState>,
+    f: impl FnOnce(&mut Store) -> Result<T, String>,
+) -> Result<T, String> {
+    let mut guard = state.store.lock().map_err(lock_err)?;
+    let store = guard.as_mut().ok_or_else(|| "no notebook open".to_string())?;
+    store.ensure_no_external_changes()?;
     f(store)
 }
 
@@ -200,6 +212,9 @@ pub async fn open_notebook(
     };
     {
         let guard = state.store.lock().map_err(lock_err)?;
+        if let Some(store) = guard.as_ref() {
+            store.ensure_no_external_changes()?;
+        }
         if let Some(store) = guard
             .as_ref()
             .filter(|store| same_notebook_root(&store.root, &root))
@@ -224,6 +239,7 @@ pub async fn open_notebook(
             Store::open(&fallback)?
         }
     };
+    watch_notebook(&state, &store.root)?;
     let mut guard = state.store.lock().map_err(lock_err)?;
     close_current(&state, &app, &mut guard);
     log::info!("opened notebook");
@@ -244,6 +260,9 @@ pub fn close_without_saving(state: State<'_, AppState>, window: tauri::Window) -
 }
 
 fn allow_close(state: &State<'_, AppState>, window: &tauri::Window) -> Result<(), String> {
+    if let Some(store) = state.store.lock().map_err(lock_err)?.as_ref() {
+        store.ensure_no_external_changes()?;
+    }
     if !state.closing.load(Ordering::SeqCst) {
         return Err("close was not requested".to_string());
     }
@@ -261,11 +280,15 @@ pub async fn create_notebook(
     app: tauri::AppHandle,
     path: String,
 ) -> Result<NotebookInfo, String> {
+    if let Some(store) = state.store.lock().map_err(lock_err)?.as_ref() {
+        store.ensure_no_external_changes()?;
+    }
     let root = PathBuf::from(&path);
     if root.join(store::NOTEBOOK_FILE).exists() {
         return Err("that folder already contains a notebook — use Open instead".to_string());
     }
     let store = Store::open(&root)?;
+    watch_notebook(&state, &store.root)?;
     let mut guard = state.store.lock().map_err(lock_err)?;
     close_current(&state, &app, &mut guard);
     log::info!("created notebook");
@@ -310,25 +333,25 @@ pub fn get_tree(state: State<'_, AppState>) -> Result<Notebook, String> {
 #[tauri::command]
 pub fn create_section(state: State<'_, AppState>, name: String) -> Result<Section, String> {
     log::info!("create section");
-    with_store(&state, |s| s.create_section(&name))
+    with_store_mutation(&state, |s| s.create_section(&name))
 }
 
 #[tauri::command]
 pub fn rename_section(state: State<'_, AppState>, id: String, name: String) -> Result<(), String> {
     log::info!("rename section {id}");
-    with_store(&state, |s| s.rename_section(&id, &name))
+    with_store_mutation(&state, |s| s.rename_section(&id, &name))
 }
 
 #[tauri::command]
 pub fn move_section(state: State<'_, AppState>, id: String, index: usize) -> Result<(), String> {
     log::info!("move section {id} to index {index}");
-    with_store(&state, |s| s.move_section(&id, index))
+    with_store_mutation(&state, |s| s.move_section(&id, index))
 }
 
 #[tauri::command]
 pub fn delete_section(state: State<'_, AppState>, id: String) -> Result<(), String> {
     log::info!("delete section {id}");
-    with_store(&state, |s| s.delete_section(&id))
+    with_store_mutation(&state, |s| s.delete_section(&id))
 }
 
 #[tauri::command]
@@ -339,7 +362,7 @@ pub fn create_page(
     after_id: Option<String>,
 ) -> Result<PageNode, String> {
     log::info!("create page in section {section_id} (parent {parent_id:?})");
-    with_store(&state, |s| {
+    with_store_mutation(&state, |s| {
         s.create_page(&section_id, parent_id.as_deref(), after_id.as_deref())
     })
 }
@@ -353,19 +376,19 @@ pub fn read_page(state: State<'_, AppState>, id: String) -> Result<String, Strin
 #[tauri::command]
 pub fn write_page(state: State<'_, AppState>, id: String, content: String) -> Result<String, String> {
     log::trace!("write page {id} ({} bytes)", content.len());
-    with_store(&state, |s| s.write_page(&id, &content))
+    with_store_mutation(&state, |s| s.write_page(&id, &content))
 }
 
 #[tauri::command]
 pub fn rename_page(state: State<'_, AppState>, id: String, title: String) -> Result<(), String> {
     log::info!("rename page {id}");
-    with_store(&state, |s| s.rename_page(&id, &title))
+    with_store_mutation(&state, |s| s.rename_page(&id, &title))
 }
 
 #[tauri::command]
 pub fn delete_page(state: State<'_, AppState>, id: String) -> Result<(), String> {
     log::info!("delete page {id}");
-    with_store(&state, |s| s.delete_page(&id))
+    with_store_mutation(&state, |s| s.delete_page(&id))
 }
 
 #[tauri::command]
@@ -377,19 +400,19 @@ pub fn move_page(
     index: usize,
 ) -> Result<(), String> {
     log::info!("move page {id} to section {to_section} (parent {parent_id:?}, index {index})");
-    with_store(&state, |s| {
+    with_store_mutation(&state, |s| {
         s.move_page(&id, &to_section, parent_id.as_deref(), index)
     })
 }
 
 #[tauri::command]
 pub fn undo(state: State<'_, AppState>) -> Result<Option<UndoOutcome>, String> {
-    with_store(&state, |s| s.undo())
+    with_store_mutation(&state, |s| s.undo())
 }
 
 #[tauri::command]
 pub fn redo(state: State<'_, AppState>) -> Result<Option<UndoOutcome>, String> {
-    with_store(&state, |s| s.redo())
+    with_store_mutation(&state, |s| s.redo())
 }
 
 #[tauri::command]
@@ -514,7 +537,7 @@ pub fn inspect_mht(state: State<'_, AppState>, paths: Vec<String>) -> Result<Imp
 #[tauri::command]
 pub fn import_mht(state: State<'_, AppState>, paths: Vec<String>) -> Result<ImportOutcome, String> {
     log::info!("import {} OneNote file(s)", paths.len());
-    with_store(&state, |s| import_mht::import(s, &paths))
+    with_store_mutation(&state, |s| import_mht::import(s, &paths))
 }
 
 #[tauri::command]
@@ -525,7 +548,7 @@ pub fn inspect_md(state: State<'_, AppState>, root: String) -> Result<ImportPrev
 #[tauri::command]
 pub fn import_md(state: State<'_, AppState>, root: String) -> Result<ImportOutcome, String> {
     log::info!("import markdown folder");
-    with_store(&state, |s| import_md::import(s, &root))
+    with_store_mutation(&state, |s| import_md::import(s, &root))
 }
 
 #[tauri::command]
@@ -566,7 +589,7 @@ pub async fn set_git_snapshots(
 ) -> Result<GitStatus, String> {
     // `with_store` returns before the snapshot runs: ensure_repo/snapshot must
     // never hold the store lock.
-    let root = with_store(&state, |s| {
+    let root = with_store_mutation(&state, |s| {
         s.set_git_snapshots(enabled, interval_secs)?;
         log::info!(
             "git snapshots {} for this notebook",
@@ -664,7 +687,7 @@ pub async fn restore_deleted_page(
     }; // gate dropped here — insert_restored (a write) must not run under it
 
     let requested_id = page.id.clone();
-    let written = with_store(&state, |s| {
+    let written = with_store_mutation(&state, |s| {
         s.insert_restored(&section_id, parent_id.as_deref(), vec![page])
     })?;
     let page = written.into_iter().next().ok_or("nothing was restored")?;

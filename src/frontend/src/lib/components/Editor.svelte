@@ -159,6 +159,7 @@
       return saved && save();
     }
     if (!view || !loadedId || !dirty) return true;
+    if (app.externalChanges) return false;
     const savedView = view;
     const id = loadedId;
     const savedTitle = title;
@@ -300,6 +301,7 @@
     if (!(await save())) return false;
     if (seq !== loadSeq) return false;
     if (!id) {
+      await api.readOpenPage(null);
       loadedId = null;
       title = "";
       setDoc("");
@@ -309,7 +311,7 @@
     }
     try {
       const pending = app.pendingPage;
-      const content = pending?.id === id ? pending.content : await api.readPage(id);
+      const content = pending?.id === id ? pending.content : await api.readOpenPage(id);
       if (seq !== loadSeq) return false;
       if (!(await save())) return false;
       if (seq !== loadSeq) return false;
@@ -539,6 +541,11 @@
       printContent: () => loadedId && loadedId === app.currentPageId && view
         ? { title: title.trim() || "Untitled", body: view.state.doc.toString() } : null,
       save,
+      discardChanges: () => {
+        clearTimeout(saveTimer);
+        dirty = false;
+        lastFailedSavePageTitle = null;
+      },
       failedSavePageTitle: () => lastFailedSavePageTitle,
       load: switchTo,
       setEditingBlocked,

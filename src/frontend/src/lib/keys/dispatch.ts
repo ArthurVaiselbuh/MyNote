@@ -16,6 +16,8 @@ export function handleGlobal(e: KeyboardEvent) {
     || (import.meta.env.PROD && WEBVIEW_DEVTOOLS_CHORDS.has(chord))))) e.preventDefault();
   if (e.key === "Escape" && !app.capturingChord) clearRenderedSelection();
 
+  if (app.externalChanges) return;
+
   if (app.interactionBlocked) {
     e.preventDefault();
     e.stopPropagation();

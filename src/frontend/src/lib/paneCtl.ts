@@ -17,6 +17,7 @@ export interface PaneCtl {
 export interface EditorCtl extends PaneCtl {
   printContent(): { title: string; body: string } | null;
   save(): Promise<boolean>;
+  discardChanges(): void;
   failedSavePageTitle(): string | null;
   load(pageId: string | null, force?: boolean): Promise<boolean>;
   setEditingBlocked(blocked: boolean): void;

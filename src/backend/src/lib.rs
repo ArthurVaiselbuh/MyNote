@@ -1,6 +1,7 @@
 mod assets;
 mod commands;
 mod files;
+mod file_watcher;
 mod git;
 mod history;
 mod hotkey;
@@ -63,12 +64,16 @@ pub fn run() {
             git_gate: Mutex::new(()),
             git_stop: Mutex::new(None),
             history_gate: Mutex::new(()),
+            file_watcher: Mutex::new(None),
         })
         .register_uri_scheme_protocol(ASSET_SCHEME, |ctx, request| {
             serve_asset(ctx.app_handle(), &request)
         })
         .invoke_handler(tauri::generate_handler![
             commands::open_notebook,
+            file_watcher::commands::check_external_changes,
+            file_watcher::commands::resolve_external_changes,
+            file_watcher::commands::read_open_page,
             commands::create_notebook,
             commands::list_recent_notebooks,
             commands::get_tree,
@@ -136,6 +141,8 @@ pub fn run() {
                 builder = builder.additional_browser_args(&args);
             }
             let win = builder.build()?;
+            let watcher = file_watcher::FileWatcher::new(app.handle().clone())?;
+            *app.state::<AppState>().file_watcher.lock().map_err(commands::lock_err)? = Some(watcher);
 
             let (geom, tray_enabled, start_on_login) = {
                 let state = app.state::<AppState>();

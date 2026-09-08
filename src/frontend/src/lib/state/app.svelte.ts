@@ -128,6 +128,7 @@ export const app = $state({
   findPrefill: null as FindPrefill | null,
   pendingPage: null as PendingPage | null,
   interactionBlocked: false,
+  externalChanges: null as [boolean, string | null] | null,
   settings: { ...defaultSettings },
   status: "",
   statusIsError: false,

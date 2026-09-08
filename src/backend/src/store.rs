@@ -1,3 +1,5 @@
+mod external_changes;
+
 use serde::{Deserialize, Serialize};
 use std::cell::RefCell;
 use std::collections::{BTreeMap, HashSet};
@@ -345,6 +347,7 @@ pub struct Store {
     last_commit_ms: AtomicU64,
     last_saved_json: RefCell<String>,
     last_saved_user_json: RefCell<String>,
+    external_files: external_changes::ExternalFiles,
 }
 
 impl Store {
@@ -388,6 +391,7 @@ impl Store {
             last_commit_ms: AtomicU64::new(now_ms()),
             last_saved_json: RefCell::new(String::new()),
             last_saved_user_json: RefCell::new(String::new()),
+            external_files: external_changes::ExternalFiles::default(),
         };
         if store.notebook.sections.is_empty() {
             store.notebook.sections.push(Section {
@@ -427,6 +431,7 @@ impl Store {
             )?;
         }
         atomic_write(&path, json.as_bytes())?;
+        self.remember_notebook_write(json.as_bytes());
         *self.last_saved_json.borrow_mut() = json;
         self.touch();
         Ok(())
@@ -608,6 +613,7 @@ impl Store {
     pub fn write_page(&mut self, id: &str, content: &str) -> Result<String, String> {
         let existing_title = &self.find_page(id).ok_or("page not found")?.title;
         atomic_write(&self.page_path(id), content.as_bytes())?;
+        self.remember_page_write(id, content);
         let title = extract_title(content).unwrap_or_else(|| existing_title.clone());
         if title == *existing_title {
             self.touch();
@@ -623,7 +629,9 @@ impl Store {
     pub fn rename_page(&mut self, id: &str, title: &str) -> Result<(), String> {
         let title = non_empty(title, "Untitled");
         let content = self.read_page(id)?;
-        atomic_write(&self.page_path(id), set_title(&content, &title).as_bytes())?;
+        let content = set_title(&content, &title);
+        atomic_write(&self.page_path(id), content.as_bytes())?;
+        self.remember_page_write(id, &content);
         let node = self.find_page_mut(id).ok_or("page not found")?;
         node.title = title;
         self.save()
@@ -1100,6 +1108,10 @@ impl Store {
     }
 
     pub fn close(self) -> CloseInfo {
+        if self.ensure_no_external_changes().is_err() {
+            let _ = self.save_view_state();
+            return CloseInfo { root: self.root.clone(), git_enabled: self.notebook.git.enabled };
+        }
         self.purge_pages_deleted_this_session();
         self.trash_pages_not_in_tree();
         let _ = crate::assets::prune(&self);
@@ -1625,6 +1637,7 @@ pub(crate) fn set_title(content: &str, title: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
     use tempfile::tempdir;
 
     fn open_store() -> (tempfile::TempDir, Store) {

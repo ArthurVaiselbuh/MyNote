@@ -10,11 +10,13 @@ type E2eWindow = typeof window & {
   __mynoteE2eInterceptedCalls?: number;
   __mynoteE2eWriteCalls?: number;
   __mynoteE2eReadStarted?: boolean;
+  __mynoteE2eReleaseRead?: () => void;
 };
 
 function restorePageFetch(app: App) {
   return app.page.evaluate(() => {
     const testWindow = window as E2eWindow;
+    testWindow.__mynoteE2eReleaseRead?.();
     const descriptor = testWindow.__mynoteE2eOriginalFetch;
     if (descriptor) {
       Object.defineProperty(testWindow, "fetch", descriptor);
@@ -22,6 +24,7 @@ function restorePageFetch(app: App) {
       delete testWindow.fetch;
     }
     delete testWindow.__mynoteE2eOriginalFetch;
+    delete testWindow.__mynoteE2eReleaseRead;
   });
 }
 
@@ -29,7 +32,7 @@ type InvokeInterception =
   | { kind: "reject-write" }
   | { kind: "delay-write"; delay: number }
   | { kind: "reject-read"; pageId: string }
-  | { kind: "delay-read"; pageId: string; delay: number };
+  | { kind: "hold-read"; pageId: string };
 
 function interceptPageFetch(app: App, interception: InvokeInterception) {
   return app.page.evaluate((interception) => {
@@ -50,8 +53,8 @@ function interceptPageFetch(app: App, interception: InvokeInterception) {
         : "";
       const payload = typeof init?.body === "string" ? JSON.parse(init.body) as { id?: string } : {};
       const matchesPageRead =
-        (interception.kind === "reject-read" || interception.kind === "delay-read") &&
-        command === "read_page" &&
+        (interception.kind === "reject-read" || interception.kind === "hold-read") &&
+        (command === "read_page" || command === "read_open_page") &&
         payload.id === interception.pageId;
       const matches =
         ((interception.kind === "reject-write" || interception.kind === "delay-write") &&
@@ -73,8 +76,11 @@ function interceptPageFetch(app: App, interception: InvokeInterception) {
       }
       if (interception.kind === "delay-write") {
         testWindow.__mynoteE2eWriteCalls!++;
-      } else {
+      } else if (interception.kind === "hold-read") {
         testWindow.__mynoteE2eReadStarted = true;
+        return new Promise<void>((resolve) => {
+          testWindow.__mynoteE2eReleaseRead = resolve;
+        }).then(() => fetch(input, init));
       }
       return new Promise((resolve) => setTimeout(resolve, interception.delay)).then(() =>
         fetch(input, init),
@@ -96,8 +102,12 @@ function delayPageWrites(app: App, delay: number) {
   return interceptPageFetch(app, { kind: "delay-write", delay });
 }
 
-function delayFirstPageRead(app: App, pageId: string, delay: number) {
-  return interceptPageFetch(app, { kind: "delay-read", pageId, delay });
+function holdFirstPageRead(app: App, pageId: string) {
+  return interceptPageFetch(app, { kind: "hold-read", pageId });
+}
+
+function releasePageRead(app: App) {
+  return app.page.evaluate(() => (window as E2eWindow).__mynoteE2eReleaseRead?.());
 }
 
 test("a failed save keeps the open page and editor buffer in place", async ({ app }) => {
@@ -187,13 +197,14 @@ test("a delayed page read follows a successful save of the page being left", asy
   await app.row("First").click();
   await app.selectWholeBody();
   await app.page.keyboard.insertText("first edit before delayed read");
-  await delayFirstPageRead(app, second, 800);
+  await holdFirstPageRead(app, second);
   try {
     await app.row("Second").click();
     await app.page.waitForFunction(() => (window as E2eWindow).__mynoteE2eReadStarted === true);
     await expect.poll(() => app.page.evaluate(() => (window as E2eWindow).__mynoteE2eInterceptedCalls)).toBe(1);
     await app.editorBody.click();
     await app.page.keyboard.insertText(" and edit during delayed read");
+    await releasePageRead(app);
     await expect(app.selectedTitle).toHaveText("Second");
     await expect(app.editorBody).toContainText("second page body");
     await expect
