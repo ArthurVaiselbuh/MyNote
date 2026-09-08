@@ -284,6 +284,12 @@ input:focus {
   color: var(--muted);
   border: 1px solid var(--guide);
 }
+.copy-path-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 4px;
+}
 .dirty-dot {
   color: var(--accent);
   width: 12px;

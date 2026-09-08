@@ -1,4 +1,5 @@
 import { getCurrentWebview } from "@tauri-apps/api/webview";
+import { resolve } from "@tauri-apps/api/path";
 import { open as openDialog } from "@tauri-apps/plugin-dialog";
 import { openUrl } from "@tauri-apps/plugin-opener";
 import { api, type NotebookInfo, type Section, type UndoOutcome } from "./api";
@@ -933,6 +934,16 @@ export function scrollMain(dir: number) {
   // has no body to show
   const el = activePaneCtl()?.scroller() ?? document.getElementById("results-scroll");
   el?.scrollBy({ top: dir * el.clientHeight * 0.85 });
+}
+
+export async function copyPagePath() {
+  if (!app.root || !app.currentPageId) return;
+  try {
+    const pagePath = await resolve(app.root, `${app.currentPageId}.md`);
+    await copyText(pagePath);
+  } catch (e) {
+    app.status = String(e);
+  }
 }
 
 export async function copyText(text: string) {
