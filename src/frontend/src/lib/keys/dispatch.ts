@@ -2,12 +2,19 @@ import * as act from "../actions";
 import { contextMenu, contextMenuKeys } from "../contextMenu.svelte";
 import { app } from "../state/app.svelte";
 import { isCodeMirror, isTextEntry } from "../textEntry";
-import { chordOf, commandForChord, isTextChord, mouseChordOf } from "./bindings";
+import { clearRenderedSelection, selectPreviewContent } from "../textSelection";
+import { chordOf, commandForChord, isTextChord, mouseChordOf, SELECT_ALL_CHORD, WEBVIEW_DEFAULT_CHORDS, WEBVIEW_DEVTOOLS_CHORDS } from "./bindings";
 import { resultsKeys, runResultsCommand } from "./resultsKeys";
 import { runTreeCommand, treeKeys } from "./treeKeys";
 
 export function handleGlobal(e: KeyboardEvent) {
   const target = e.target as HTMLElement | null;
+  const typing = isTextEntry(target);
+  const chord = chordOf(e);
+  const selectingRenderedText = chord === SELECT_ALL_CHORD && !typing;
+  if (selectingRenderedText || (chord && (WEBVIEW_DEFAULT_CHORDS.has(chord)
+    || (import.meta.env.PROD && WEBVIEW_DEVTOOLS_CHORDS.has(chord))))) e.preventDefault();
+  if (e.key === "Escape" && !app.capturingChord) clearRenderedSelection();
 
   if (app.interactionBlocked) {
     e.preventDefault();
@@ -37,12 +44,10 @@ export function handleGlobal(e: KeyboardEvent) {
     return;
   }
 
-  const typing = isTextEntry(target);
 
   // A global or pane chord fires even while typing, but only if it can't be
   // text: a command rebound to a bare letter must not swallow that letter in
   // the editor.
-  const chord = chordOf(e);
   const bindable = chord && (!typing || !isTextChord(chord)) ? chord : null;
 
   // 3. global shortcuts fire regardless of focus
@@ -83,6 +88,10 @@ export function handleGlobal(e: KeyboardEvent) {
   if (typing) return;
 
   // 5. pane-local dispatch
+  if (selectingRenderedText && app.focus === "editor" && app.view === "page" && app.mode === "preview") {
+    selectPreviewContent();
+    return;
+  }
   if (app.focus === "tree") treeKeys(e);
   else if (app.focus === "results" || app.focus === "search") resultsKeys(e);
 }
@@ -139,6 +148,7 @@ function runGlobal(id: string, typing: boolean): boolean {
     case "page.forward": act.navigateViewedPages(1); return true;
     case "app.toggleMode": act.toggleMode(); return true;
     case "app.save": void act.saveNow(); return true;
+    case "page.print": void act.printCurrentPage(); return true;
     case "page.new": void act.newPage(); return true;
     case "section.new": act.newSection(); return true;
     case "app.insertHelper": act.openInsertHelper(); return true;

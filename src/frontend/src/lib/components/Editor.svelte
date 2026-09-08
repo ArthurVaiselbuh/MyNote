@@ -536,6 +536,8 @@
       state: EditorState.create({ doc: "", extensions }),
     });
     editorCtl.current = {
+      printContent: () => loadedId && loadedId === app.currentPageId && view
+        ? { title: title.trim() || "Untitled", body: view.state.doc.toString() } : null,
       save,
       failedSavePageTitle: () => lastFailedSavePageTitle,
       load: switchTo,

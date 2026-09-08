@@ -1,4 +1,5 @@
 import { getCurrentWebview } from "@tauri-apps/api/webview";
+import { printNote } from "./printing";
 import { resolve } from "@tauri-apps/api/path";
 import { open as openDialog } from "@tauri-apps/plugin-dialog";
 import { openUrl } from "@tauri-apps/plugin-opener";
@@ -81,6 +82,17 @@ async function applyNotebook(info: NotebookInfo) {
     clearSelection();
   }
   app.focus = "tree";
+}
+
+export async function printCurrentPage() {
+  if (app.view !== "page" || app.modal !== "none" || app.interactionBlocked) return;
+  const content = editorCtl.current?.printContent();
+  if (!content) return;
+  try {
+    await printNote(content);
+  } catch (error) {
+    flashStatusError(String(error));
+  }
 }
 
 export async function openNotebookModal() {

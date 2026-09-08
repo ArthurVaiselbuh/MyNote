@@ -35,6 +35,7 @@ export const COMMANDS: Command[] = [
   { id: "page.forward", ctx: "global", desc: "Next viewed page", defaults: ["MouseForward"] },
   { id: "app.toggleMode", ctx: "global", desc: "Edit / Preview", defaults: ["Mod+e"] },
   { id: "app.save", ctx: "global", desc: "Save", defaults: ["Mod+s"] },
+  { id: "page.print", ctx: "global", desc: "Print current page", defaults: ["Mod+p"] },
   { id: "app.undo", ctx: "global", desc: "Undo delete & move", defaults: ["Mod+z"] },
   { id: "app.redo", ctx: "global", desc: "Redo delete & move", defaults: ["Mod+y", "Mod+Shift+z"] },
   { id: "page.new", ctx: "global", desc: "New page", defaults: ["Mod+n"] },
@@ -168,6 +169,25 @@ export const FIXED_BINDINGS: FixedBinding[] = [
   { keys: "Esc", desc: "Back out one layer", ctx: "pane" },
   { keys: "Esc", desc: "Close history", ctx: "history" },
 ];
+
+export const WEBVIEW_RELOAD_CHORDS = new Set([
+  "Mod+r", "Mod+Shift+r", "F5", "Mod+F5", "Shift+F5", "Mod+Shift+F5",
+]);
+export const SELECT_ALL_CHORD = "Mod+a";
+
+export const WEBVIEW_DEFAULT_CHORDS = new Set([
+  ...WEBVIEW_RELOAD_CHORDS,
+  "Mod+p", "Mod+Shift+p", "Mod+s", "Mod+Shift+s",
+  "Mod+f", "Mod+g", "Mod+Shift+g", "F3", "Shift+F3",
+  "Mod+=", "Mod+Shift+=", "Mod+-", "Mod+Shift+-", "Mod+0",
+  "Alt+ArrowLeft", "Alt+ArrowRight",
+  ...(isMac ? ["Mod+[", "Mod+]"] : []),
+]);
+
+export const WEBVIEW_DEVTOOLS_CHORDS = new Set([
+  "F12", "Mod+Shift+i", "Mod+Shift+j", "Mod+Shift+c",
+  ...(isMac ? ["Mod+Alt+i", "Mod+Alt+j", "Mod+Alt+c"] : []),
+]);
 
 // ---------- chords ----------
 

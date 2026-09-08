@@ -15,6 +15,7 @@ export interface PaneCtl {
 }
 
 export interface EditorCtl extends PaneCtl {
+  printContent(): { title: string; body: string } | null;
   save(): Promise<boolean>;
   failedSavePageTitle(): string | null;
   load(pageId: string | null, force?: boolean): Promise<boolean>;

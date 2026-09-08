@@ -12,6 +12,56 @@ body {
 
 #app {
   height: 100%;
+  user-select: none;
+}
+
+.print-note {
+  display: none;
+}
+
+@media print {
+  @page { margin: 18mm; }
+  html, body {
+    height: auto;
+    overflow: visible;
+    background: white;
+    color: black;
+    color-scheme: light;
+  }
+  body > :not(.print-note) { display: none !important; }
+  body > .print-note {
+    display: block;
+    padding: 0;
+    overflow: visible;
+    font: 11pt/1.5 "Segoe UI", sans-serif;
+    color: black;
+    --text: black;
+    --heading: black;
+    --accent: #174d88;
+    --muted: #555;
+    --guide: #bbb;
+    --panel: #f3f3f3;
+  }
+  .print-note h1, .print-note h2, .print-note h3 { break-after: avoid; }
+  .print-note img { max-width: 100%; height: auto; break-inside: avoid; }
+  .print-note pre { white-space: pre-wrap; overflow-wrap: anywhere; }
+  .print-note pre, .print-note code, .print-note .hljs {
+    color: black;
+    background: #f3f3f3;
+  }
+  .print-note .hljs span { color: inherit; }
+  .print-note table { width: 100%; border-collapse: collapse; }
+  .print-note th, .print-note td { border: 1px solid #bbb; }
+}
+
+input,
+textarea,
+[contenteditable="true"],
+.cm-editor,
+.preview,
+.history-raw,
+.diff-cell {
+  user-select: text;
 }
 
 .app {
