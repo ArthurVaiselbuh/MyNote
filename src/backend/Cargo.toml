@@ -4,7 +4,7 @@ name = "MyNote"
 # Bump both with scripts/version_stamp.ps1.
 version = "1.4.9999"
 edition = "2021"
-rust-version = "1.77"
+rust-version = "1.85"
 
 [lib]
 name = "mynote_lib"
@@ -29,6 +29,7 @@ chrono = "0.4"
 percent-encoding = "2"
 tauri-plugin-opener = "2"
 tauri-plugin-global-shortcut = "2"
+notify = "8.2"
 
 [dev-dependencies]
 tempfile = "3"

@@ -189,6 +189,10 @@ export interface RestoreOutcome {
 }
 
 export const api = {
+  checkExternalChanges: () => invoke<[boolean, string | null]>("check_external_changes"),
+  resolveExternalChanges: (reload: boolean, content: string | null) =>
+    invoke<[Notebook, string | null]>("resolve_external_changes", { reload, content }),
+  readOpenPage: (id: string | null) => invoke<string>("read_open_page", { id }),
   openNotebook: (path?: string) =>
     invoke<NotebookInfo>("open_notebook", { path: path ?? null }),
   createNotebook: (path: string) =>

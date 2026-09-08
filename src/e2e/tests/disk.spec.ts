@@ -38,6 +38,7 @@ test("close retains an image owned by a deleted page when another page still lin
   await app.setBody(`![shared](assets/${owner}/shared.png)`);
 
   await app.row("Image owner").click();
+  await expect(app.selectedTitle).toHaveText("Image owner");
   await app.page.keyboard.press("Delete");
   await app.confirmDanger();
   await expect.poll(() => app.treeIds()).toHaveLength(1);

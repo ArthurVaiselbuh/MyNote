@@ -430,7 +430,7 @@ export async function setPageForView(
     if (request !== pageLoadSeq) return false;
   } else if (pageId) {
     try {
-      const content = await api.readPage(pageId);
+      const content = await api.readOpenPage(pageId);
       if (request !== pageLoadSeq) return false;
       app.pendingPage = { id: pageId, content };
     } catch (e) {

@@ -27,6 +27,8 @@
   import ColorsModal from "./lib/components/modals/ColorsModal.svelte";
   import KeybindingsModal from "./lib/components/modals/KeybindingsModal.svelte";
   import Welcome from "./lib/components/Welcome.svelte";
+  import ExternalChanges from "./lib/components/modals/ExternalChanges.svelte";
+  import { checkExternalChanges } from "./lib/externalChanges";
 
   const s = $derived(app.settings);
 
@@ -125,6 +127,8 @@
 
     subscribe(
       listen("mynote:flush-and-close", async () => {
+        await checkExternalChanges();
+        if (app.externalChanges) return;
         app.interactionBlocked = true;
         act.setEditorEditingBlocked(true);
         if (await act.flushEditor()) {
@@ -142,6 +146,8 @@
     subscribe(listen("mynote:flush", flushSave));
     subscribe(listen<string>("mynote:git-snapshot-failed", flashPayload));
     subscribe(listen<string>("mynote:hotkey-unavailable", flashPayload));
+    subscribe(listen("mynote:files-changed", checkExternalChanges));
+    subscribe(listen<string>("mynote:file-watch-failed", flashPayload));
 
     void act.boot();
 
@@ -180,6 +186,7 @@
   style:--focus-alpha={s.focusAlpha}
   style:--page-title-size={`${s.pageTitleSize}px`}
 >
+  <div style:display="contents" inert={app.externalChanges !== null}>
   <aside class="tree-pane" class:focused={app.focus === "tree"} style:width="{s.treeWidth}px">
     <SectionStrip />
     <Tree />
@@ -220,4 +227,6 @@
   {#if app.status}
     <div class="status-toast" class:error={app.statusIsError}>{app.status}</div>
   {/if}
+  </div>
+  {#if app.externalChanges}<ExternalChanges />{/if}
 </div>
