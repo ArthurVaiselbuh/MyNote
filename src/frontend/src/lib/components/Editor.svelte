@@ -381,6 +381,17 @@
     view.focus();
   }
 
+  function ctlInsertPageLink(pageId: string, pageTitle: string) {
+    if (!view) return;
+    enterEditMode();
+    const { from, to } = view.state.selection.main;
+    const label = (view.state.sliceDoc(from, to) || pageTitle)
+      .replace(/\s+/g, " ").replace(/[\\`*_[\]<>!]/g, "\\$&");
+    const text = `[${label}](mynote://${pageId})`;
+    view.dispatch({ changes: { from, to, insert: text }, selection: { anchor: from + text.length } });
+    view.focus();
+  }
+
   function ctlReplaceAll(content: string) {
     if (!view || !loadedId) return;
     enterEditMode();
@@ -537,6 +548,7 @@
       findPrev: ctlFindPrev,
       scroller: () => view?.scrollDOM ?? null,
       insert: ctlInsert,
+      insertPageLink: ctlInsertPageLink,
       replaceAll: ctlReplaceAll,
       setTitle: (t: string) => (title = t),
     };

@@ -6,7 +6,7 @@ import MarkdownIt from "markdown-it";
 import type { RenderRule } from "markdown-it/lib/renderer.mjs";
 import type StateInline from "markdown-it/lib/rules_inline/state_inline.mjs";
 import { MOD_LABEL } from "./keys/platform";
-import { attachmentFromHref, isExternalHref } from "./regex";
+import { attachmentFromHref, isExternalHref, pageIdFromHref } from "./regex";
 
 hljs.registerLanguage("powershell", powershell);
 hljs.registerLanguage("dos", dos);
@@ -58,7 +58,9 @@ function attachmentCategory(name: string): string {
 md.renderer.rules.link_open = (tokens, idx, opts, env, self) => {
   const href = tokens[idx].attrGet("href") ?? "";
   const attachment = attachmentFromHref(href);
-  if (isExternalHref(href)) {
+  if (pageIdFromHref(href)) {
+    tokens[idx].attrSet("title", "Click to open page");
+  } else if (isExternalHref(href)) {
     tokens[idx].attrSet("title", `${MOD_LABEL}+Click to open in browser`);
   } else if (attachment) {
     tokens[idx].attrSet("class", `attachment attachment-${attachmentCategory(attachment.name)}`);

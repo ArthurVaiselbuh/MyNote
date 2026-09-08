@@ -118,6 +118,31 @@ fn keyword_search(store: &Store, query: &str) -> (Vec<SearchHit>, Vec<String>) {
     (hits, terms.into_iter().map(|t| t.text).collect())
 }
 
+pub fn search_link_targets(store: &Store, query: &str) -> SearchResults {
+    let terms = parse_terms(query);
+    let phrase = whole_query_phrase(query);
+    let mut matcher = Matcher::new(Config::DEFAULT);
+    let mut ranked_hits = Vec::new();
+    for (section, page) in flatten_pages(&store.notebook) {
+        let title_content = format!("# {}", page.title);
+        let title_hit = page_hit(section, page, &title_content, &terms, &phrase, &mut matcher);
+        let title_rank = title_hit.as_ref().map(|hit| hit.rank);
+        let hit = if query.trim().is_empty() {
+            Some(make_hit(section, page, 0, &page.title, vec![], Rank::default()))
+        } else {
+            title_hit.or_else(|| page_hit(section, page, &page_content(store, page), &terms, &phrase, &mut matcher))
+        };
+        if let Some(hit) = hit {
+            ranked_hits.push((title_rank, hit));
+        }
+    }
+    ranked_hits.sort_by_key(|(title_rank, hit)| Reverse((*title_rank, hit.rank)));
+    SearchResults {
+        hits: ranked_hits.into_iter().map(|(_, hit)| hit).collect(),
+        terms: terms.into_iter().map(|term| term.text).collect(),
+    }
+}
+
 fn whole_query_phrase(query: &str) -> Vec<char> {
     let words: Vec<&str> = query
         .split(|c: char| c == '"' || c.is_whitespace())

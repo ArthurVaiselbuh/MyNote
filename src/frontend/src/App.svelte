@@ -19,6 +19,7 @@
   import Import from "./lib/components/modals/Import.svelte";
   import ColorPicker from "./lib/components/modals/ColorPicker.svelte";
   import InsertHelper from "./lib/components/modals/InsertHelper.svelte";
+  import PageLinkPicker from "./lib/components/modals/PageLinkPicker.svelte";
   import OpenNotebook from "./lib/components/modals/OpenNotebook.svelte";
   import SectionPicker from "./lib/components/modals/SectionPicker.svelte";
   import SettingsModal from "./lib/components/modals/SettingsModal.svelte";
@@ -190,6 +191,7 @@
   {#if app.modal === "confirm"}<ConfirmDialog />{/if}
   {#if app.modal === "insert"}<InsertHelper />{/if}
   {#if app.modal === "colorPicker"}<ColorPicker />{/if}
+  {#if app.modal === "pageLinkPicker"}<PageLinkPicker />{/if}
   {#if app.modal === "import"}<Import />{/if}
   {#if app.modal === "openNotebook"}<OpenNotebook />{/if}
   <!-- full-window: covers tree + main, but leaves the Editor mounted so restore can

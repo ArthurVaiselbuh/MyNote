@@ -222,6 +222,8 @@ export const api = {
     invoke<void>("set_view_positions", { entries }),
   searchPages: (query: string, mode: SearchMode) =>
     invoke<SearchResults>("search_pages", { query, mode }),
+  searchLinkTargets: (query: string) =>
+    invoke<SearchResults>("search_pages", { query, mode: "keyword", linkTargets: true }),
   saveImage: (pageId: string, data: string, ext: string) =>
     invoke<string>("save_image", { pageId, data, ext }),
   attachFile: (pageId: string, sourcePath: string) =>
