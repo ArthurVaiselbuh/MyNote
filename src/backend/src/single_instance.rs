@@ -1,17 +1,17 @@
+use crate::file_watcher::{watch_directory_and_scan, DirectoryWatcher};
 use crate::lock::{LockError, NotebookLock};
 use crate::{err, settings, tray};
 use std::fs;
 use std::path::{Path, PathBuf};
-use std::sync::{mpsc, Mutex};
-use std::time::Duration;
+use std::sync::Mutex;
 use tauri::{AppHandle, Manager};
 
 pub type InstanceState = Mutex<Option<InstanceOwner>>;
 
 pub struct InstanceOwner {
+    listener: Option<DirectoryWatcher>,
     _lock: NotebookLock,
     requests: PathBuf,
-    listener: Option<(mpsc::Sender<()>, std::thread::JoinHandle<()>)>,
 }
 
 impl InstanceOwner {
@@ -32,31 +32,13 @@ impl InstanceOwner {
             return Ok(());
         }
         let requests = self.requests.clone();
-        let (stop, receiver) = mpsc::channel();
-        let listener = std::thread::Builder::new()
-            .name("mynote-instance".into())
-            .spawn(move || {
-                while receiver.recv_timeout(Duration::from_millis(200))
-                    == Err(mpsc::RecvTimeoutError::Timeout)
-                {
-                    if take_reveal_requests(&requests) {
-                        let handle = app.clone();
-                        let _ = app.run_on_main_thread(move || tray::reveal_window(&handle));
-                    }
-                }
-            })
-            .map_err(err)?;
-        self.listener = Some((stop, listener));
+        self.listener = Some(watch_directory_and_scan(&self.requests, move || {
+            if take_reveal_requests(&requests) {
+                let handle = app.clone();
+                let _ = app.run_on_main_thread(move || tray::reveal_window(&handle));
+            }
+        })?);
         Ok(())
-    }
-}
-
-impl Drop for InstanceOwner {
-    fn drop(&mut self) {
-        if let Some((stop, listener)) = self.listener.take() {
-            let _ = stop.send(());
-            let _ = listener.join();
-        }
     }
 }
 
@@ -143,6 +125,37 @@ fn take_reveal_requests(requests: &Path) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::sync::mpsc;
+    use std::time::Duration;
+
+    #[test]
+    fn watcher_consumes_pending_and_new_reveal_requests() {
+        let root = tempfile::tempdir().unwrap();
+        let mut owner = InstanceOwner::acquire(root.path()).ok().unwrap();
+        request_reveal(root.path()).unwrap();
+        let requests = root.path().to_path_buf();
+        let (revealed_tx, revealed_rx) = mpsc::channel();
+        owner.listener = Some(
+            watch_directory_and_scan(root.path(), move || {
+                if take_reveal_requests(&requests) {
+                    revealed_tx.send(()).unwrap();
+                }
+            })
+            .unwrap(),
+        );
+        revealed_rx.recv_timeout(Duration::from_secs(5)).unwrap();
+        for _ in 0..3 {
+            request_reveal(root.path()).unwrap();
+            revealed_rx.recv_timeout(Duration::from_secs(5)).unwrap();
+        }
+        assert!(!take_reveal_requests(root.path()));
+        drop(owner);
+        assert_eq!(
+            revealed_rx.recv_timeout(Duration::from_secs(5)),
+            Err(mpsc::RecvTimeoutError::Disconnected),
+        );
+        assert!(InstanceOwner::acquire(root.path()).is_ok());
+    }
 
     #[test]
     fn ownership_is_exclusive_and_released_on_drop() {

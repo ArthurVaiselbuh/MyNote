@@ -194,7 +194,7 @@ test("a delayed page read follows a successful save of the page being left", asy
   const [, second] = await app.treeIds();
   await app.setBody("second page body");
 
-  await app.row("First").click();
+  await app.openPage("First");
   await app.selectWholeBody();
   await app.page.keyboard.insertText("first edit before delayed read");
   await holdFirstPageRead(app, second);
