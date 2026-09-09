@@ -35,7 +35,7 @@ test("? opens the context-aware, filterable help overlay", async ({ app }) => {
 
   await expect(app.modal.locator("input")).toBeFocused();
   await app.page.keyboard.type("undo");
-  await expect(app.page.locator(".help-row", { hasText: "Undo delete & move" })).toBeVisible();
+  await expect(app.page.locator(".help-row", { hasText: "Undo delete, move & reload" })).toBeVisible();
   await expect(app.page.locator(".help-row", { hasText: "Zoom" })).toHaveCount(0);
 
   await app.page.keyboard.press("Escape");

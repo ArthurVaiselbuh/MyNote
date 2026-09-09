@@ -579,7 +579,7 @@ export async function movePage(
   }
 }
 
-// ---------- undo / redo (tree ops) ----------
+// ---------- undo / redo ----------
 
 export async function undoLast() {
   await applyHistory(api.undo, "nothing to undo");
@@ -593,6 +593,10 @@ async function applyHistory(
   call: () => Promise<UndoOutcome | null>,
   emptyMessage: string,
 ) {
+  if (app.interactionBlocked || app.externalChanges) return;
+  const editor = editorCtl.current;
+  app.interactionBlocked = true;
+  editor?.setEditingBlocked(true);
   try {
     if (!(await saveEditor())) return;
     const outcome = await call();
@@ -605,15 +609,19 @@ async function applyHistory(
     if (notebook) {
       showSection(outcome.sectionId);
       if (app.currentPageId && !sectionOfPage(notebook, app.currentPageId)) {
-        clearSelection();
+        if (outcome.reloadPage) await setPageForView(null, { allowWhileBlocked: true });
+        else clearSelection();
       }
       if (outcome.pageId && sectionOfPage(notebook, outcome.pageId)) {
-        await setPageForView(outcome.pageId);
+        await setPageForView(outcome.pageId, { forceLoad: outcome.reloadPage, allowWhileBlocked: true });
       }
     }
     flashStatus(outcome.label);
   } catch (e) {
     app.status = String(e);
+  } finally {
+    app.interactionBlocked = false;
+    editor?.setEditingBlocked(app.externalChanges !== null);
   }
 }
 

@@ -129,6 +129,8 @@ export const app = $state({
   pendingPage: null as PendingPage | null,
   interactionBlocked: false,
   externalChanges: null as [boolean, string | null] | null,
+  externalReloading: false,
+  externalChangeError: "",
   settings: { ...defaultSettings },
   status: "",
   statusIsError: false,
