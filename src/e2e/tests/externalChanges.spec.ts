@@ -11,6 +11,8 @@ test("saved pages reload automatically and global undo and redo restore each ver
   await expect(app.titleInput).toHaveValue("External title");
   await expect(app.editorBody).toContainText("external body");
   await expect(dialog).toHaveCount(0);
+  await app.setBody("external body with later edits");
+  await expect.poll(() => app.readMd(id)).toContain("later edits");
   await app.page.keyboard.press("Control+1");
   await app.page.keyboard.press("Control+z");
   await expect(app.titleInput).toHaveValue("Local");
@@ -18,8 +20,16 @@ test("saved pages reload automatically and global undo and redo restore each ver
   await expect.poll(() => app.readMd(id)).toContain("saved body");
   await app.page.keyboard.press("Control+y");
   await expect(app.titleInput).toHaveValue("External title");
-  await expect(app.editorBody).toContainText("external body");
-  await expect.poll(() => app.readMd(id)).toContain("external body");
+  await expect(app.editorBody).toContainText("external body with later edits");
+  await expect.poll(() => app.readMd(id)).toContain("external body with later edits");
+  await app.page.keyboard.press("Control+z");
+  await expect(app.titleInput).toHaveValue("Local");
+  await app.setBody("local edits after undo");
+  await app.page.keyboard.press("Control+1");
+  await app.page.keyboard.press("Control+y");
+  await expect(app.editorBody).toContainText("external body with later edits");
+  await app.page.keyboard.press("Control+z");
+  await expect(app.editorBody).toContainText("local edits after undo");
   await expect(dialog).toHaveCount(0);
 });
 
@@ -81,11 +91,14 @@ test("notebook reload updates the tree and overwrite restores loaded metadata", 
   const dialog = app.page.getByRole("dialog", { name: "Files changed externally" });
   await expect(app.sectionName).toContainText("External section");
   await expect(dialog).toHaveCount(0);
+  await app.newTitledPage("Created after reload", 2);
   await app.page.keyboard.press("Control+1");
   await app.page.keyboard.press("Control+z");
   await expect(app.sectionName).toContainText(originalSection);
+  await expect(app.rowTitles).toHaveText(["Local"]);
   await app.page.keyboard.press("Control+y");
   await expect(app.sectionName).toContainText("External section");
+  await expect(app.rowTitles).toHaveText(["Local", "Created after reload"]);
   fs.writeFileSync(notebookPath, "invalid JSON");
   await expect(dialog).toBeVisible();
   await expect(dialog.getByRole("alert")).toContainText("Error loading notebook.json- ");

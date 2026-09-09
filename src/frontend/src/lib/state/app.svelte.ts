@@ -129,7 +129,7 @@ export const app = $state({
   pendingPage: null as PendingPage | null,
   interactionBlocked: false,
   externalChanges: null as [boolean, string | null] | null,
-  externalReloading: false,
+  externalResolution: "idle" as "idle" | "automatic" | "reload" | "overwrite",
   externalChangeError: "",
   settings: { ...defaultSettings },
   status: "",

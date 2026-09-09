@@ -1,5 +1,6 @@
 import { getCurrentWebview } from "@tauri-apps/api/webview";
 import { printNote } from "./printing";
+import { runNotebookUpdate } from "./notebookUpdate";
 import { resolve } from "@tauri-apps/api/path";
 import { open as openDialog } from "@tauri-apps/plugin-dialog";
 import { openUrl } from "@tauri-apps/plugin-opener";
@@ -165,8 +166,10 @@ export async function refreshTree() {
     if (app.sectionIdx >= notebook.sections.length) {
       app.sectionIdx = Math.max(0, notebook.sections.length - 1);
     }
+    return true;
   } catch (e) {
     app.status = String(e);
+    return false;
   }
 }
 
@@ -594,35 +597,36 @@ async function applyHistory(
   emptyMessage: string,
 ) {
   if (app.interactionBlocked || app.externalChanges) return;
-  const editor = editorCtl.current;
-  app.interactionBlocked = true;
-  editor?.setEditingBlocked(true);
-  try {
-    if (!(await saveEditor())) return;
-    const outcome = await call();
-    if (!outcome) {
-      flashStatus(emptyMessage);
-      return;
-    }
-    await refreshTree();
-    const notebook = app.notebook;
-    if (notebook) {
-      showSection(outcome.sectionId);
-      if (app.currentPageId && !sectionOfPage(notebook, app.currentPageId)) {
-        if (outcome.reloadPage) await setPageForView(null, { allowWhileBlocked: true });
-        else clearSelection();
+  await runNotebookUpdate(async () => {
+    try {
+      if (!(await saveEditor())) return;
+      const outcome = await call();
+      if (!outcome) {
+        flashStatus(emptyMessage);
+        return;
       }
-      if (outcome.pageId && sectionOfPage(notebook, outcome.pageId)) {
-        await setPageForView(outcome.pageId, { forceLoad: outcome.reloadPage, allowWhileBlocked: true });
+      if (!(await refreshTree())) throw new Error(app.status || "Could not refresh notebook");
+      const notebook = app.notebook;
+      if (notebook) {
+        showSection(outcome.sectionId);
+        if (app.currentPageId && !sectionOfPage(notebook, app.currentPageId)) {
+          if (outcome.reloadPage) {
+            if (!(await setPageForView(null, { allowWhileBlocked: true }))) {
+              throw new Error(app.status || "Could not clear page");
+            }
+          } else clearSelection();
+        }
+        if (outcome.pageId && sectionOfPage(notebook, outcome.pageId)) {
+          if (!(await setPageForView(outcome.pageId, { forceLoad: outcome.reloadPage, allowWhileBlocked: true }))) {
+            throw new Error(app.status || "Could not reload page");
+          }
+        }
       }
+      flashStatus(outcome.label);
+    } catch (e) {
+      app.status = String(e);
     }
-    flashStatus(outcome.label);
-  } catch (e) {
-    app.status = String(e);
-  } finally {
-    app.interactionBlocked = false;
-    editor?.setEditingBlocked(app.externalChanges !== null);
-  }
+  });
 }
 
 // ---------- tree navigation ----------

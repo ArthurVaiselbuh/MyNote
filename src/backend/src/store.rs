@@ -260,8 +260,7 @@ fn apply_collapsed(list: &mut [PageNode], collapsed: &HashSet<String>) {
 
 enum UndoOp {
     ReloadExternal {
-        before: Box<external_changes::ReloadState>,
-        after: Box<external_changes::ReloadState>,
+        target: Box<external_changes::ReloadState>,
     },
     DeletePage {
         node: PageNode,
@@ -857,8 +856,18 @@ impl Store {
             return Ok(None);
         };
         log::info!("undo: {}", op.kind());
+        if let UndoOp::ReloadExternal { target } = op {
+            let (inverse, outcome) = match self.exchange_reload_state(&target, "undid external reload") {
+                Ok(result) => result,
+                Err(error) => {
+                    self.undo_stack.push(UndoOp::ReloadExternal { target });
+                    return Err(error);
+                }
+            };
+            self.redo_stack.push(UndoOp::ReloadExternal { target: Box::new(inverse) });
+            return Ok(Some(outcome));
+        }
         let outcome = match &op {
-            UndoOp::ReloadExternal { before, .. } => self.apply_reload_state(before, "undid external reload")?,
             UndoOp::DeletePage {
                 node,
                 section_id,
@@ -913,6 +922,7 @@ impl Store {
                     page_id: Some(id.clone()),
                 }
             }
+            UndoOp::ReloadExternal { .. } => unreachable!(),
         };
         self.redo_stack.push(op);
         self.save()?;
@@ -924,12 +934,18 @@ impl Store {
             return Ok(None);
         };
         log::info!("redo: {}", op.kind());
+        if let UndoOp::ReloadExternal { target } = op {
+            let (inverse, outcome) = match self.exchange_reload_state(&target, "redid external reload") {
+                Ok(result) => result,
+                Err(error) => {
+                    self.redo_stack.push(UndoOp::ReloadExternal { target });
+                    return Err(error);
+                }
+            };
+            self.push_undo_keeping_redo(UndoOp::ReloadExternal { target: Box::new(inverse) });
+            return Ok(Some(outcome));
+        }
         let outcome = match op {
-            UndoOp::ReloadExternal { before, after } => {
-                let outcome = self.apply_reload_state(&after, "redid external reload")?;
-                self.push_undo_keeping_redo(UndoOp::ReloadExternal { before, after });
-                outcome
-            }
             UndoOp::DeletePage { node, .. } => {
                 let title = node.title.clone();
                 let section_id = self.section_of(&node.id);
@@ -980,6 +996,7 @@ impl Store {
                     page_id: Some(id),
                 }
             }
+            UndoOp::ReloadExternal { .. } => unreachable!(),
         };
         self.save()?;
         Ok(Some(outcome))

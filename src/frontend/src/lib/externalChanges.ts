@@ -1,8 +1,9 @@
-import { api } from "./api";
+import { api, type Notebook } from "./api";
 import { app } from "./state/app.svelte";
-import { editorCtl } from "./paneCtl";
+import { editorCtl, type EditorCtl } from "./paneCtl";
 import { sectionOfPage } from "./treeUtils";
-import { openPageById } from "./actions";
+import { setPageForView } from "./actions";
+import { runNotebookUpdate } from "./notebookUpdate";
 
 let checking = false;
 let retryQueued = false;
@@ -26,23 +27,18 @@ export async function checkExternalChanges() {
   const root = app.root;
   try {
     const changes = await api.checkExternalChanges();
-    if (root !== app.root || app.interactionBlocked) return;
+    if (root !== app.root) return;
+    if (app.interactionBlocked) {
+      retryWhenInteractionFinishes();
+      return;
+    }
     if (changes[0] || changes[1]) {
       const editor = editorCtl.current;
       const autoReload = !editor?.hasUnsavedChanges();
       app.externalChanges = changes;
       app.externalChangeError = "";
       editor?.setEditingBlocked(true);
-      if (autoReload) {
-        app.externalReloading = true;
-        try {
-          await resolveExternalChanges(true);
-        } catch (error) {
-          app.externalChangeError = String(error);
-        } finally {
-          app.externalReloading = false;
-        }
-      }
+      if (autoReload) await resolveExternalChanges(true, true);
     }
   } catch (error) {
     app.status = String(error);
@@ -51,36 +47,48 @@ export async function checkExternalChanges() {
   }
 }
 
-export async function resolveExternalChanges(reload: boolean) {
+export async function resolveExternalChanges(reload: boolean, automatic = false) {
   const changes = app.externalChanges;
-  if (!changes) return;
-  const editor = editorCtl.current;
-  const loaded = editor?.printContent();
-  const content = loaded ? `# ${loaded.title}\n\n${loaded.body}` : null;
-  const [notebook, changedPage] = await api.resolveExternalChanges(reload, content);
+  if (!changes || app.externalResolution !== "idle") return;
+  await runNotebookUpdate(async (editor) => {
+    app.externalResolution = automatic ? "automatic" : reload ? "reload" : "overwrite";
+    app.externalChangeError = "";
+    try {
+      const loaded = editor?.printContent();
+      const content = loaded ? `# ${loaded.title}\n\n${loaded.body}` : null;
+      const [notebook, changedPage] = await api.resolveExternalChanges(reload, content);
+      await refreshExternalChanges(notebook, reload && !!(changedPage || changes[1]), editor);
+      app.externalChanges = null;
+      app.status = "";
+      if (!reload && editor && !(await editor.save())) {
+        app.externalChanges = changes;
+        throw new Error(app.status || "Could not save page");
+      }
+    } catch (error) {
+      app.externalChangeError = String(error);
+    } finally {
+      app.externalResolution = "idle";
+    }
+  });
+}
+
+async function refreshExternalChanges(notebook: Notebook, reloadPage: boolean, editor: EditorCtl | null) {
   app.notebook = notebook;
   const id = app.currentPageId;
-  const removed = id && !sectionOfPage(notebook, id);
-  if ((reload && changedPage) || removed) editor?.discardChanges();
-  if (removed) {
-    await editor?.load(null);
+  const section = id ? sectionOfPage(notebook, id) : null;
+  const removed = id !== null && !section;
+  if (reloadPage || removed) editor?.discardChanges();
+  if (removed || (reloadPage && id)) {
+    const nextPage = removed ? null : id;
     app.pendingPage = null;
-    app.currentPageId = null;
-    app.selectedId = null;
-  } else if (reload && changedPage && id) {
-    app.pendingPage = null;
-    if (editor) {
-      if (!(await editor.load(id, true))) throw new Error(app.status || "Could not reload page");
-    } else {
-      await openPageById(id);
-    }
+    let loaded = true;
+    if (editor) loaded = await editor.load(nextPage, true);
+    else if (nextPage) loaded = await setPageForView(nextPage, { allowWhileBlocked: true, forceLoad: true });
+    if (!loaded) throw new Error(app.status || "Could not reload page");
+    app.currentPageId = nextPage;
+    app.selectedId = nextPage;
   }
-  app.sectionIdx = id && !removed
-    ? Math.max(0, notebook.sections.findIndex((section) => section.id === sectionOfPage(notebook, id)?.id))
+  app.sectionIdx = section
+    ? notebook.sections.indexOf(section)
     : Math.min(app.sectionIdx, Math.max(0, notebook.sections.length - 1));
-  app.externalChanges = null;
-  app.externalChangeError = "";
-  editor?.setEditingBlocked(false);
-  app.status = "";
-  if (!reload) await editor?.save();
 }
