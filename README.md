@@ -37,7 +37,7 @@ Your notebook is just a folder of plain `.md` files — greppable, diffable, AI-
 - **Keyboard-first** — every action has a shortcut
 - **Fuzzy + regex search** across every section (`Ctrl+K`), with highlighted snippets
 - **Quick insert** (`Ctrl+J`) — searchable markdown helper to help insert code blocks, tables, links, task lists, dates…
-- **Undo/Redo** (`Ctrl+Z/Y`) for edits,  page delete and moves — deleted files stay on disk until you close, so nothing is lost mid-session
+- **Undo/Redo** (`Ctrl+Z/Y`) for edits, page deletes, moves, and external reloads — deleted files stay on disk until you close, so nothing is lost mid-session
 - **Optional version history** (`Ctrl+H`, `Ctrl+Shift+H`) — turn it on and MyNote snapshots the notebook with your installed `git`, so old revisions and deleted pages stay recoverable. Never required: without git the feature simply isn't there
 - **Paste images** straight from the clipboard
 - **Import OneNote `.mht` exports** (`Ctrl+I`)

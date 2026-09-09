@@ -541,6 +541,7 @@
       printContent: () => loadedId && loadedId === app.currentPageId && view
         ? { title: title.trim() || "Untitled", body: view.state.doc.toString() } : null,
       save,
+      hasUnsavedChanges: () => dirty || saveInFlight !== null,
       discardChanges: () => {
         clearTimeout(saveTimer);
         dirty = false;

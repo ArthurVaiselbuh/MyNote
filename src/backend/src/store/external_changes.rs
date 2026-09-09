@@ -1,4 +1,7 @@
-use super::{extract_title, flatten_pages, Notebook, Store, StoredNotebook, NOTEBOOK_FILE};
+use super::{
+    extract_title, flatten_pages, Notebook, Store, StoredNotebook, UndoOp, UndoOutcome,
+    NOTEBOOK_FILE,
+};
 use crate::err;
 use std::cell::RefCell;
 use std::fs;
@@ -8,6 +11,12 @@ use std::path::PathBuf;
 pub(super) struct ExternalFiles {
     notebook_disk: RefCell<Option<Vec<u8>>>,
     watched_page: RefCell<Option<(String, Vec<u8>)>>,
+}
+
+pub(super) struct ReloadState {
+    notebook: Option<Notebook>,
+    page: Option<(String, String)>,
+    selected_page: Option<String>,
 }
 
 impl Store {
@@ -87,13 +96,48 @@ impl Store {
         } else {
             None
         };
+        let selected_page = self
+            .external_files
+            .watched_page
+            .borrow()
+            .as_ref()
+            .map(|(id, _)| id.clone());
+        let before = if reload && (notebook_changed || page_changed.is_some()) {
+            let page = if page_changed.is_some() || page_removed {
+                self.external_files
+                    .watched_page
+                    .borrow()
+                    .as_ref()
+                    .map(|(id, bytes)| {
+                        Ok::<_, String>((
+                            id.clone(),
+                            match &content {
+                                Some(content) => content.clone(),
+                                None => String::from_utf8(bytes.clone()).map_err(err)?,
+                            },
+                        ))
+                    })
+                    .transpose()?
+            } else {
+                None
+            };
+            Some(ReloadState {
+                notebook: notebook_changed.then(|| self.notebook.clone()),
+                page,
+                selected_page: selected_page.clone(),
+            })
+        } else {
+            None
+        };
+        let reloaded_page = page_changed
+            .as_ref()
+            .zip(incoming_page.as_ref())
+            .map(|(id, text)| (id.clone(), text.clone()));
         if let Some((notebook, bytes)) = incoming_notebook {
             self.notebook = notebook;
             *self.external_files.notebook_disk.borrow_mut() = Some(bytes);
             *self.last_saved_json.borrow_mut() =
                 serde_json::to_string_pretty(&StoredNotebook::from(&self.notebook)).map_err(err)?;
-            self.undo_stack.clear();
-            self.redo_stack.clear();
             self.session_deleted.clear();
         } else if notebook_changed {
             self.last_saved_json.borrow_mut().clear();
@@ -124,7 +168,53 @@ impl Store {
                 self.write_page(id, &text)?;
             }
         }
+        if let Some(before) = before {
+            let after = ReloadState {
+                notebook: notebook_changed.then(|| self.notebook.clone()),
+                page: reloaded_page,
+                selected_page,
+            };
+            self.record_undo(UndoOp::ReloadExternal {
+                before: Box::new(before),
+                after: Box::new(after),
+            });
+        }
         Ok(page_changed)
+    }
+
+    pub(super) fn apply_reload_state(
+        &mut self,
+        state: &ReloadState,
+        label: &str,
+    ) -> Result<UndoOutcome, String> {
+        if let Some(notebook) = &state.notebook {
+            let last_view = self.notebook.last_view.clone();
+            self.notebook = notebook.clone();
+            self.notebook.last_view = last_view;
+        }
+        if let Some((id, content)) = &state.page {
+            self.write_page(id, content)?;
+        }
+        let page_id = state
+            .selected_page
+            .as_ref()
+            .filter(|id| self.find_page(id).is_some())
+            .cloned();
+        if self
+            .external_files
+            .watched_page
+            .borrow()
+            .as_ref()
+            .is_some_and(|(id, _)| self.find_page(id).is_none())
+        {
+            self.stop_watching_page();
+        }
+        Ok(UndoOutcome {
+            label: label.into(),
+            reload_page: true,
+            section_id: page_id.as_ref().and_then(|id| self.section_of(id)),
+            page_id,
+        })
     }
 
     pub(super) fn remember_notebook_write(&self, bytes: &[u8]) {
@@ -149,6 +239,92 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let store = Store::open(dir.path()).unwrap();
         (dir, store)
+    }
+
+    #[test]
+    fn external_page_reload_undo_redo_restores_content_and_title() {
+        let (_dir, mut store) = open_store();
+        let section = store.notebook.sections[0].id.clone();
+        let page = store.create_page(&section, None, None).unwrap();
+        store.write_page(&page.id, "# Local\n\nOriginal").unwrap();
+        store.read_open_page(&page.id).unwrap();
+        fs::write(store.page_path(&page.id), "# External\n\nChanged").unwrap();
+        store.resolve_external_changes(true, None).unwrap();
+        let outcome = store.undo().unwrap().unwrap();
+        assert!(outcome.reload_page);
+        assert_eq!(outcome.page_id, Some(page.id.clone()));
+        assert_eq!(store.read_page(&page.id).unwrap(), "# Local\n\nOriginal");
+        assert_eq!(store.find_page(&page.id).unwrap().title, "Local");
+        assert_eq!(store.external_changes(), (false, None));
+        store.redo().unwrap().unwrap();
+        assert_eq!(store.read_page(&page.id).unwrap(), "# External\n\nChanged");
+        assert_eq!(store.find_page(&page.id).unwrap().title, "External");
+        assert_eq!(store.external_changes(), (false, None));
+    }
+
+    #[test]
+    fn notebook_reload_preserves_existing_undo_history() {
+        let (_dir, mut store) = open_store();
+        let original = store.notebook.sections[0].name.clone();
+        let section = store.notebook.sections[0].id.clone();
+        let page = store.create_page(&section, None, None).unwrap();
+        store.delete_page(&page.id).unwrap();
+        let mut notebook = store.notebook.clone();
+        notebook.sections[0].name = "External section".into();
+        fs::write(
+            store.root.join(NOTEBOOK_FILE),
+            serde_json::to_vec(&notebook).unwrap(),
+        )
+        .unwrap();
+        store.resolve_external_changes(true, None).unwrap();
+        store.undo().unwrap().unwrap();
+        assert_eq!(store.notebook.sections[0].name, original);
+        assert!(store.find_page(&page.id).is_none());
+        store.undo().unwrap().unwrap();
+        assert!(store.find_page(&page.id).is_some());
+        store.redo().unwrap().unwrap();
+        store.redo().unwrap().unwrap();
+        assert_eq!(store.notebook.sections[0].name, "External section");
+        assert!(store.find_page(&page.id).is_none());
+        assert_eq!(store.external_changes(), (false, None));
+    }
+
+    #[test]
+    fn undo_reload_recovers_an_externally_removed_open_page() {
+        let (_dir, mut store) = open_store();
+        let section = store.notebook.sections[0].id.clone();
+        let page = store.create_page(&section, None, None).unwrap();
+        store.write_page(&page.id, "# Local\n\nSaved").unwrap();
+        store.read_open_page(&page.id).unwrap();
+        let mut notebook = store.notebook.clone();
+        notebook.sections[0].pages.clear();
+        fs::write(
+            store.root.join(NOTEBOOK_FILE),
+            serde_json::to_vec(&notebook).unwrap(),
+        )
+        .unwrap();
+        fs::remove_file(store.page_path(&page.id)).unwrap();
+        store.resolve_external_changes(true, None).unwrap();
+        store.undo().unwrap().unwrap();
+        assert!(store.find_page(&page.id).is_some());
+        assert_eq!(store.read_open_page(&page.id).unwrap(), "# Local\n\nSaved");
+        store.redo().unwrap().unwrap();
+        assert!(store.find_page(&page.id).is_none());
+        assert_eq!(store.external_changes(), (false, None));
+    }
+
+    #[test]
+    fn undo_manual_reload_restores_unsaved_buffer() {
+        let (_dir, mut store) = open_store();
+        let section = store.notebook.sections[0].id.clone();
+        let page = store.create_page(&section, None, None).unwrap();
+        store.read_open_page(&page.id).unwrap();
+        fs::write(store.page_path(&page.id), "# External").unwrap();
+        store
+            .resolve_external_changes(true, Some("# Local\n\nUnsaved".into()))
+            .unwrap();
+        store.undo().unwrap().unwrap();
+        assert_eq!(store.read_page(&page.id).unwrap(), "# Local\n\nUnsaved");
     }
 
     #[test]

@@ -259,6 +259,10 @@ fn apply_collapsed(list: &mut [PageNode], collapsed: &HashSet<String>) {
 }
 
 enum UndoOp {
+    ReloadExternal {
+        before: Box<external_changes::ReloadState>,
+        after: Box<external_changes::ReloadState>,
+    },
     DeletePage {
         node: PageNode,
         section_id: String,
@@ -284,6 +288,7 @@ enum UndoOp {
 impl UndoOp {
     fn kind(&self) -> &'static str {
         match self {
+            UndoOp::ReloadExternal { .. } => "reload external changes",
             UndoOp::DeletePage { .. } => "delete page",
             UndoOp::DeleteSection { .. } => "delete section",
             UndoOp::MovePage { .. } => "move page",
@@ -295,6 +300,7 @@ impl UndoOp {
 #[serde(rename_all = "camelCase")]
 pub struct UndoOutcome {
     pub label: String,
+    pub reload_page: bool,
     pub section_id: Option<String>,
     pub page_id: Option<String>,
 }
@@ -705,7 +711,7 @@ impl Store {
                     }
                 }
             }
-            UndoOp::MovePage { .. } => {}
+            UndoOp::MovePage { .. } | UndoOp::ReloadExternal { .. } => {}
         }
     }
 
@@ -852,6 +858,7 @@ impl Store {
         };
         log::info!("undo: {}", op.kind());
         let outcome = match &op {
+            UndoOp::ReloadExternal { before, .. } => self.apply_reload_state(before, "undid external reload")?,
             UndoOp::DeletePage {
                 node,
                 section_id,
@@ -860,6 +867,7 @@ impl Store {
             } => {
                 self.insert_page_at(node.clone(), section_id, parent_id.as_deref(), *index);
                 UndoOutcome {
+                    reload_page: false,
                     label: format!("restored \"{}\"", node.title),
                     section_id: self.section_of(&node.id),
                     page_id: Some(node.id.clone()),
@@ -883,6 +891,7 @@ impl Store {
                 let idx = (*index).min(self.notebook.sections.len());
                 self.notebook.sections.insert(idx, section.clone());
                 UndoOutcome {
+                    reload_page: false,
                     label: format!("restored section \"{}\"", section.name),
                     section_id: Some(section.id.clone()),
                     page_id: None,
@@ -898,6 +907,7 @@ impl Store {
                 self.apply_move(id, from_section, from_parent.as_deref(), *from_index)?;
                 let title = self.find_page(id).map(|n| n.title.clone()).unwrap_or_default();
                 UndoOutcome {
+                    reload_page: false,
                     label: format!("moved \"{title}\" back"),
                     section_id: Some(from_section.clone()),
                     page_id: Some(id.clone()),
@@ -915,12 +925,18 @@ impl Store {
         };
         log::info!("redo: {}", op.kind());
         let outcome = match op {
+            UndoOp::ReloadExternal { before, after } => {
+                let outcome = self.apply_reload_state(&after, "redid external reload")?;
+                self.push_undo_keeping_redo(UndoOp::ReloadExternal { before, after });
+                outcome
+            }
             UndoOp::DeletePage { node, .. } => {
                 let title = node.title.clone();
                 let section_id = self.section_of(&node.id);
                 let new_op = self.apply_delete_page(&node.id)?;
                 self.push_undo_keeping_redo(new_op);
                 UndoOutcome {
+                    reload_page: false,
                     label: format!("deleted \"{title}\""),
                     section_id,
                     page_id: None,
@@ -931,6 +947,7 @@ impl Store {
                 let new_op = self.apply_delete_section(&section.id)?;
                 self.push_undo_keeping_redo(new_op);
                 UndoOutcome {
+                    reload_page: false,
                     label: format!("deleted section \"{name}\""),
                     section_id: None,
                     page_id: None,
@@ -957,6 +974,7 @@ impl Store {
                 });
                 let title = self.find_page(&id).map(|n| n.title.clone()).unwrap_or_default();
                 UndoOutcome {
+                    reload_page: false,
                     label: format!("moved \"{title}\""),
                     section_id: Some(to_section),
                     page_id: Some(id),

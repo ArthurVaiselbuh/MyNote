@@ -30,6 +30,7 @@ export interface NotebookInfo {
 
 export interface UndoOutcome {
   label: string;
+  reloadPage: boolean;
   sectionId: string | null;
   pageId: string | null;
 }

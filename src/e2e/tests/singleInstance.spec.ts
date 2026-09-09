@@ -28,9 +28,13 @@ async function launchAgain() {
   }
 }
 
-async function closeAndReveal(page: Page) {
+async function closeToTray(page: Page) {
   await invoke(page, "plugin:window|close", { label: "main" });
   await expect.poll(() => invoke(page, "plugin:window|is_visible", { label: "main" })).toBe(false);
+}
+
+async function closeAndReveal(page: Page) {
+  await closeToTray(page);
   await launchAgain();
   await expect.poll(() => invoke(page, "plugin:window|is_visible", { label: "main" })).toBe(true);
   if (hasForegroundDesktop()) {
@@ -56,7 +60,7 @@ test("single instance applies immediately and can be disabled and re-enabled", a
   for (let attempt = 0; attempt < 2; attempt++) {
     await checkbox.check();
     await expect.poll(async () => (await invoke<{ singleInstance: boolean }>(app.page, "get_settings")).singleInstance).toBe(true);
-    await closeAndReveal(app.page);
+    await closeToTray(app.page);
     await expect(app.rowTitles).toHaveText(["Still here"]);
     await checkbox.uncheck();
     await expect.poll(async () => (await invoke<{ singleInstance: boolean }>(app.page, "get_settings")).singleInstance).toBe(false);
@@ -66,7 +70,7 @@ test("single instance applies immediately and can be disabled and re-enabled", a
 test("saved tray preference enables single instance on startup", async ({}, testInfo) => {
   await withScratchApp(testInfo, async (app) => {
     try {
-      await closeAndReveal(app.page);
+      await closeToTray(app.page);
       const settings = await invoke<{ singleInstance: boolean; minimizeToTray?: boolean }>(app.page, "get_settings");
       expect(settings.singleInstance).toBe(true);
       expect(settings.minimizeToTray).toBeUndefined();
@@ -75,4 +79,22 @@ test("saved tray preference enables single instance on startup", async ({}, test
       await invoke(app.page, "set_settings", { settings: { ...settings, singleInstance: false } });
     }
   }, { minimizeToTray: true });
+});
+
+test.describe("native single-instance activation", () => {
+  test.skip(!process.env.CI, "Revealing and focusing a native window runs only in CI.");
+
+  test("a second launch reveals the owner after startup and re-enabling", async ({}, testInfo) => {
+    await withScratchApp(testInfo, async (app) => {
+      const settings = await invoke<Record<string, unknown>>(app.page, "get_settings");
+      try {
+        await closeAndReveal(app.page);
+        await invoke(app.page, "set_settings", { settings: { ...settings, singleInstance: false } });
+        await invoke(app.page, "set_settings", { settings: { ...settings, singleInstance: true } });
+        await closeAndReveal(app.page);
+      } finally {
+        await invoke(app.page, "set_settings", { settings: { ...settings, singleInstance: false } });
+      }
+    }, { singleInstance: true });
+  });
 });

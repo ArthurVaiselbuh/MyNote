@@ -17,7 +17,7 @@ function retryWhenInteractionFinishes() {
 }
 
 export async function checkExternalChanges() {
-  if (!app.notebook) return;
+  if (!app.notebook || app.externalChanges) return;
   if (checking || app.interactionBlocked) {
     retryWhenInteractionFinishes();
     return;
@@ -28,8 +28,21 @@ export async function checkExternalChanges() {
     const changes = await api.checkExternalChanges();
     if (root !== app.root || app.interactionBlocked) return;
     if (changes[0] || changes[1]) {
+      const editor = editorCtl.current;
+      const autoReload = !editor?.hasUnsavedChanges();
       app.externalChanges = changes;
-      editorCtl.current?.setEditingBlocked(true);
+      app.externalChangeError = "";
+      editor?.setEditingBlocked(true);
+      if (autoReload) {
+        app.externalReloading = true;
+        try {
+          await resolveExternalChanges(true);
+        } catch (error) {
+          app.externalChangeError = String(error);
+        } finally {
+          app.externalReloading = false;
+        }
+      }
     }
   } catch (error) {
     app.status = String(error);
@@ -66,6 +79,7 @@ export async function resolveExternalChanges(reload: boolean) {
     ? Math.max(0, notebook.sections.findIndex((section) => section.id === sectionOfPage(notebook, id)?.id))
     : Math.min(app.sectionIdx, Math.max(0, notebook.sections.length - 1));
   app.externalChanges = null;
+  app.externalChangeError = "";
   editor?.setEditingBlocked(false);
   app.status = "";
   if (!reload) await editor?.save();
