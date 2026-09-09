@@ -3,25 +3,12 @@
   import { resolveExternalChanges } from "../../externalChanges";
   import { autofocus } from "../../autofocus";
 
-  let busy = $state(false);
   const files = $derived([
     app.externalChanges?.[0] ? "notebook.json" : null,
     app.externalChanges?.[1] ? `${app.externalChanges[1]}.md` : null,
   ].filter(Boolean).join(" and "));
   const subject = $derived(app.externalChanges?.[0]
     ? (app.externalChanges[1] ? "notebook and open page" : "notebook") : "open page");
-
-  async function resolve(reload: boolean) {
-    busy = true;
-    app.externalChangeError = "";
-    try {
-      await resolveExternalChanges(reload);
-    } catch (failure) {
-      app.externalChangeError = String(failure);
-    } finally {
-      busy = false;
-    }
-  }
 </script>
 
 <div class="modal-backdrop">
@@ -31,8 +18,8 @@
     <p>Reload files from disk or overwrite with current data?</p>
     {#if app.externalChangeError}<p role="alert">Error loading {files}- {app.externalChangeError}</p>{/if}
     <div class="modal-buttons">
-      <button disabled={busy} onclick={() => resolve(false)}>Overwrite</button>
-      <button disabled={busy} use:autofocus onclick={() => resolve(true)}>Reload</button>
+      <button disabled={app.externalResolution !== "idle"} onclick={() => resolveExternalChanges(false)}>Overwrite</button>
+      <button disabled={app.externalResolution !== "idle"} use:autofocus onclick={() => resolveExternalChanges(true)}>Reload</button>
     </div>
   </div>
 </div>

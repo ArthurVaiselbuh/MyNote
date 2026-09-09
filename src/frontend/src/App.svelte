@@ -228,5 +228,5 @@
     <div class="status-toast" class:error={app.statusIsError}>{app.status}</div>
   {/if}
   </div>
-  {#if app.externalChanges && !app.externalReloading}<ExternalChanges />{/if}
+  {#if app.externalChanges && app.externalResolution !== "automatic"}<ExternalChanges />{/if}
 </div>
