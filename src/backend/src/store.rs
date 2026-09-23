@@ -227,6 +227,8 @@ pub struct ViewPos {
 #[serde(rename_all = "camelCase")]
 struct UserState {
     #[serde(default)]
+    search_preferences: crate::search::SearchPreferences,
+    #[serde(default)]
     last_view: LastView,
     #[serde(default)]
     collapsed: Vec<String>,
@@ -237,6 +239,7 @@ struct UserState {
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
 struct StoredUserState<'a> {
+    search_preferences: &'a crate::search::SearchPreferences,
     last_view: &'a LastView,
     collapsed: &'a [String],
     view_positions: &'a BTreeMap<String, ViewPos>,
@@ -336,6 +339,7 @@ struct LiveResourceReferences {
 }
 
 pub struct Store {
+    search_preferences: crate::search::SearchPreferences,
     pub root: PathBuf,
     pub notebook: Notebook,
     undo_stack: Vec<UndoOp>,
@@ -364,7 +368,9 @@ impl Store {
         })?;
         let mut notebook = load_notebook(root).map_err(OpenError::Other)?;
         let mut view_positions = BTreeMap::new();
+        let mut search_preferences = crate::search::SearchPreferences::default();
         if let Some(user) = load_user_state(root) {
+            search_preferences = user.search_preferences;
             notebook.last_view = user.last_view;
             let collapsed: HashSet<String> = user.collapsed.into_iter().collect();
             for section in notebook.sections.iter_mut() {
@@ -382,6 +388,7 @@ impl Store {
                 .collect();
         }
         let mut store = Store {
+            search_preferences,
             root: root.to_path_buf(),
             notebook,
             undo_stack: vec![],
@@ -448,6 +455,7 @@ impl Store {
             collect_collapsed(&section.pages, &mut collapsed);
         }
         let json = serde_json::to_string_pretty(&StoredUserState {
+            search_preferences: &self.search_preferences,
             last_view: &self.notebook.last_view,
             collapsed: &collapsed,
             view_positions: &self.view_positions,
@@ -780,6 +788,19 @@ impl Store {
 
     pub fn view_positions(&self) -> &BTreeMap<String, ViewPos> {
         &self.view_positions
+    }
+
+    pub fn search_preferences(&self) -> &crate::search::SearchPreferences {
+        &self.search_preferences
+    }
+
+    pub fn set_search_preferences(&mut self, preferences: crate::search::SearchPreferences) -> Result<(), String> {
+        let previous = std::mem::replace(&mut self.search_preferences, preferences);
+        if let Err(error) = self.save_view_state() {
+            self.search_preferences = previous;
+            return Err(error);
+        }
+        Ok(())
     }
 
     pub fn set_view_positions(&mut self, entries: Vec<(String, ViewPos)>) -> Result<(), String> {
@@ -1789,6 +1810,48 @@ mod tests {
         let seq1 = store.change_seq();
         store.rename_page(&page.id, "Renamed").unwrap();
         assert!(store.change_seq() > seq1);
+    }
+
+    #[test]
+    fn search_preferences_persist_only_in_user_state() {
+        let (dir, mut store) = open_store();
+        let notebook_before = fs::read(dir.path().join(NOTEBOOK_FILE)).unwrap();
+        let seq = store.change_seq();
+        let preferences = crate::search::SearchPreferences {
+            excluded_section_ids: vec![section_id(&store)],
+            excluded_strategies: vec![crate::search::Strategy::Fuzzy],
+        };
+        store.set_search_preferences(preferences.clone()).unwrap();
+        store.set_last_view(None, None).unwrap();
+        assert_eq!(store.change_seq(), seq);
+        assert_eq!(fs::read(dir.path().join(NOTEBOOK_FILE)).unwrap(), notebook_before);
+        drop(store);
+        let store = Store::open(dir.path()).unwrap();
+        assert_eq!(store.search_preferences(), &preferences);
+        let other = tempdir().unwrap();
+        assert_eq!(Store::open(other.path()).unwrap().search_preferences(), &Default::default());
+    }
+
+    #[test]
+    fn older_user_state_defaults_to_no_search_exclusions() {
+        let (dir, store) = open_store();
+        drop(store);
+        fs::write(dir.path().join(USER_STATE_FILE), r#"{"collapsed": []}"#).unwrap();
+        let store = Store::open(dir.path()).unwrap();
+        assert_eq!(store.search_preferences(), &Default::default());
+    }
+
+    #[test]
+    fn failed_search_preferences_save_preserves_current_preferences() {
+        let (dir, mut store) = open_store();
+        fs::remove_file(dir.path().join(USER_STATE_FILE)).unwrap();
+        fs::create_dir(dir.path().join(USER_STATE_FILE)).unwrap();
+        let preferences = crate::search::SearchPreferences {
+            excluded_strategies: vec![crate::search::Strategy::Fuzzy],
+            ..Default::default()
+        };
+        assert!(store.set_search_preferences(preferences).is_err());
+        assert_eq!(store.search_preferences(), &Default::default());
     }
 
     #[test]

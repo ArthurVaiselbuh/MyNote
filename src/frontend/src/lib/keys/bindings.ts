@@ -128,6 +128,7 @@ export const COMMANDS: Command[] = [
   { id: "results.selectDown", ctx: "results", desc: "Select next result", defaults: ["ArrowDown"] },
   { id: "results.open", ctx: "results", desc: "Open result", defaults: ["Enter"] },
   { id: "results.refine", ctx: "results", desc: "Refine query", defaults: ["/"] },
+  { id: "results.advanced", ctx: "results", desc: "Advanced search", defaults: ["a"] },
   { id: "results.nextMatch", ctx: "results", desc: "Next match in the preview", defaults: ["n"], search: "peek" },
   { id: "results.prevMatch", ctx: "results", desc: "Previous match in the preview", defaults: ["p"], search: "peek" },
 

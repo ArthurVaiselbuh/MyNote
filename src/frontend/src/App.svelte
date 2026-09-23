@@ -12,6 +12,7 @@
   import ResultPeek from "./lib/components/ResultPeek.svelte";
   import Results from "./lib/components/Results.svelte";
   import SearchBar from "./lib/components/SearchBar.svelte";
+  import SearchExclusions from "./lib/components/modals/SearchExclusions.svelte";
   import SectionStrip from "./lib/components/SectionStrip.svelte";
   import Tree from "./lib/components/Tree.svelte";
   import ConfirmDialog from "./lib/components/modals/ConfirmDialog.svelte";
@@ -207,6 +208,7 @@
 
   {#if app.modal === "help"}<HelpOverlay />{/if}
   {#if app.modal === "settings"}<SettingsModal />{/if}
+  {#if app.modal === "searchSections" || app.modal === "searchStrategies"}<SearchExclusions />{/if}
   {#if app.modal === "colors"}<ColorsModal />{/if}
   {#if app.modal === "keybindings"}<KeybindingsModal />{/if}
   {#if app.modal === "sectionPicker"}<SectionPicker />{/if}

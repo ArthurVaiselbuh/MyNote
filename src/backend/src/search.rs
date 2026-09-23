@@ -2,7 +2,7 @@ use std::cmp::Reverse;
 
 use nucleo_matcher::pattern::{Atom, AtomKind, CaseMatching, Normalization};
 use nucleo_matcher::{Config, Matcher, Utf32Str};
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 
 use crate::store::{flatten_pages, PageNode, Section, Store};
 
@@ -33,13 +33,21 @@ pub struct SearchHit {
 }
 
 /// variant order is the ranking order: a stronger way of matching sorts higher
-#[derive(Default, Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
+#[derive(Serialize, Deserialize, Default, Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
+#[serde(rename_all = "camelCase")]
 pub enum Strategy {
     #[default]
     Fuzzy,
     Partial,
     Word,
     Phrase,
+}
+
+#[derive(Serialize, Deserialize, Clone, Debug, Default, PartialEq)]
+#[serde(rename_all = "camelCase", default)]
+pub struct SearchPreferences {
+    pub excluded_section_ids: Vec<String>,
+    pub excluded_strategies: Vec<Strategy>,
 }
 
 /// field order is the ranking order: matching more of the query's distinct
@@ -110,9 +118,14 @@ fn keyword_search(store: &Store, query: &str) -> (Vec<SearchHit>, Vec<String>) {
     let mut matcher = Matcher::new(Config::DEFAULT);
     let mut hits = Vec::new();
     for (section, page) in flatten_pages(&store.notebook) {
+        if store.search_preferences().excluded_section_ids.contains(&section.id) {
+            continue;
+        }
         let content = page_content(store, page);
         if let Some(hit) = page_hit(section, page, &content, &terms, &phrase, &mut matcher) {
-            hits.push(hit);
+            if !store.search_preferences().excluded_strategies.contains(&hit.rank.tier) {
+                hits.push(hit);
+            }
         }
     }
     (hits, terms.into_iter().map(|t| t.text).collect())
@@ -339,6 +352,9 @@ fn regex_search(store: &Store, query: &str) -> Result<Vec<SearchHit>, String> {
     let mut hits = Vec::new();
 
     for (section, page) in flatten_pages(&store.notebook) {
+        if store.search_preferences().excluded_section_ids.contains(&section.id) {
+            continue;
+        }
         let content = page_content(store, page);
         for (line_no, text) in searchable_lines(&content) {
             let ranges = regex_ranges(&re, text);
@@ -461,6 +477,79 @@ mod tests {
 
     fn hits(store: &Store, query: &str, mode: SearchMode) -> Vec<SearchHit> {
         search(store, query, mode).unwrap().hits
+    }
+
+    #[test]
+    fn section_exclusions_cover_nested_pages_and_regex_but_not_link_targets() {
+        let (_dir, mut store) = store_with(&["# Included\n\nneedle\n"]);
+        let section = store.create_section("Excluded").unwrap();
+        let parent = store.create_page(&section.id, None, None).unwrap();
+        store.write_page(&parent.id, "# Parent needle").unwrap();
+        let child = store.create_page(&section.id, Some(&parent.id), None).unwrap();
+        store.write_page(&child.id, "# Child\n\nneedle").unwrap();
+        store.set_search_preferences(SearchPreferences {
+            excluded_section_ids: vec![section.id],
+            ..Default::default()
+        }).unwrap();
+        for mode in [SearchMode::Keyword, SearchMode::Regex] {
+            let found = hits(&store, "needle", mode);
+            assert_eq!(found.len(), 1);
+            assert_eq!(found[0].title, "Included");
+        }
+        assert_eq!(search_link_targets(&store, "needle").hits.len(), 3);
+    }
+
+    #[test]
+    fn strategy_exclusions_filter_each_rank_without_changing_regex() {
+        let (_dir, mut store) = store_with(&[
+            "# Together\n\nmilk eggs",
+            "# Apart\n\nmilk and eggs",
+            "# Partial\n\nmilkshake eggs",
+            "# Approximate\n\nm i l k eggs",
+        ]);
+        let all = hits(&store, "milk eggs", SearchMode::Keyword);
+        assert_eq!(all.len(), 4);
+        for tier in [Strategy::Phrase, Strategy::Word, Strategy::Partial, Strategy::Fuzzy] {
+            assert_eq!(all.iter().filter(|hit| hit.rank.tier == tier).count(), 1);
+            store.set_search_preferences(SearchPreferences {
+                excluded_strategies: vec![tier],
+                ..Default::default()
+            }).unwrap();
+            let found = hits(&store, "milk eggs", SearchMode::Keyword);
+            assert_eq!(found.len(), 3);
+            assert!(found.iter().all(|hit| hit.rank.tier != tier));
+        }
+        store.set_search_preferences(SearchPreferences {
+            excluded_strategies: vec![Strategy::Phrase, Strategy::Word, Strategy::Partial, Strategy::Fuzzy],
+            ..Default::default()
+        }).unwrap();
+        assert!(hits(&store, "milk eggs", SearchMode::Keyword).is_empty());
+        assert_eq!(hits(&store, "eggs", SearchMode::Regex).len(), 4);
+        assert_eq!(search_link_targets(&store, "milk eggs").hits.len(), 4);
+    }
+
+    #[test]
+    fn exclusions_are_applied_before_the_result_limit() {
+        let (_dir, mut store) = store_with(&["# Included\n\nmilkshake"]);
+        let section = store.create_section("Excluded").unwrap();
+        for _ in 0..MAX_HITS {
+            let page = store.create_page(&section.id, None, None).unwrap();
+            store.write_page(&page.id, "# Page\n\nmilk").unwrap();
+        }
+        store.set_search_preferences(SearchPreferences {
+            excluded_strategies: vec![Strategy::Phrase],
+            ..Default::default()
+        }).unwrap();
+        assert_eq!(hits(&store, "milk", SearchMode::Keyword)[0].title, "Included");
+        store.set_search_preferences(SearchPreferences {
+            excluded_section_ids: vec![section.id],
+            ..Default::default()
+        }).unwrap();
+        for mode in [SearchMode::Keyword, SearchMode::Regex] {
+            let found = hits(&store, "milk", mode);
+            assert_eq!(found.len(), 1);
+            assert_eq!(found[0].title, "Included");
+        }
     }
 
     fn matched(hit: &SearchHit, idx: usize) -> String {

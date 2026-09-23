@@ -45,6 +45,7 @@ pub struct Settings {
     pub accent_color: String,
     pub heading_color: String,
     pub focus_alpha: f64,
+    pub search_exclusion_color: String,
     pub page_title_size: u32,
     pub scroll_speed: f64,
     pub tree_width: u32,
@@ -74,6 +75,7 @@ impl Default for Settings {
             accent_color: "#5aa0f2".into(),
             heading_color: "#d4d4d4".into(),
             focus_alpha: 0.5,
+            search_exclusion_color: "#e06c75".into(),
             page_title_size: 20,
             scroll_speed: 1.0,
             tree_width: 300,
@@ -167,6 +169,16 @@ impl Settings {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn search_exclusion_color_defaults_and_round_trips() {
+        let mut settings: Settings = serde_json::from_str("{}").unwrap();
+        assert_eq!(settings.search_exclusion_color, "#e06c75");
+        settings.search_exclusion_color = "#cc44aa".into();
+        let saved = serde_json::to_string(&settings).unwrap();
+        let loaded: Settings = serde_json::from_str(&saved).unwrap();
+        assert_eq!(loaded.search_exclusion_color, "#cc44aa");
+    }
 
     #[test]
     fn legacy_colors_remain_dark_and_theme_palettes_round_trip() {
