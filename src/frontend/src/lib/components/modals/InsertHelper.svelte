@@ -25,8 +25,8 @@
   const dateTime = `${date} ${pad(openedAt.getHours())}:${pad(openedAt.getMinutes())}`;
 
   const ITEMS: Item[] = [
-    { label: "Link to page…", before: "", after: "", hint: "Find a page", search: "internal notebook reference", action: () => act.openModal("pageLinkPicker") },
     { label: "Link", before: "[", after: "](url)", hint: "[text](url)" },
+    { label: "Link to page…", before: "", after: "", hint: "Find a page", search: "internal notebook reference", action: () => act.openModal("pageLinkPicker") },
     { label: "Bold", before: "**", after: "**", hint: "**text**" },
     { label: "Italic", before: "_", after: "_", hint: "_text_" },
     { label: "Strikethrough", before: "~~", after: "~~", hint: "~~text~~" },
