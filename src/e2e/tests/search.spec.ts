@@ -1,4 +1,96 @@
 import { expect, fillerBody, test } from "../app";
+import fs from "node:fs";
+import path from "node:path";
+
+test("search exclusions refresh results, survive restart, and stay visible when collapsed", async ({ app }, testInfo) => {
+  await app.newPageWithBody("Included", "milkshake", 1);
+  await app.newSection("Archive");
+  await app.newPageWithBody("Archived", "milk", 1);
+  await app.search("milk");
+  const hits = app.page.locator(".results .hit");
+  await expect(hits).toHaveCount(2);
+  const advanced = app.page.getByRole("button", { name: /^Advanced/ });
+  await advanced.click();
+  await app.page.getByRole("button", { name: "Excluded sections (0)" }).click();
+  const dialog = app.page.getByRole("dialog");
+  await expect(dialog.getByRole("textbox", { name: "Filter sections" })).toBeFocused();
+  await dialog.getByRole("checkbox", { name: "Archive", exact: true }).check();
+  await expect(hits).toHaveCount(1);
+  await expect(hits).toContainText("Included");
+  await app.page.keyboard.press("Escape");
+  await expect(app.page.getByRole("button", { name: "Excluded sections (1)" })).toBeFocused();
+  await app.page.keyboard.press("Tab");
+  await app.page.keyboard.press("Enter");
+  await expect(dialog).toContainText("Excluded search strategies");
+  await dialog.getByRole("checkbox", { name: /^Partial word/ }).check();
+  await expect(hits).toHaveCount(0);
+  await app.page.screenshot({ path: testInfo.outputPath("excluded-strategies.png") });
+  await dialog.getByRole("button", { name: "Done" }).click();
+  await expect(app.page.locator("#search-advanced input[type=color]")).toHaveCount(0);
+  await app.page.keyboard.press("Control+Comma");
+  await app.page.getByText("Colors & theme", { exact: true }).locator("..").getByRole("button").click();
+  await app.page.getByLabel("Search exclusion indicator").fill("#cc44aa");
+  await app.page.keyboard.press("Escape");
+  await app.page.keyboard.press("Escape");
+  await expect(advanced).toHaveCSS("border-top-color", "rgb(204, 68, 170)");
+  await app.page.screenshot({ path: testInfo.outputPath("advanced-search.png") });
+  await advanced.click();
+  await expect(app.page.locator("#search-advanced")).toHaveCount(0);
+  await expect(advanced).toHaveClass(/exclusions-active/);
+  const userState = () => JSON.parse(fs.readFileSync(path.join(app.notebookDir, "notebook.user.json"), "utf8"));
+  await expect.poll(() => userState().searchPreferences).toMatchObject({
+    excludedStrategies: ["partial"],
+  });
+  expect(userState().searchPreferences).not.toHaveProperty("indicatorColor");
+  expect(userState().searchPreferences.excludedSectionIds).toHaveLength(1);
+  expect(app.readNotebookJson()).not.toHaveProperty("searchPreferences");
+
+  await app.page.keyboard.press("Escape");
+  await app.page.keyboard.press("Control+PageUp");
+  await expect(app.sectionName).toContainText("Notes");
+  await app.relaunch();
+  await app.search("milk");
+  const reopenedAdvanced = app.page.getByRole("button", { name: "Advanced (2)", exact: true });
+  await expect(reopenedAdvanced).toHaveClass(/exclusions-active/);
+  await expect(reopenedAdvanced).toHaveCSS("border-top-color", "rgb(204, 68, 170)");
+  await expect(app.page.locator(".results .hit")).toHaveCount(0);
+  await app.page.locator(".search-bar .mode", { hasText: "regex" }).click();
+  await expect(app.page.locator(".results .hit")).toHaveCount(1);
+  await expect(app.page.locator(".results .hit")).toContainText("Included");
+  await reopenedAdvanced.click();
+  await app.page.getByRole("button", { name: "Clear exclusions", exact: true }).click();
+  await expect(app.page.locator(".results .hit")).toHaveCount(2);
+  await expect(app.page.getByRole("button", { name: "Advanced", exact: true })).not.toHaveClass(/exclusions-active/);
+});
+
+test("advanced search is keyboard accessible without changing the search Tab ring", async ({ app }, testInfo) => {
+  await app.newPageWithBody("Note", "milk", 1);
+  await app.search("milk");
+  await expect(app.page.locator(".results")).toHaveClass(/focused/);
+  await app.page.keyboard.press("a");
+  const sections = app.page.getByRole("button", { name: "Excluded sections (0)" });
+  await expect(sections).toBeFocused();
+  await app.page.keyboard.press("Enter");
+  const dialog = app.page.getByRole("dialog");
+  const filter = dialog.getByRole("textbox", { name: "Filter sections" });
+  await expect(filter).toBeFocused();
+  await app.page.keyboard.press("Shift+Tab");
+  await expect(dialog.getByRole("button", { name: "Done" })).toBeFocused();
+  await app.page.keyboard.press("Tab");
+  await expect(filter).toBeFocused();
+  await app.page.keyboard.press("Tab");
+  await app.page.keyboard.press("Space");
+  await expect(app.page.locator(".results .hit")).toHaveCount(0);
+  await expect(dialog.getByRole("checkbox", { name: "Notes", exact: true })).toBeFocused();
+  await app.page.screenshot({ path: testInfo.outputPath("excluded-sections-keyboard.png") });
+  await app.page.keyboard.press("Escape");
+  await expect(sections).toHaveCount(0);
+  await expect(app.page.getByRole("button", { name: "Excluded sections (1)" })).toBeFocused();
+  await app.page.keyboard.press("Control+k");
+  await expect(app.page.locator(".search-bar input")).toBeFocused();
+  await app.page.keyboard.press("Tab");
+  await expect(app.page.locator(".results")).toHaveClass(/focused/);
+});
 
 test("fuzzy and regex search open the right page", async ({ app }) => {
   await app.newPageWithBody("Grocery", "buy milk and eggs", 1);

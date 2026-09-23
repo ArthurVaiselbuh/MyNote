@@ -5,6 +5,7 @@ import type {
   RecentNotebook,
   SearchHit,
   SearchMode,
+  SearchPreferences,
   Settings,
 } from "../api";
 
@@ -23,6 +24,8 @@ export type ModalName =
   | "openNotebook"
   | "welcome"
   | "keybindings"
+  | "searchSections"
+  | "searchStrategies"
   | "history";
 
 export interface ConfirmRequest {
@@ -67,6 +70,7 @@ export const defaultSettings: Settings = {
   accentColor: "#5aa0f2",
   headingColor: "#d4d4d4",
   focusAlpha: 0.5,
+  searchExclusionColor: "#e06c75",
   pageTitleSize: 20,
   scrollSpeed: 1.0,
   treeWidth: 300,
@@ -119,6 +123,14 @@ export const app = $state({
   filterActive: false,
 
   searchQuery: "",
+  searchPreferences: {
+    excludedSectionIds: [],
+    excludedStrategies: [],
+  } as SearchPreferences,
+  searchPreferencesSaving: false,
+  searchPreferencesError: "",
+  searchAdvanced: false,
+  searchAdvancedFocusReq: 0,
   searchMode: "fuzzy" as SearchMode,
   searchError: "",
   searchTerms: [] as string[],

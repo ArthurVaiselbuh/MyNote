@@ -94,6 +94,7 @@ pub fn run() {
             commands::get_view_positions,
             commands::set_view_positions,
             commands::search_pages,
+            commands::set_search_preferences,
             commands::save_image,
             commands::attach_file,
             commands::attach_file_bytes,

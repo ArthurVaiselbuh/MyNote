@@ -13,7 +13,7 @@ use crate::history;
 use crate::hotkey;
 use crate::import::{ImportOutcome, ImportPreview};
 use crate::{import_md, import_mht};
-use crate::search::{self, SearchMode, SearchResults};
+use crate::search::{self, SearchMode, SearchPreferences, SearchResults};
 use crate::settings::{self, Settings};
 use crate::startup;
 use crate::store::{self, Notebook, OpenError, PageNode, Section, Store, UndoOutcome, ViewPos};
@@ -47,6 +47,7 @@ pub struct AppState {
 pub struct NotebookInfo {
     pub root: String,
     pub notebook: Notebook,
+    pub search_preferences: SearchPreferences,
 }
 
 pub(crate) fn lock_err<T>(_: T) -> String {
@@ -160,6 +161,7 @@ fn adopt_store(
     let info = NotebookInfo {
         root,
         notebook: store.notebook.clone(),
+        search_preferences: store.search_preferences().clone(),
     };
     *guard = Some(store);
     Ok(info)
@@ -222,6 +224,7 @@ pub async fn open_notebook(
             return Ok(NotebookInfo {
                 root: store.root.to_string_lossy().to_string(),
                 notebook: store.notebook.clone(),
+                search_preferences: store.search_preferences().clone(),
             });
         }
     }
@@ -441,6 +444,14 @@ pub fn set_last_view(
     page_id: Option<String>,
 ) -> Result<(), String> {
     with_store(&state, |s| s.set_last_view(section_id, page_id))
+}
+
+#[tauri::command]
+pub fn set_search_preferences(
+    state: State<'_, AppState>,
+    preferences: SearchPreferences,
+) -> Result<(), String> {
+    with_store(&state, |store| store.set_search_preferences(preferences))
 }
 
 #[tauri::command]

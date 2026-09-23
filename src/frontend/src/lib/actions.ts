@@ -4,7 +4,7 @@ import { runNotebookUpdate } from "./notebookUpdate";
 import { resolve } from "@tauri-apps/api/path";
 import { open as openDialog } from "@tauri-apps/plugin-dialog";
 import { openUrl } from "@tauri-apps/plugin-opener";
-import { api, type NotebookInfo, type Section, type UndoOutcome } from "./api";
+import { api, type NotebookInfo, type SearchPreferences, type Section, type UndoOutcome } from "./api";
 import { labelOf } from "./keys/bindings";
 import { wrapIndex } from "./listIndex";
 import { log } from "./log";
@@ -67,6 +67,13 @@ async function refreshGitStatus() {
 }
 
 async function applyNotebook(info: NotebookInfo) {
+  searchRequestSeq++;
+  app.searchPreferences = info.searchPreferences;
+  app.searchPreferencesError = "";
+  app.searchAdvanced = false;
+  app.results = [];
+  app.searchTerms = [];
+  app.searchError = "";
   app.notebook = info.notebook;
   app.root = info.root;
   app.settings.notebookPath = info.root;
@@ -766,7 +773,27 @@ export async function openSearch() {
   app.searchFocusReq++;
 }
 
+let searchRequestSeq = 0;
+
+export async function updateSearchPreferences(preferences: SearchPreferences) {
+  if (app.searchPreferencesSaving) return;
+  app.searchPreferencesSaving = true;
+  app.searchPreferencesError = "";
+  const root = app.root;
+  try {
+    await api.setSearchPreferences(preferences);
+    if (app.root !== root) return;
+    app.searchPreferences = preferences;
+    await runSearch();
+  } catch (error) {
+    if (app.root === root) app.searchPreferencesError = String(error);
+  } finally {
+    app.searchPreferencesSaving = false;
+  }
+}
+
 export async function runSearch() {
+  const request = ++searchRequestSeq;
   const query = app.searchQuery.trim();
   if (!query) {
     app.results = [];
@@ -776,11 +803,13 @@ export async function runSearch() {
   }
   try {
     const results = await api.searchPages(query, app.searchMode);
+    if (request !== searchRequestSeq) return;
     app.results = results.hits;
     app.searchTerms = results.terms;
     app.searchError = "";
     app.resultsSel = 0;
   } catch (e) {
+    if (request !== searchRequestSeq) return;
     app.results = [];
     app.searchTerms = [];
     app.searchError = String(e);
@@ -1045,6 +1074,10 @@ export function escapeModal() {
 }
 
 export function closeModal() {
+  if (app.modal === "searchSections" || app.modal === "searchStrategies") {
+    app.focus = "search";
+    app.searchAdvancedFocusReq++;
+  }
   app.modal = "none";
   app.helpContext = "app";
   app.confirm = null;

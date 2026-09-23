@@ -26,6 +26,7 @@ export interface Notebook {
 export interface NotebookInfo {
   root: string;
   notebook: Notebook;
+  searchPreferences: SearchPreferences;
 }
 
 export interface UndoOutcome {
@@ -42,6 +43,13 @@ export interface ViewPos {
 }
 
 export type SearchMode = "fuzzy" | "regex";
+
+export type SearchStrategy = "phrase" | "word" | "partial" | "fuzzy";
+
+export interface SearchPreferences {
+  excludedSectionIds: string[];
+  excludedStrategies: SearchStrategy[];
+}
 
 export interface SearchHit {
   pageId: string;
@@ -119,6 +127,7 @@ export interface Settings {
   accentColor: string;
   headingColor: string;
   focusAlpha: number;
+  searchExclusionColor: string;
   pageTitleSize: number;
   scrollSpeed: number;
   treeWidth: number;
@@ -227,6 +236,8 @@ export const api = {
     invoke<void>("set_view_positions", { entries }),
   searchPages: (query: string, mode: SearchMode) =>
     invoke<SearchResults>("search_pages", { query, mode }),
+  setSearchPreferences: (preferences: SearchPreferences) =>
+    invoke<void>("set_search_preferences", { preferences }),
   searchLinkTargets: (query: string) =>
     invoke<SearchResults>("search_pages", { query, mode: "keyword", linkTargets: true }),
   saveImage: (pageId: string, data: string, ext: string) =>

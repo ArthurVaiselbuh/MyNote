@@ -26,6 +26,11 @@ export function runResultsCommand(command: string | null): boolean {
       app.focus = "search";
       app.searchFocusReq++;
       break;
+    case "results.advanced":
+      app.searchAdvanced = true;
+      app.focus = "search";
+      app.searchAdvancedFocusReq++;
+      break;
     case "results.nextMatch":
       peekCtl.current?.findNext();
       break;

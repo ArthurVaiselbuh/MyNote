@@ -68,6 +68,8 @@ export function handleGlobal(e: KeyboardEvent) {
     return;
   }
 
+  if (target?.closest("[data-search-controls]")) return;
+
   if (e.key === "Tab" && !e.ctrlKey && !e.metaKey && !e.altKey) {
     // typing guard, except the search box which is part of the cycle ring
     const inSearchBox = !!target?.closest("[data-search-box]");

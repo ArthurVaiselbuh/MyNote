@@ -19,6 +19,7 @@
   function resetColors() {
     for (const row of COLOR_ROWS) app.settings[row.key] = themeDefaults[app.settings.themeMode][row.key];
     app.settings.focusAlpha = defaultSettings.focusAlpha;
+    app.settings.searchExclusionColor = defaultSettings.searchExclusionColor;
     app.settings.pageTitleSize = defaultSettings.pageTitleSize;
     persist();
   }
@@ -49,6 +50,10 @@
         <input id={row.id} type="color" bind:value={app.settings[row.key]} onchange={persist} />
       </div>
     {/each}
+    <div class="settings-row">
+      <label for="set-search-exclusion-color">Search exclusion indicator</label>
+      <input id="set-search-exclusion-color" type="color" bind:value={app.settings.searchExclusionColor} onchange={persist} />
+    </div>
     <div class="settings-row">
       <label for="set-alpha">Focus highlight ({app.settings.focusAlpha.toFixed(2)})</label>
       <input
