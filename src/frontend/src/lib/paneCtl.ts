@@ -25,6 +25,7 @@ export interface EditorCtl extends PaneCtl {
   /** The line the editor is showing at its top edge, for the preview to land on. */
   anchor(): ModeAnchor | null;
   insert(before: string, after?: string): void;
+  insertLink(): void;
   insertPageLink(pageId: string, title: string): void;
   setTitle(title: string): void;
   /** Replaces the whole buffer as one normal edit (undoable via Ctrl+Z,

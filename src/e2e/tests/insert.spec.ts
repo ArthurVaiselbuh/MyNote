@@ -1,5 +1,34 @@
 import { expect, test } from "../app";
 
+for (const [selected, replacement, expected, cursorOnly] of [
+  ["https://example.com", "Example", "[Example](https://example.com)", false],
+  ["Example", "https://example.com", "[Example](https://example.com)", false],
+  ["[Example](https://old.example.com)", "https://example.com", "[Example](https://example.com)", false],
+  ["[Existing](https://old.example.com)", "https://example.com", "[Existing](https://example.com)", true],
+] as const) {
+  test(`Ctrl+J Link fills and selects the appropriate field for ${selected}`, async ({ app }) => {
+    await app.newTitledPage("Link", 1);
+    await app.selectWholeBody();
+    await app.page.keyboard.type(selected);
+    await app.page.keyboard.press("Control+a");
+    if (cursorOnly) {
+      await app.page.keyboard.press("ArrowLeft");
+      await app.page.keyboard.press("ArrowRight");
+      await app.page.keyboard.press("ArrowRight");
+    }
+    await app.page.keyboard.press("Control+j");
+    await expect(app.modal.locator("input")).toBeFocused();
+    await app.page.keyboard.press("Enter");
+    await expect(app.modal).toHaveCount(0);
+    await expect(app.editorBody).toBeFocused();
+    await app.page.keyboard.type(replacement);
+    await expect(app.editorBody).toHaveText(expected);
+    await app.page.keyboard.press("Control+s");
+    const [id] = await app.treeIds();
+    await expect.poll(() => app.readMd(id)).toContain(expected);
+  });
+}
+
 test("Ctrl+J Color opens the picker and a swatch wraps the selection", async ({ app }) => {
   await app.newTitledPage("Tint", 1);
 
