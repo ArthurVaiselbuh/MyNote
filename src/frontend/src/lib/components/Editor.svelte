@@ -73,6 +73,7 @@
   import { api } from "../api";
   import { focusSelect } from "../autofocus";
   import { hintOf, labelOf } from "../keys/bindings";
+  import { insertLinkTransaction } from "../insertLink";
   import { blockRangeAt } from "../markdown";
   import { onRequest } from "../onRequest.svelte";
   import { editorCtl } from "../paneCtl";
@@ -383,6 +384,13 @@
     view.focus();
   }
 
+  function ctlInsertLink() {
+    if (!view) return;
+    enterEditMode();
+    view.dispatch(insertLinkTransaction(view.state));
+    view.focus();
+  }
+
   function ctlInsertPageLink(pageId: string, pageTitle: string) {
     if (!view) return;
     enterEditMode();
@@ -558,6 +566,7 @@
       findPrev: ctlFindPrev,
       scroller: () => view?.scrollDOM ?? null,
       insert: ctlInsert,
+      insertLink: ctlInsertLink,
       insertPageLink: ctlInsertPageLink,
       replaceAll: ctlReplaceAll,
       setTitle: (t: string) => (title = t),
