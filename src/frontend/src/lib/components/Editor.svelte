@@ -74,6 +74,7 @@
   import { focusSelect } from "../autofocus";
   import { hintOf, labelOf } from "../keys/bindings";
   import { insertLinkTransaction } from "../insertLink";
+  import { log } from "../log";
   import { blockRangeAt } from "../markdown";
   import { onRequest } from "../onRequest.svelte";
   import { editorCtl } from "../paneCtl";
@@ -112,6 +113,8 @@
     }),
     EditorView.domEventHandlers({
       paste: handlePaste,
+      dragover: handleDragOver,
+      drop: handleDrop,
       focus: () => {
         app.focus = "editor";
       },
@@ -421,28 +424,43 @@
   }
 
   function handlePaste(e: ClipboardEvent): boolean {
-    const items = e.clipboardData?.items;
-    if (!items || !loadedId) return false;
-    for (const item of items) {
-      if (item.type.startsWith("image/")) {
-        const file = item.getAsFile();
-        if (!file) continue;
-        e.preventDefault();
-        const ext = (item.type.split("/")[1] ?? "png").replace("jpeg", "jpg");
-        void insertImage(file, ext);
-        return true;
-      }
+    if (!e.clipboardData || !handleTransferredFile(e.clipboardData)) return false;
+    e.preventDefault();
+    return true;
+  }
+
+  function handleDragOver(e: DragEvent): boolean {
+    if (!loadedId || editingBlocked || !e.dataTransfer?.types.includes("Files")) return false;
+    e.preventDefault();
+    e.dataTransfer.dropEffect = "copy";
+    return true;
+  }
+
+  function handleDrop(e: DragEvent): boolean {
+    if (!view || !e.dataTransfer) return false;
+    log.verbose(`editor drop received (${e.dataTransfer.files.length} files)`);
+    const position = view.posAtCoords({ x: e.clientX, y: e.clientY });
+    if (!handleTransferredFile(e.dataTransfer, position ?? view.state.selection.main.head)) return false;
+    e.preventDefault();
+    return true;
+  }
+
+  function handleTransferredFile(data: DataTransfer, position?: number): boolean {
+    if (!loadedId || editingBlocked) return false;
+    const files = Array.from(data.items)
+      .filter((item) => item.kind === "file")
+      .map((item) => item.getAsFile())
+      .filter((file): file is File => file !== null);
+    if (!files.length) files.push(...Array.from(data.files));
+    const file = files.find((candidate) => candidate.type.startsWith("image/")) ?? files[0];
+    if (!file) return false;
+    if (file.type.startsWith("image/")) {
+      const ext = (file.type.split("/")[1] ?? "png").replace("jpeg", "jpg");
+      void insertImage(file, ext, position);
+    } else {
+      act.confirmAttachOnce(() => void insertAttachment(file, position));
     }
-    for (const item of items) {
-      if (item.kind === "file") {
-        const file = item.getAsFile();
-        if (!file) continue;
-        e.preventDefault();
-        act.confirmAttachOnce(() => void insertAttachment(file));
-        return true;
-      }
-    }
-    return false;
+    return true;
   }
 
   // save_image takes base64 over IPC; readAsDataURL produces it natively, where
@@ -459,11 +477,16 @@
     });
   }
 
-  async function insertImage(file: File, ext: string) {
+  async function insertImage(file: File, ext: string, position?: number) {
     if (!view || !loadedId) return;
+    const pageId = loadedId;
     try {
-      const rel = await api.saveImage(loadedId, await base64Of(file), ext);
-      const pos = view.state.selection.main.head;
+      const rel = await api.saveImage(pageId, await base64Of(file), ext);
+      if (!view || loadedId !== pageId) {
+        app.status = "the open page changed — image not inserted";
+        return;
+      }
+      const pos = position ?? view.state.selection.main.head;
       view.dispatch({
         changes: { from: pos, insert: `![](${rel})` },
         selection: { anchor: pos + 2 },
@@ -473,7 +496,7 @@
     }
   }
 
-  async function insertAttachment(file: File) {
+  async function insertAttachment(file: File, position?: number) {
     if (!view || !loadedId) return;
     const pageId = loadedId;
     try {
@@ -483,7 +506,7 @@
         return;
       }
       const name = decodeURIComponent(rel.replace(/^.*\//, ""));
-      const pos = view.state.selection.main.head;
+      const pos = position ?? view.state.selection.main.head;
       const text = `[${name}](${rel})`;
       view.dispatch({
         changes: { from: pos, insert: text },

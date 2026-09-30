@@ -125,6 +125,7 @@ pub fn run() {
             let hide_window_for_e2e = e2e_cdp_port.is_some();
             let mut builder =
                 tauri::WebviewWindowBuilder::new(app, "main", tauri::WebviewUrl::default())
+                    .disable_drag_drop_handler()
                     .title("MyNote")
                     .inner_size(1280.0, 840.0)
                     .min_inner_size(640.0, 400.0)
