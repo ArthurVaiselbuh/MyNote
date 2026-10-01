@@ -125,6 +125,14 @@
     <button onkeydown={controlsKeys} onclick={() => act.openModal("searchStrategies")}>
       Excluded strategies ({excludedStrategies})
     </button>
+    <label class="attachment-option">
+      <input type="checkbox" checked={app.searchPreferences.searchAttachments} disabled={app.searchPreferencesSaving}
+        onkeydown={controlsKeys}
+        onchange={(event) => void act.updateSearchPreferences({
+          ...app.searchPreferences, searchAttachments: event.currentTarget.checked,
+        })} />
+      Search text attachments
+    </label>
     <button
       disabled={!exclusionsActive || app.searchPreferencesSaving}
       onkeydown={controlsKeys}
@@ -152,4 +160,5 @@
     background: var(--panel);
   }
   .error { color: var(--error); }
+  .attachment-option { display: flex; align-items: center; gap: 6px; }
 </style>

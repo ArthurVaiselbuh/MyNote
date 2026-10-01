@@ -842,6 +842,12 @@ async function openResultWithMode(idx: number, mode: "edit" | "preview") {
 }
 
 export async function openResult(idx: number) {
+  const attachment = app.results[idx]?.attachment;
+  if (attachment) {
+    try { await api.revealAttachment(attachment); }
+    catch (error) { app.searchError = String(error); }
+    return;
+  }
   await openResultWithMode(idx, "preview");
 }
 

@@ -12,6 +12,14 @@
     void act.persistSettings();
   }
 
+  async function saveAttachmentSize(input: HTMLInputElement) {
+    const size = Math.max(1, Math.min(500, Math.round(Number(input.value) || 1)));
+    input.value = String(size);
+    app.settings.maxAttachmentSizeMb = size;
+    await act.persistSettings();
+    if (app.view === "results") await act.runSearch();
+  }
+
   const FALLBACK_INTERVAL_MINUTES = 20;
 
   function minutesOf(intervalSecs: number | undefined): number {
@@ -115,6 +123,13 @@
         bind:value={app.settings.scrollSpeed}
         onchange={persist}
       />
+    </div>
+
+    <div class="settings-row">
+      <label for="set-attachment-size">Maximum text attachment search size (MB)</label>
+      <input id="set-attachment-size" type="number" min="1" max="500" step="1"
+        value={app.settings.maxAttachmentSizeMb}
+        onchange={(event) => void saveAttachmentSize(event.currentTarget)} />
     </div>
 
     <div class="settings-row">

@@ -52,7 +52,13 @@
       onmousemove={() => (app.resultsSel = i)}
     >
       <div class="meta">
-        {hit.sectionName} › {hit.title}{hit.lineNo > 0 ? ` — line ${hit.lineNo}` : " — title"}
+        {hit.sectionName} › {hit.title}
+        {#if hit.attachment}
+          › <span class="result-file-icon attachment-generic" role="img" aria-label="Attached file"></span>
+          {decodeURIComponent(hit.attachment.split("/").at(-1) ?? "")} — line {hit.lineNo}
+        {:else}
+          {hit.lineNo > 0 ? ` — line ${hit.lineNo}` : " — title"}
+        {/if}
       </div>
       <div class="snippet">
         {#each segments(hit) as seg}{#if seg.hl}<mark>{seg.text}</mark>{:else}{seg.text}{/if}{/each}

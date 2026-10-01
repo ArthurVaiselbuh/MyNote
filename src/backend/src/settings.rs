@@ -4,6 +4,8 @@ use std::collections::BTreeMap;
 use std::fs;
 use std::path::PathBuf;
 
+pub const MAX_ATTACHMENT_SIZE_MB: u32 = 500;
+
 #[derive(Serialize, Deserialize, Clone, Debug)]
 #[serde(rename_all = "camelCase")]
 pub struct WindowGeom {
@@ -48,6 +50,7 @@ pub struct Settings {
     pub search_exclusion_color: String,
     pub page_title_size: u32,
     pub scroll_speed: f64,
+    pub max_attachment_size_mb: u32,
     pub tree_width: u32,
     pub peek_width: u32,
     pub log_level: String,
@@ -78,6 +81,7 @@ impl Default for Settings {
             search_exclusion_color: "#e06c75".into(),
             page_title_size: 20,
             scroll_speed: 1.0,
+            max_attachment_size_mb: 1,
             tree_width: 300,
             peek_width: 460,
             log_level: "info".into(),
@@ -132,6 +136,17 @@ pub const LOG_FILE_STEM: &str = "MyNote";
 pub const RECENT_LIMIT: usize = 5;
 
 impl Settings {
+    pub fn attachment_search_limit_bytes(&self) -> u64 {
+        u64::from(self.max_attachment_size_mb.clamp(1, MAX_ATTACHMENT_SIZE_MB)) * 1024 * 1024
+    }
+
+    pub fn validate(&self) -> Result<(), String> {
+        if !(1..=MAX_ATTACHMENT_SIZE_MB).contains(&self.max_attachment_size_mb) {
+            return Err(format!("maximum attachment size must be between 1 and {MAX_ATTACHMENT_SIZE_MB} MB"));
+        }
+        Ok(())
+    }
+
     pub fn log_level_filter(&self) -> LevelFilter {
         match self.log_level.trim().to_ascii_lowercase().as_str() {
             "off" | "none" => LevelFilter::Off,
@@ -169,6 +184,21 @@ impl Settings {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn attachment_search_limit_defaults_and_round_trips_in_app_settings() {
+        let mut settings: Settings = serde_json::from_str("{}").unwrap();
+        assert_eq!(settings.max_attachment_size_mb, 1);
+        settings.max_attachment_size_mb = MAX_ATTACHMENT_SIZE_MB;
+        assert_eq!(settings.attachment_search_limit_bytes(), 500 * 1024 * 1024);
+        let saved = serde_json::to_string(&settings).unwrap();
+        let loaded: Settings = serde_json::from_str(&saved).unwrap();
+        assert_eq!(loaded.max_attachment_size_mb, 500);
+        for invalid in [0, MAX_ATTACHMENT_SIZE_MB + 1] {
+            settings.max_attachment_size_mb = invalid;
+            assert!(settings.validate().is_err());
+        }
+    }
 
     #[test]
     fn search_exclusion_color_defaults_and_round_trips() {

@@ -6,7 +6,7 @@ use std::collections::{BTreeMap, HashSet};
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
-use std::sync::OnceLock;
+use std::sync::{Arc, Mutex, OnceLock};
 use std::time::Instant;
 
 use crate::lock::{LockError, NotebookLock};
@@ -226,6 +226,8 @@ pub struct ViewPos {
 #[derive(Serialize, Deserialize, Clone, Debug, Default)]
 #[serde(rename_all = "camelCase")]
 struct UserState {
+    #[serde(default, deserialize_with = "crate::attachment_text::deserialize_metadata")]
+    attachment_metadata: BTreeMap<String, crate::attachment_text::AttachmentMetadata>,
     #[serde(default)]
     search_preferences: crate::search::SearchPreferences,
     #[serde(default)]
@@ -239,6 +241,7 @@ struct UserState {
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
 struct StoredUserState<'a> {
+    attachment_metadata: &'a BTreeMap<String, crate::attachment_text::AttachmentMetadata>,
     search_preferences: &'a crate::search::SearchPreferences,
     last_view: &'a LastView,
     collapsed: &'a [String],
@@ -340,6 +343,7 @@ struct LiveResourceReferences {
 
 pub struct Store {
     search_preferences: crate::search::SearchPreferences,
+    pub attachment_metadata_cache: Arc<Mutex<crate::attachment_text::AttachmentMetadataCache>>,
     pub root: PathBuf,
     pub notebook: Notebook,
     undo_stack: Vec<UndoOp>,
@@ -367,9 +371,11 @@ impl Store {
             LockError::Io(msg) => OpenError::Other(msg),
         })?;
         let mut notebook = load_notebook(root).map_err(OpenError::Other)?;
+        let mut attachment_metadata_cache = crate::attachment_text::AttachmentMetadataCache::default();
         let mut view_positions = BTreeMap::new();
         let mut search_preferences = crate::search::SearchPreferences::default();
         if let Some(user) = load_user_state(root) {
+            attachment_metadata_cache.entries = user.attachment_metadata;
             search_preferences = user.search_preferences;
             notebook.last_view = user.last_view;
             let collapsed: HashSet<String> = user.collapsed.into_iter().collect();
@@ -387,8 +393,10 @@ impl Store {
                 .filter(|(id, _)| live.contains(id.as_str()))
                 .collect();
         }
+        attachment_metadata_cache.prune(root);
         let mut store = Store {
             search_preferences,
+            attachment_metadata_cache: Arc::new(Mutex::new(attachment_metadata_cache)),
             root: root.to_path_buf(),
             notebook,
             undo_stack: vec![],
@@ -454,7 +462,9 @@ impl Store {
         for section in &self.notebook.sections {
             collect_collapsed(&section.pages, &mut collapsed);
         }
+        let mut cache = self.attachment_metadata_cache.lock().map_err(|_| "attachment metadata lock poisoned".to_string())?;
         let json = serde_json::to_string_pretty(&StoredUserState {
+            attachment_metadata: &cache.entries,
             search_preferences: &self.search_preferences,
             last_view: &self.notebook.last_view,
             collapsed: &collapsed,
@@ -462,12 +472,21 @@ impl Store {
         })
         .map_err(err)?;
         if *self.last_saved_user_json.borrow() == json {
+            cache.dirty = false;
             return Ok(());
         }
         atomic_write(&self.user_state_path(), json.as_bytes())?;
         *self.last_saved_user_json.borrow_mut() = json;
+        cache.dirty = false;
         log::trace!("view state saved ({} collapsed)", collapsed.len());
         Ok(())
+    }
+
+    pub fn persist_attachment_metadata(&self) {
+        let dirty = self.attachment_metadata_cache.lock().map(|cache| cache.dirty).unwrap_or(false);
+        if dirty && self.save_view_state().is_err() {
+            log::warn!("could not save attachment metadata");
+        }
     }
 
     fn user_state_path(&self) -> PathBuf {
@@ -1172,6 +1191,9 @@ impl Store {
         self.trash_pages_not_in_tree();
         let _ = crate::assets::prune(&self);
         let _ = crate::files::prune_to_trash(&self);
+        if let Ok(mut cache) = self.attachment_metadata_cache.lock() {
+            cache.prune(&self.root);
+        }
         let _ = self.save();
         let _ = self.save_view_state();
         CloseInfo {
@@ -1707,6 +1729,18 @@ mod tests {
     }
 
     #[test]
+    fn invalid_attachment_metadata_preserves_user_preferences() {
+        let user: UserState = serde_json::from_str(r#"{
+            "attachmentMetadata": {"broken": {"size": "invalid"}},
+            "searchPreferences": {"searchAttachments": false},
+            "collapsed": ["page"]
+        }"#).unwrap();
+        assert!(user.attachment_metadata.is_empty());
+        assert!(!user.search_preferences.search_attachments);
+        assert_eq!(user.collapsed, vec!["page"]);
+    }
+
+    #[test]
     fn open_seeds_agents_md_but_never_overwrites_it() {
         let dir = tempdir().unwrap();
         let path = dir.path().join("AGENTS.md");
@@ -1820,6 +1854,7 @@ mod tests {
         let preferences = crate::search::SearchPreferences {
             excluded_section_ids: vec![section_id(&store)],
             excluded_strategies: vec![crate::search::Strategy::Fuzzy],
+            search_attachments: false,
         };
         store.set_search_preferences(preferences.clone()).unwrap();
         store.set_last_view(None, None).unwrap();

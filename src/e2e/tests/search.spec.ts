@@ -2,6 +2,39 @@ import { expect, fillerBody, test } from "../app";
 import fs from "node:fs";
 import path from "node:path";
 
+test("searches text attachments with an app-wide size setting and an Advanced toggle", async ({ app }) => {
+  await app.newTitledPage("Reference", 1);
+  const pageId = await app.row("Reference").getAttribute("data-id");
+  expect(pageId).toBeTruthy();
+  const filesDir = path.join(app.notebookDir, "files", pageId!);
+  fs.mkdirSync(filesDir, { recursive: true });
+  fs.writeFileSync(path.join(filesDir, "report one.txt"), "first line\nrarephrase in file\n");
+  await app.setBody(`[report](files/${pageId}/report%20one.txt)`);
+
+  await app.search("rarephrase");
+  const hit = app.page.locator(".results .hit");
+  await expect(hit).toHaveCount(1);
+  await expect(hit.locator(".meta")).toContainText("report one.txt — line 2");
+  await expect(hit.getByRole("img", { name: "Attached file" })).toBeVisible();
+  await expect(app.page.locator(".peek .attachment-text")).toContainText("rarephrase in file");
+  await expect(app.page.locator(".peek mark.find-hit")).toHaveText("rarephrase");
+
+  await app.page.keyboard.press("Control+Comma");
+  const maxSize = app.page.getByRole("dialog").getByRole("spinbutton", { name: "Maximum text attachment search size (MB)" });
+  await expect(maxSize).toHaveValue("1");
+  await maxSize.fill("500");
+  await maxSize.press("Tab");
+  const settingsFile = path.join(process.env.APPDATA!, "MyNote", "settings.json");
+  await expect.poll(() => (JSON.parse(fs.readFileSync(settingsFile, "utf8")) as { maxAttachmentSizeMb: number }).maxAttachmentSizeMb).toBe(500);
+  await app.page.keyboard.press("Escape");
+  await app.page.getByRole("button", { name: /^Advanced/ }).click();
+  await app.page.getByRole("checkbox", { name: "Search text attachments" }).uncheck();
+  await expect(hit).toHaveCount(0);
+  const userState = () => JSON.parse(fs.readFileSync(path.join(app.notebookDir, "notebook.user.json"), "utf8")) as { searchPreferences: { searchAttachments: boolean; maxAttachmentSizeMb?: number } };
+  await expect.poll(() => userState().searchPreferences.searchAttachments).toBe(false);
+  expect(userState().searchPreferences.maxAttachmentSizeMb).toBeUndefined();
+});
+
 test("search exclusions refresh results, survive restart, and stay visible when collapsed", async ({ app }, testInfo) => {
   await app.newPageWithBody("Included", "milkshake", 1);
   await app.newSection("Archive");
