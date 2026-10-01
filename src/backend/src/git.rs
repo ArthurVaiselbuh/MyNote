@@ -176,9 +176,6 @@ const HARDEN_ARGS: [&str; 22] = [
 /// `GIT_CONFIG_GLOBAL` covers `~/.gitconfig` *and* `$XDG_CONFIG_HOME/git/config`;
 /// `GIT_CONFIG_NOSYSTEM` is the pre-2.32 fallback for the system file.
 fn ignore_user_config(c: &mut Command) {
-    #[cfg(windows)]
-    const NULL_DEVICE: &str = "NUL";
-    #[cfg(not(windows))]
     const NULL_DEVICE: &str = "/dev/null";
 
     c.env("GIT_CONFIG_GLOBAL", NULL_DEVICE)
@@ -935,6 +932,21 @@ mod tests {
             .output()
             .unwrap();
         String::from_utf8_lossy(&out.stdout).trim().to_string()
+    }
+
+    #[test]
+    fn isolated_config_is_readable_and_empty() {
+        need_git!();
+        let dir = tempfile::tempdir().unwrap();
+        for scope in ["--global", "--system"] {
+            let mut command = Command::new(exe().unwrap());
+            command.current_dir(dir.path()).args(["config", scope, "--list"]);
+            ignore_user_config(&mut command);
+            apply_no_window(&mut command);
+            let output = command.output().unwrap();
+            assert!(output.status.success(), "{}", String::from_utf8_lossy(&output.stderr));
+            assert!(output.stdout.is_empty());
+        }
     }
 
     #[test]
