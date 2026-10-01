@@ -463,11 +463,12 @@ pub fn search_pages(
 ) -> Result<SearchResults, String> {
     let mode = SearchMode::from(mode.as_str());
     log::trace!("search ({mode:?}), {} chars", query.chars().count());
+    let max_attachment_bytes = state.settings.lock().map_err(lock_err)?.attachment_search_limit_bytes();
     with_store(&state, |s| {
         if link_targets.unwrap_or(false) {
             Ok(search::search_link_targets(s, &query))
         } else {
-            search::search(s, &query, mode)
+            search::search(s, &query, mode, max_attachment_bytes)
         }
     })
 }
@@ -508,6 +509,21 @@ pub fn reveal_attachment(state: State<'_, AppState>, rel: String) -> Result<(), 
     let root = with_store(&state, |s| Ok(s.root.clone()))?;
     let path = files::resolve_attachment_path(&root, &rel)?;
     tauri_plugin_opener::reveal_item_in_dir(&path).map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+pub fn read_text_attachment(state: State<'_, AppState>, rel: String) -> Result<String, String> {
+    let max_bytes = state.settings.lock().map_err(lock_err)?.attachment_search_limit_bytes();
+    let (root, cache) = with_store(&state, |s| Ok((s.root.clone(), s.attachment_metadata_cache.clone())))?;
+    let path = files::resolve_attachment_path(&root, &rel)?;
+    let text = cache.lock().map_err(lock_err)?.read(&path, &rel, max_bytes);
+    let _ = with_store(&state, |store| {
+        if std::sync::Arc::ptr_eq(&cache, &store.attachment_metadata_cache) {
+            store.persist_attachment_metadata();
+        }
+        Ok(())
+    });
+    text.ok_or_else(|| "attachment is not readable text within the configured size limit".into())
 }
 
 #[derive(Serialize, Clone)]
@@ -723,6 +739,7 @@ pub fn set_settings(
     state: State<'_, AppState>,
     settings: Settings,
 ) -> Result<(), String> {
+    settings.validate()?;
     let mut guard = state.settings.lock().map_err(lock_err)?;
     crate::single_instance::sync(&app, settings.single_instance)?;
     let window = guard.window.clone();

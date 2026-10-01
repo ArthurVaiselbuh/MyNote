@@ -109,9 +109,10 @@ export function openResultsMenu(e: MouseEvent) {
   const idx = Number((e.target as HTMLElement).closest(".hit")?.getAttribute("data-idx") ?? -1);
   if (idx < 0) return;
   app.resultsSel = idx;
+  const attachment = app.results[idx]?.attachment;
   openContextMenu(e, [
-    { label: "Open", keys: labelOf("results.open"), run: () => act.openResult(idx) },
-    { label: "Open in editor", run: () => act.openResultInEditor(idx) },
+    { label: attachment ? "Show in folder" : "Open", keys: labelOf("results.open"), run: () => act.openResult(idx) },
+    { label: attachment ? "Open page in editor" : "Open in editor", run: () => act.openResultInEditor(idx) },
     "separator",
     { label: "Refine query", keys: labelOf("results.refine"), run: () => act.focusPane("search") },
   ]);

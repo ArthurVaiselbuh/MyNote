@@ -17,7 +17,11 @@
   let loadError = $state("");
   let containerEl: HTMLDivElement | undefined = $state();
 
-  const html = $derived(body ? renderBody(body) : "");
+  const html = $derived(body
+    ? hit?.attachment
+      ? `<pre class="attachment-text">${body.replaceAll("&", "&amp;").replaceAll("<", "&lt;").replaceAll(">", "&gt;")}</pre>`
+      : renderBody(body)
+    : "");
 
   // plain, not $state: the loader reads and writes all of these, and tracking
   // them would make its effect depend on its own writes
@@ -46,11 +50,12 @@
       loadError = "";
       return;
     }
-    if (target.pageId === loadedId) return;
+    const key = target.attachment ?? target.pageId;
+    if (key === loadedId) return;
 
-    const cached = cache.get(target.pageId);
+    const cached = cache.get(key);
     if (cached !== undefined) {
-      loadedId = target.pageId;
+      loadedId = key;
       body = cached;
       loadError = "";
       return;
@@ -59,10 +64,12 @@
     // arrow-key traversal walks results faster than their pages can be read
     abandonLoad();
     const token = loadToken;
-    const id = target.pageId;
+    const id = key;
     timer = setTimeout(async () => {
       try {
-        const text = await api.readPage(id);
+        const text = target.attachment
+          ? await api.readTextAttachment(target.attachment)
+          : await api.readPage(target.pageId);
         cache.set(id, text);
         if (token !== loadToken) return;
         loadedId = id;
@@ -137,6 +144,10 @@
   {#if hit}
     <div class="peek-head" title={`${hit.sectionName} › ${hit.title}`}>
       <span class="section">{hit.sectionName}</span> › {hit.title}
+      {#if hit.attachment}
+        › <span class="result-file-icon attachment-generic" role="img" aria-label="Attached file"></span>
+        {decodeURIComponent(hit.attachment.split("/").at(-1) ?? "")}
+      {/if}
     </div>
     {#if loadError}
       <div class="peek-empty">{loadError}</div>
@@ -156,3 +167,7 @@
     <div class="peek-empty">Select a result to preview it</div>
   {/if}
 </aside>
+
+<style>
+  :global(.peek .attachment-text) { white-space: pre-wrap; overflow-wrap: anywhere; font: inherit; }
+</style>

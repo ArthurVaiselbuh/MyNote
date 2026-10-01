@@ -49,6 +49,7 @@ export type SearchStrategy = "phrase" | "word" | "partial" | "fuzzy";
 export interface SearchPreferences {
   excludedSectionIds: string[];
   excludedStrategies: SearchStrategy[];
+  searchAttachments: boolean;
 }
 
 export interface SearchHit {
@@ -59,6 +60,7 @@ export interface SearchHit {
   lineNo: number;
   snippet: string;
   ranges: [number, number][];
+  attachment: string | null;
 }
 
 export interface SearchResults {
@@ -130,6 +132,7 @@ export interface Settings {
   searchExclusionColor: string;
   pageTitleSize: number;
   scrollSpeed: number;
+  maxAttachmentSizeMb: number;
   treeWidth: number;
   peekWidth: number;
   logLevel: string;
@@ -247,6 +250,7 @@ export const api = {
   attachFileBytes: (pageId: string, name: string, data: string) =>
     invoke<string>("attach_file_bytes", { pageId, name, data }),
   revealAttachment: (rel: string) => invoke<void>("reveal_attachment", { rel }),
+  readTextAttachment: (rel: string) => invoke<string>("read_text_attachment", { rel }),
   trashStats: () => invoke<TrashStats>("trash_stats"),
   revealTrash: () => invoke<void>("reveal_trash"),
   emptyTrash: () => invoke<number>("empty_trash"),

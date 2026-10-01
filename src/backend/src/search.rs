@@ -1,9 +1,11 @@
 use std::cmp::Reverse;
+use std::fs;
 
 use nucleo_matcher::pattern::{Atom, AtomKind, CaseMatching, Normalization};
 use nucleo_matcher::{Config, Matcher, Utf32Str};
 use serde::{Deserialize, Serialize};
 
+use crate::files;
 use crate::store::{flatten_pages, PageNode, Section, Store};
 
 const MAX_HITS: usize = 200;
@@ -28,6 +30,7 @@ pub struct SearchHit {
     pub line_no: usize,
     pub snippet: String,
     pub ranges: Vec<(usize, usize)>,
+    pub attachment: Option<String>,
     #[serde(skip)]
     pub rank: Rank,
 }
@@ -43,11 +46,22 @@ pub enum Strategy {
     Phrase,
 }
 
-#[derive(Serialize, Deserialize, Clone, Debug, Default, PartialEq)]
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
 #[serde(rename_all = "camelCase", default)]
 pub struct SearchPreferences {
     pub excluded_section_ids: Vec<String>,
     pub excluded_strategies: Vec<Strategy>,
+    pub search_attachments: bool,
+}
+
+impl Default for SearchPreferences {
+    fn default() -> Self {
+        Self {
+            excluded_section_ids: Vec::new(),
+            excluded_strategies: Vec::new(),
+            search_attachments: true,
+        }
+    }
 }
 
 /// field order is the ranking order: matching more of the query's distinct
@@ -80,6 +94,12 @@ struct LineHit {
     ranges: Vec<(usize, usize)>,
 }
 
+#[derive(Clone, Copy)]
+enum SearchSource {
+    Page,
+    Attachment,
+}
+
 /// Anything the frontend does not spell `"regex"` searches by keyword, so an
 /// older frontend never fails a query against a newer backend.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -97,14 +117,15 @@ impl From<&str> for SearchMode {
     }
 }
 
-pub fn search(store: &Store, query: &str, mode: SearchMode) -> Result<SearchResults, String> {
+pub fn search(store: &Store, query: &str, mode: SearchMode, max_attachment_bytes: u64) -> Result<SearchResults, String> {
     if query.trim().is_empty() {
         return Ok(SearchResults { hits: vec![], terms: vec![] });
     }
     let (mut hits, terms) = match mode {
-        SearchMode::Regex => (regex_search(store, query)?, vec![]),
-        SearchMode::Keyword => keyword_search(store, query),
+        SearchMode::Regex => (regex_search(store, query, max_attachment_bytes)?, vec![]),
+        SearchMode::Keyword => keyword_search(store, query, max_attachment_bytes),
     };
+    store.persist_attachment_metadata();
     hits.sort_by_key(|hit| Reverse(hit.rank));
     hits.truncate(MAX_HITS);
     Ok(SearchResults { hits, terms })
@@ -112,7 +133,7 @@ pub fn search(store: &Store, query: &str, mode: SearchMode) -> Result<SearchResu
 
 // ---------- keyword search ----------
 
-fn keyword_search(store: &Store, query: &str) -> (Vec<SearchHit>, Vec<String>) {
+fn keyword_search(store: &Store, query: &str, max_attachment_bytes: u64) -> (Vec<SearchHit>, Vec<String>) {
     let terms = parse_terms(query);
     let phrase = whole_query_phrase(query);
     let mut matcher = Matcher::new(Config::DEFAULT);
@@ -122,9 +143,21 @@ fn keyword_search(store: &Store, query: &str) -> (Vec<SearchHit>, Vec<String>) {
             continue;
         }
         let content = page_content(store, page);
-        if let Some(hit) = page_hit(section, page, &content, &terms, &phrase, &mut matcher) {
+        if let Some(hit) = text_hit(section, page, &content, &terms, &phrase, &mut matcher, SearchSource::Page) {
             if !store.search_preferences().excluded_strategies.contains(&hit.rank.tier) {
                 hits.push(hit);
+            }
+        }
+        if store.search_preferences().search_attachments {
+            for (path, attachment) in attachment_paths(store, page) {
+                let Some(content) = store.attachment_metadata_cache.lock().ok()
+                    .and_then(|mut cache| cache.read(&path, &attachment, max_attachment_bytes)) else { continue };
+                if let Some(mut hit) = text_hit(section, page, &content, &terms, &phrase, &mut matcher, SearchSource::Attachment) {
+                    if !store.search_preferences().excluded_strategies.contains(&hit.rank.tier) {
+                        hit.attachment = Some(attachment);
+                        hits.push(hit);
+                    }
+                }
             }
         }
     }
@@ -138,12 +171,12 @@ pub fn search_link_targets(store: &Store, query: &str) -> SearchResults {
     let mut ranked_hits = Vec::new();
     for (section, page) in flatten_pages(&store.notebook) {
         let title_content = format!("# {}", page.title);
-        let title_hit = page_hit(section, page, &title_content, &terms, &phrase, &mut matcher);
+        let title_hit = text_hit(section, page, &title_content, &terms, &phrase, &mut matcher, SearchSource::Page);
         let title_rank = title_hit.as_ref().map(|hit| hit.rank);
         let hit = if query.trim().is_empty() {
             Some(make_hit(section, page, 0, &page.title, vec![], Rank::default()))
         } else {
-            title_hit.or_else(|| page_hit(section, page, &page_content(store, page), &terms, &phrase, &mut matcher))
+            title_hit.or_else(|| text_hit(section, page, &page_content(store, page), &terms, &phrase, &mut matcher, SearchSource::Page))
         };
         if let Some(hit) = hit {
             ranked_hits.push((title_rank, hit));
@@ -192,15 +225,16 @@ fn parse_terms(query: &str) -> Vec<Term> {
 }
 
 /// scores the whole page, then reports the single line that best represents it
-fn page_hit(
+fn text_hit(
     section: &Section,
     page: &PageNode,
     content: &str,
     terms: &[Term],
     phrase: &[char],
     matcher: &mut Matcher,
+    source: SearchSource,
 ) -> Option<SearchHit> {
-    let mut lines = scored_lines(content);
+    let mut lines = scored_lines(content, source);
     let mut rank = Rank::default();
     let mut weakest_strategy = Strategy::Phrase;
 
@@ -247,8 +281,14 @@ fn page_hit(
     Some(make_hit(section, page, best.line_no, best.text, ranges, rank))
 }
 
-fn scored_lines(content: &str) -> Vec<ScoredLine<'_>> {
-    searchable_lines(content)
+fn scored_lines(content: &str, source: SearchSource) -> Vec<ScoredLine<'_>> {
+    let lines = if matches!(source, SearchSource::Attachment) {
+        content.lines().enumerate().map(|(idx, line)| (idx + 1, line))
+            .filter(|(_, line)| !line.trim().is_empty()).collect()
+    } else {
+        searchable_lines(content)
+    };
+    lines
         .into_iter()
         .map(|(line_no, text)| ScoredLine {
             line_no,
@@ -344,7 +384,7 @@ fn best_fuzzy_hit(lines: &[ScoredLine], atom: &Atom, matcher: &mut Matcher) -> O
 
 // ---------- regex ----------
 
-fn regex_search(store: &Store, query: &str) -> Result<Vec<SearchHit>, String> {
+fn regex_search(store: &Store, query: &str, max_attachment_bytes: u64) -> Result<Vec<SearchHit>, String> {
     let re = regex::RegexBuilder::new(query)
         .case_insensitive(true)
         .build()
@@ -368,6 +408,23 @@ fn regex_search(store: &Store, query: &str) -> Result<Vec<SearchHit>, String> {
                 ..Rank::default()
             };
             hits.push(make_hit(section, page, line_no, text, ranges, rank));
+        }
+        if store.search_preferences().search_attachments {
+            for (path, attachment) in attachment_paths(store, page) {
+                let Some(content) = store.attachment_metadata_cache.lock().ok()
+                    .and_then(|mut cache| cache.read(&path, &attachment, max_attachment_bytes)) else { continue };
+                let mut attachment_hits = 0;
+                for (line_no, text) in content.lines().enumerate() {
+                    let ranges = regex_ranges(&re, text);
+                    if ranges.is_empty() { continue; }
+                    let rank = Rank { terms_matched: 1, occurrences: ranges.len(), ..Rank::default() };
+                    let mut hit = make_hit(section, page, line_no + 1, text, ranges, rank);
+                    hit.attachment = Some(attachment.clone());
+                    hits.push(hit);
+                    attachment_hits += 1;
+                    if attachment_hits == MAX_HITS { break; }
+                }
+            }
         }
     }
     Ok(hits)
@@ -393,6 +450,22 @@ fn page_content(store: &Store, page: &PageNode) -> String {
     store
         .read_page(&page.id)
         .unwrap_or_else(|_| format!("# {}\n", page.title))
+}
+
+fn attachment_paths(store: &Store, page: &PageNode) -> Vec<(std::path::PathBuf, String)> {
+    let dir = files::files_dir_in(&store.root, &page.id);
+    if !fs::symlink_metadata(&dir).is_ok_and(|metadata| metadata.is_dir() && !metadata.file_type().is_symlink()) {
+        return Vec::new();
+    }
+    let Ok(entries) = fs::read_dir(dir) else { return Vec::new() };
+    let mut paths: Vec<_> = entries.flatten().filter_map(|entry| {
+        let metadata = entry.metadata().ok()?;
+        if !metadata.is_file() || entry.file_type().ok()?.is_symlink() { return None; }
+        let name = entry.file_name().into_string().ok()?;
+        Some((entry.path(), files::encoded_file_rel(&page.id, &name)))
+    }).collect();
+    paths.sort_by(|a, b| a.1.cmp(&b.1));
+    paths
 }
 
 /// the leading `# Title` reports as line 0 with the hashes stripped, so a title
@@ -446,6 +519,7 @@ fn make_hit(
         line_no,
         snippet,
         ranges,
+        attachment: None,
         rank,
     }
 }
@@ -476,7 +550,7 @@ mod tests {
     use tempfile::tempdir;
 
     fn hits(store: &Store, query: &str, mode: SearchMode) -> Vec<SearchHit> {
-        search(store, query, mode).unwrap().hits
+        search(store, query, mode, crate::settings::Settings::default().attachment_search_limit_bytes()).unwrap().hits
     }
 
     #[test]
@@ -587,6 +661,93 @@ mod tests {
     }
 
     #[test]
+    fn attachment_search_survives_metadata_save_failure() {
+        let (_root, store) = store_with(&["# Page"]);
+        let dir = files::files_dir_in(&store.root, &store.notebook.sections[0].pages[0].id);
+        fs::create_dir_all(&dir).unwrap();
+        fs::write(dir.join("report.txt"), "needle").unwrap();
+        let user_path = store.root.join("notebook.user.json");
+        fs::remove_file(&user_path).unwrap();
+        fs::create_dir(&user_path).unwrap();
+        assert_eq!(hits(&store, "needle", SearchMode::Keyword).len(), 1);
+        assert!(store.attachment_metadata_cache.lock().unwrap().dirty);
+        fs::remove_dir(&user_path).unwrap();
+        assert_eq!(hits(&store, "needle", SearchMode::Keyword).len(), 1);
+        assert!(!store.attachment_metadata_cache.lock().unwrap().dirty);
+        assert!(user_path.is_file());
+    }
+
+    #[test]
+    fn attachment_metadata_persists_without_contents_or_notebook_changes() {
+        let (root, store) = store_with(&["# Page"]);
+        let page_id = &store.notebook.sections[0].pages[0].id;
+        let dir = files::files_dir_in(&store.root, page_id);
+        fs::create_dir_all(&dir).unwrap();
+        fs::write(dir.join("report.txt"), "private needle content").unwrap();
+        let relative_path = files::encoded_file_rel(page_id, "report.txt");
+        let notebook = fs::read(store.root.join("notebook.json")).unwrap();
+        let change_seq = store.change_seq();
+        assert_eq!(hits(&store, "needle", SearchMode::Keyword).len(), 1);
+        let user_json = fs::read_to_string(store.root.join("notebook.user.json")).unwrap();
+        assert!(!user_json.contains("private needle content"));
+        let user: serde_json::Value = serde_json::from_str(&user_json).unwrap();
+        assert_eq!(user["attachmentMetadata"][&relative_path]["isText"], true);
+        assert_eq!(store.change_seq(), change_seq);
+        assert_eq!(fs::read(store.root.join("notebook.json")).unwrap(), notebook);
+        drop(store);
+        let store = Store::open(root.path()).unwrap();
+        assert!(store.attachment_metadata_cache.lock().unwrap().entries.contains_key(&relative_path));
+        fs::remove_file(dir.join("report.txt")).unwrap();
+        drop(store);
+        let store = Store::open(root.path()).unwrap();
+        assert!(store.attachment_metadata_cache.lock().unwrap().entries.is_empty());
+    }
+
+    #[test]
+    fn searches_text_attachments_and_skips_binary_and_large_files() {
+        let (_dir, mut store) = store_with(&["# Page\n\nNo matching content"]);
+        let page_id = store.notebook.sections[0].pages[0].id.clone();
+        let dir = files::files_dir_in(&store.root, &page_id);
+        fs::create_dir_all(&dir).unwrap();
+        fs::write(dir.join("report one.txt"), "first line\nunique needle\n").unwrap();
+        fs::write(dir.join("binary.bin"), b"needle\0binary").unwrap();
+        fs::write(dir.join("invalid.bin"), b"needle\xffbinary").unwrap();
+        fs::write(dir.join("large.txt"), format!("oversized\n{}", "x".repeat(1_100_000))).unwrap();
+
+        for mode in [SearchMode::Keyword, SearchMode::Regex] {
+            let found = hits(&store, "needle", mode);
+            assert_eq!(found.len(), 1);
+            assert_eq!(found[0].line_no, 2);
+            assert_eq!(matched(&found[0], 0), "needle");
+            assert_eq!(found[0].attachment.as_deref(), Some(files::encoded_file_rel(&page_id, "report one.txt").as_str()));
+        }
+        assert!(search_link_targets(&store, "needle").hits.is_empty());
+        assert!(hits(&store, "oversized", SearchMode::Regex).is_empty());
+        let oversized = search(&store, "oversized", SearchMode::Regex, 2 * 1024 * 1024).unwrap().hits;
+        assert_eq!(oversized.len(), 1);
+        assert_eq!(oversized[0].attachment.as_deref(), Some(files::encoded_file_rel(&page_id, "large.txt").as_str()));
+
+        store.set_search_preferences(SearchPreferences { search_attachments: false, ..Default::default() }).unwrap();
+        for mode in [SearchMode::Keyword, SearchMode::Regex] {
+            assert!(hits(&store, "needle", mode).is_empty());
+        }
+        let section_id = store.notebook.sections[0].id.clone();
+        store.set_search_preferences(SearchPreferences {
+            excluded_section_ids: vec![section_id],
+            ..Default::default()
+        }).unwrap();
+        for mode in [SearchMode::Keyword, SearchMode::Regex] {
+            assert!(hits(&store, "needle", mode).is_empty());
+        }
+    }
+
+    #[test]
+    fn old_search_preferences_enable_attachment_search() {
+        let preferences: SearchPreferences = serde_json::from_str(r#"{"excludedStrategies":[]}"#).unwrap();
+        assert!(preferences.search_attachments);
+    }
+
+    #[test]
     fn one_hit_per_page() {
         let (_dir, store) = store_with(&["# Log\n\nmilk\nmilk\nmilk\n"]);
         assert_eq!(hits(&store, "milk", SearchMode::Keyword).len(), 1);
@@ -642,7 +803,7 @@ mod tests {
     #[test]
     fn quoted_and_bare_terms_mix() {
         let (_dir, store) = store_with(&["# Mixed\n\nred herring\n\nblue whale\n"]);
-        let results = search(&store, "\"red herring\" whale", SearchMode::Keyword).unwrap();
+        let results = search(&store, "\"red herring\" whale", SearchMode::Keyword, 1024 * 1024).unwrap();
         assert_eq!(results.terms, vec!["red herring", "whale"]);
         assert_eq!(results.hits[0].rank.terms_matched, 2);
     }
@@ -777,7 +938,7 @@ mod tests {
     #[test]
     fn invalid_regex_is_an_error() {
         let (_dir, store) = store_with_pages();
-        assert!(search(&store, r"([unclosed", SearchMode::Regex).is_err());
+        assert!(search(&store, r"([unclosed", SearchMode::Regex, 1024 * 1024).is_err());
     }
 
     #[test]

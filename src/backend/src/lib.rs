@@ -1,4 +1,5 @@
 mod assets;
+mod attachment_text;
 mod commands;
 mod files;
 mod file_watcher;
@@ -99,6 +100,7 @@ pub fn run() {
             commands::attach_file,
             commands::attach_file_bytes,
             commands::reveal_attachment,
+            commands::read_text_attachment,
             commands::trash_stats,
             commands::reveal_trash,
             commands::empty_trash,

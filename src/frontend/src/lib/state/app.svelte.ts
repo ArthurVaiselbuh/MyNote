@@ -73,6 +73,7 @@ export const defaultSettings: Settings = {
   searchExclusionColor: "#e06c75",
   pageTitleSize: 20,
   scrollSpeed: 1.0,
+  maxAttachmentSizeMb: 1,
   treeWidth: 300,
   peekWidth: 460,
   logLevel: "info",
@@ -126,6 +127,7 @@ export const app = $state({
   searchPreferences: {
     excludedSectionIds: [],
     excludedStrategies: [],
+    searchAttachments: true,
   } as SearchPreferences,
   searchPreferencesSaving: false,
   searchPreferencesError: "",

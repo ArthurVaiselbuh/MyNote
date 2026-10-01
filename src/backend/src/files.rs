@@ -113,6 +113,10 @@ fn encode_name(name: &str) -> String {
     utf8_percent_encode(name, LINK_ENCODE_SET).to_string()
 }
 
+pub fn encoded_file_rel(page_id: &str, name: &str) -> String {
+    files_rel(page_id, &encode_name(name))
+}
+
 pub fn attach_path(store: &Store, page_id: &str, source: &Path) -> Result<String, String> {
     if store.find_page(page_id).is_none() {
         return Err("page not found".into());
