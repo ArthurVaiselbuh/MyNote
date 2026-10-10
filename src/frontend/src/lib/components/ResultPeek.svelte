@@ -95,7 +95,7 @@
     container.innerHTML = markup;
     const prefill = act.resultFindPrefill();
     const re = searchRegex(prefill.text, prefill.regex);
-    matches = re ? applyHighlights(container, re) : [];
+    matches = re ? applyHighlights(container, re, !!hit?.attachment) : [];
     currentEl = null;
     currentIdx = -1;
     if (matches.length) goTo(0);

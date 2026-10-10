@@ -2,6 +2,66 @@ import { expect, fillerBody, test } from "../app";
 import fs from "node:fs";
 import path from "node:path";
 
+test("attachment search rejects a files junction outside the notebook", async ({ app }, testInfo) => {
+  await app.newTitledPage("Reference", 1);
+  const pageId = (await app.treeIds())[0];
+  const externalFiles = testInfo.outputPath("external-files");
+  const externalPage = path.join(externalFiles, pageId);
+  fs.mkdirSync(externalPage, { recursive: true });
+  fs.writeFileSync(path.join(externalPage, "report.txt"), "junctionneedle");
+  const filesRoot = path.join(app.notebookDir, "files");
+  fs.symlinkSync(externalFiles, filesRoot, "junction");
+  try {
+    await app.search("junctionneedle");
+    const hits = app.page.locator(".results .hit");
+    await expect(app.page.locator(".results")).toHaveClass(/focused/);
+    await expect(hits).toHaveCount(0);
+    await app.page.locator(".search-bar .mode", { hasText: "regex" }).click();
+    await app.search("junctionneedle");
+    await expect(app.page.locator(".results")).toHaveClass(/focused/);
+    await expect(hits).toHaveCount(0);
+  } finally {
+    fs.unlinkSync(filesRoot);
+  }
+
+  const localPage = path.join(filesRoot, pageId);
+  fs.mkdirSync(localPage, { recursive: true });
+  fs.writeFileSync(path.join(localPage, "report.txt"), "junctionneedle");
+  await app.search("junctionneedle");
+  await expect(app.page.locator(".results .hit")).toHaveCount(1);
+  await expect(app.page.locator(".peek .attachment-text")).toHaveText("junctionneedle");
+  await app.page.locator(".search-bar .mode", { hasText: "fuzzy" }).click();
+  await app.search("junctionneedle");
+  await expect(app.page.locator(".results")).toHaveClass(/focused/);
+  await expect(app.page.locator(".results .hit")).toHaveCount(1);
+});
+
+test("attachment regex highlights interior lines and navigates between them", async ({ app }) => {
+  await app.newTitledPage("Reference", 1);
+  const pageId = (await app.treeIds())[0];
+  const filesDir = path.join(app.notebookDir, "files", pageId);
+  fs.mkdirSync(filesDir, { recursive: true });
+  const contents = `${fillerBody(100)}\nneedle\n${fillerBody(100)}\nneedle\nlast line\n`;
+  fs.writeFileSync(path.join(filesDir, "report.txt"), contents.replaceAll("\n", "\r\n"));
+  await app.setBody(`[report](files/${pageId}/report.txt)`);
+
+  await app.search("needle");
+  await app.page.locator(".search-bar .mode", { hasText: "regex" }).click();
+  await app.search("^needle$");
+  await expect(app.page.locator(".results .hit")).toHaveCount(2);
+  const matches = app.page.locator(".peek mark.find-hit");
+  await expect(matches).toHaveText(["needle", "needle"]);
+  await expect(matches.nth(0)).toHaveClass(/current/);
+  await expect(matches.nth(0)).toBeInViewport();
+  await expect.poll(() => app.scrollTopOf("#peek-scroll")).toBeGreaterThan(0);
+  await app.page.keyboard.press("n");
+  await expect(matches.nth(1)).toHaveClass(/current/);
+  await expect(matches.nth(1)).toBeInViewport();
+  await app.page.keyboard.press("p");
+  await expect(matches.nth(0)).toHaveClass(/current/);
+  await expect(matches.nth(0)).toBeInViewport();
+});
+
 test("searches text attachments with an app-wide size setting and an Advanced toggle", async ({ app }) => {
   await app.newTitledPage("Reference", 1);
   const pageId = await app.row("Reference").getAttribute("data-id");
