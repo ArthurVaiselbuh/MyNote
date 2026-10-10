@@ -462,7 +462,9 @@ fn attachment_paths(store: &Store, page: &PageNode) -> Vec<(std::path::PathBuf, 
         let metadata = entry.metadata().ok()?;
         if !metadata.is_file() || entry.file_type().ok()?.is_symlink() { return None; }
         let name = entry.file_name().into_string().ok()?;
-        Some((entry.path(), files::encoded_file_rel(&page.id, &name)))
+        let relative_path = files::encoded_file_rel(&page.id, &name);
+        let path = files::resolve_attachment_path(&store.root, &relative_path).ok()?;
+        Some((path, relative_path))
     }).collect();
     paths.sort_by(|a, b| a.1.cmp(&b.1));
     paths
@@ -738,6 +740,42 @@ mod tests {
         }).unwrap();
         for mode in [SearchMode::Keyword, SearchMode::Regex] {
             assert!(hits(&store, "needle", mode).is_empty());
+        }
+    }
+
+    #[test]
+    fn attachment_search_rejects_a_parent_symlink_escaping_root() {
+        let (_root, store) = store_with(&["# Page"]);
+        let outside = tempdir().unwrap();
+        let page_id = &store.notebook.sections[0].pages[0].id;
+        let outside_page = outside.path().join(page_id);
+        fs::create_dir(&outside_page).unwrap();
+        fs::write(outside_page.join("report.txt"), "needle").unwrap();
+        let link = store.root.join(files::FILES_DIR);
+
+        #[cfg(windows)]
+        let made = std::os::windows::fs::symlink_dir(outside.path(), &link).is_ok();
+        #[cfg(not(windows))]
+        let made = std::os::unix::fs::symlink(outside.path(), &link).is_ok();
+        if !made {
+            eprintln!("skipping: could not create a directory symlink in this environment");
+            return;
+        }
+
+        for mode in [SearchMode::Keyword, SearchMode::Regex] {
+            assert!(hits(&store, "needle", mode).is_empty());
+        }
+        assert!(store.attachment_metadata_cache.lock().unwrap().entries.is_empty());
+
+        #[cfg(windows)]
+        fs::remove_dir(&link).unwrap();
+        #[cfg(not(windows))]
+        fs::remove_file(&link).unwrap();
+        let local_page = files::files_dir_in(&store.root, page_id);
+        fs::create_dir_all(&local_page).unwrap();
+        fs::write(local_page.join("report.txt"), "needle").unwrap();
+        for mode in [SearchMode::Keyword, SearchMode::Regex] {
+            assert_eq!(hits(&store, "needle", mode).len(), 1);
         }
     }
 
